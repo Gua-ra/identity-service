@@ -1,0 +1,61 @@
+services:
+  identity-db:
+    image: postgres:16-alpine
+    container_name: identity-db
+    environment:
+      POSTGRES_USER: identity
+      POSTGRES_PASSWORD: identity
+      POSTGRES_DB: identity
+    ports:
+      - "5432:5432"
+    volumes:
+      - identity-postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: identity-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - identity-redis-data:/data
+
+  synapse-db:
+    image: postgres:16-alpine
+    container_name: identity-synapse-postgres
+    environment:
+      POSTGRES_USER: synapse
+      POSTGRES_PASSWORD: synapse
+      POSTGRES_DB: synapse
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    volumes:
+      - synapse-postgres-data:/var/lib/postgresql/data
+
+  synapse:
+    image: matrixdotorg/synapse:latest
+    container_name: identity-synapse
+    depends_on:
+      - synapse-db
+    environment:
+      SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
+      SYNAPSE_LOG_CONFIG: /data/log.config
+      SYNAPSE_SERVER_NAME: dev.local
+      SYNAPSE_REPORT_STATS: "no"
+      SYNAPSE_NO_TLS: "true"
+      SYNAPSE_POSTGRES_HOST: synapse-db
+      SYNAPSE_POSTGRES_PORT: 5432
+      SYNAPSE_POSTGRES_USER: synapse
+      SYNAPSE_POSTGRES_PASSWORD: synapse
+      SYNAPSE_POSTGRES_DB: synapse
+      SYNAPSE_POSTGRES_USE_SSL: "false"
+      SYNAPSE_REGISTRATION_SHARED_SECRET: dev_shared_secret
+      SYNAPSE_ALLOW_PUBLIC_REGISTRATION: "false"
+    volumes:
+      - ./docker/synapse/data:/data
+    ports:
+      - "8008:8008"
+
+volumes:
+  identity-postgres-data:
+  identity-redis-data:
+  synapse-postgres-data:

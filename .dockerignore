@@ -1,0 +1,13 @@
+.gradle
+build
+out
+.idea
+.vscode
+*.iml
+*.ipr
+*.iws
+docker-compose.dev.yml
+scripts/start-dev-test-stack.sh
+.env.identity-service
+docker/.identity-pepper
+docker/synapse/data

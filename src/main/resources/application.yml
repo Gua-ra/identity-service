@@ -1,0 +1,91 @@
+identity:
+  otp:
+    code-length: ${IDENTITY_OTP_CODE_LENGTH:6}
+    ttl: ${IDENTITY_OTP_TTL:PT5M}
+    max-requests-per-phone-per-hour: ${IDENTITY_OTP_MAX_PHONE_PER_HOUR:5}
+    max-requests-per-ip-per-hour: ${IDENTITY_OTP_MAX_IP_PER_HOUR:10}
+    sms-template: ${IDENTITY_OTP_SMS_TEMPLATE:Your Gua verification code is %s}
+    localized-sms-templates:
+      en: ${IDENTITY_OTP_SMS_TEMPLATE_EN:Your Gua verification code is %s}
+      pt-br: ${IDENTITY_OTP_SMS_TEMPLATE_PT_BR:Seu código de verificação Gua é %s}
+  matrix:
+    admin-api-base-url: ${IDENTITY_MATRIX_ADMIN_API_BASE_URL}
+    client-api-base-url: ${IDENTITY_MATRIX_CLIENT_API_BASE_URL}
+    homeserver-domain: ${IDENTITY_MATRIX_HOME_DOMAIN}
+    admin-access-token: ${IDENTITY_MATRIX_ADMIN_TOKEN}
+    user-localpart-prefix: ${IDENTITY_MATRIX_LOCALPART_PREFIX}
+  directory:
+    pepper: ${IDENTITY_DIRECTORY_PEPPER}
+  security:
+    pin-reset-cooldown: ${IDENTITY_SECURITY_PIN_RESET_COOLDOWN:PT168H}
+    max-pin-attempts: ${IDENTITY_SECURITY_MAX_PIN_ATTEMPTS:5}
+    pin-lock-duration: ${IDENTITY_SECURITY_PIN_LOCK_DURATION:PT15M}
+  rate-limits:
+    enabled: ${IDENTITY_RATE_LIMITS_ENABLED:true}
+    default-config:
+      limit-for-period: ${IDENTITY_RATE_LIMIT_DEFAULT_LIMIT:120}
+      refresh-period: ${IDENTITY_RATE_LIMIT_DEFAULT_REFRESH:PT1M}
+      timeout-duration: ${IDENTITY_RATE_LIMIT_DEFAULT_TIMEOUT:PT0S}
+    endpoints:
+      - path: /otp/send
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_OTP_SEND_LIMIT:5}
+        refresh-period: ${IDENTITY_RATE_LIMIT_OTP_SEND_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_OTP_SEND_TIMEOUT:PT0S}
+      - path: /otp/verify
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_OTP_VERIFY_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_OTP_VERIFY_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_OTP_VERIFY_TIMEOUT:PT0S}
+      - path: /otp/change-number
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_OTP_CHANGE_NUMBER_LIMIT:3}
+        refresh-period: ${IDENTITY_RATE_LIMIT_OTP_CHANGE_NUMBER_REFRESH:PT1H}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_OTP_CHANGE_NUMBER_TIMEOUT:PT0S}
+      - path: /security/pin
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_LIMIT:20}
+        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_REFRESH:PT5M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_TIMEOUT:PT0S}
+      - path: /security/pin/reset
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_LIMIT:3}
+        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_REFRESH:PT1H}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_TIMEOUT:PT0S}
+      - path: /security/pin/reset/complete
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_COMPLETE_LIMIT:3}
+        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_COMPLETE_REFRESH:PT1H}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_COMPLETE_TIMEOUT:PT0S}
+      - path: /directory/lookup
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_DIRECTORY_LOOKUP_LIMIT:30}
+        refresh-period: ${IDENTITY_RATE_LIMIT_DIRECTORY_LOOKUP_REFRESH:PT5M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_DIRECTORY_LOOKUP_TIMEOUT:PT0S}
+  sms:
+    twilio:
+      enabled: ${IDENTITY_SMS_TWILIO_ENABLED:false}
+      account-sid: ${IDENTITY_SMS_TWILIO_ACCOUNT_SID:}
+      auth-token: ${IDENTITY_SMS_TWILIO_AUTH_TOKEN:}
+      from-number: ${IDENTITY_SMS_TWILIO_FROM_NUMBER:}
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:h2:mem:identity-service;DB_CLOSE_DELAY=-1;MODE=PostgreSQL}
+    username: ${SPRING_DATASOURCE_USERNAME:sa}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:org.h2.Driver}
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    enabled: true

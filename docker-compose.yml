@@ -1,0 +1,47 @@
+services:
+  identity-service:
+    image: gua/identity-service:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      SPRING_DATA_REDIS_HOST: ${SPRING_DATA_REDIS_HOST}
+      SPRING_DATA_REDIS_PORT: ${SPRING_DATA_REDIS_PORT:-6379}
+      IDENTITY_MATRIX_ADMIN_API_BASE_URL: ${IDENTITY_MATRIX_ADMIN_API_BASE_URL}
+      IDENTITY_MATRIX_CLIENT_API_BASE_URL: ${IDENTITY_MATRIX_CLIENT_API_BASE_URL}
+      IDENTITY_MATRIX_HOME_DOMAIN: ${IDENTITY_MATRIX_HOME_DOMAIN}
+      IDENTITY_MATRIX_ADMIN_TOKEN: ${IDENTITY_MATRIX_ADMIN_TOKEN}
+      IDENTITY_MATRIX_LOCALPART_PREFIX: ${IDENTITY_MATRIX_LOCALPART_PREFIX:-gua}
+      IDENTITY_DIRECTORY_PEPPER: ${IDENTITY_DIRECTORY_PEPPER}
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - identity-db
+      - redis
+    restart: unless-stopped
+
+  identity-db:
+    image: postgres:16-alpine
+    container_name: identity-db
+    environment:
+      POSTGRES_DB: identity
+      POSTGRES_USER: ${SPRING_DATASOURCE_USERNAME:-identity}
+      POSTGRES_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-identity}
+    volumes:
+      - identity-postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - identity-redis-data:/data
+    restart: unless-stopped
+
+volumes:
+  identity-postgres-data:
+  identity-redis-data:

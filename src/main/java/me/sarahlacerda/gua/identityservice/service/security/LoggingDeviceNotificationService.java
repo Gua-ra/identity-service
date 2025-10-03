@@ -1,0 +1,21 @@
+package me.sarahlacerda.gua.identityservice.service.security;
+
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Primary;
+import org.springframework.stereotype.Component;
+
+@Component
+@Primary
+@Slf4j
+public class LoggingDeviceNotificationService implements DeviceNotificationService {
+
+    @Override
+    public void notifyNewDevice(String userId, String deviceId, TrustedDeviceService.DeviceMetadata metadata) {
+        log.info("New device detected for {} (deviceId={} platform={} appVersion={} name={})",
+            userId,
+            deviceId,
+            metadata.platform(),
+            metadata.appVersion(),
+            metadata.deviceName());
+    }
+}
