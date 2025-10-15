@@ -47,8 +47,6 @@ Spin up Redis, Postgres, and a disposable Synapse homeserver with a single comma
 source scripts/start-dev-test-stack.sh
 ```
 
-> [!NOTE]
-> The helper script expects a running Docker daemon. If you're using a sandboxed development environment, start Docker (or a rootless Docker setup) before invoking the script.
 
 Running the script normally (`bash scripts/start-dev-test-stack.sh`) will still launch the containers; it also writes the computed environment variables to `.env.identity-service` so you can load them manually with `source .env.identity-service` or copy them into IntelliJ.
 

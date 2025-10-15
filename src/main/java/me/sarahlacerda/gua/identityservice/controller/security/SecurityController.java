@@ -1,4 +1,4 @@
-package me.sarahlacerda.gua.identityservice.controller;
+package me.sarahlacerda.gua.identityservice.controller.security;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;

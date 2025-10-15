@@ -3,6 +3,7 @@ package me.sarahlacerda.gua.identityservice.controller;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.verify;
 
+import me.sarahlacerda.gua.identityservice.controller.security.SecurityController;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;

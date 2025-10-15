@@ -1,4 +1,4 @@
-package me.sarahlacerda.gua.identityservice.controller;
+package me.sarahlacerda.gua.identityservice.controller.oidc;
 
 import java.util.Optional;
 
