@@ -1,0 +1,125 @@
+package me.sarahlacerda.gua.identityservice.service.oidc;
+
+import java.text.ParseException;
+import java.time.Instant;
+import java.util.Date;
+import java.util.LinkedHashSet;
+import java.util.Optional;
+import java.util.Set;
+
+import lombok.RequiredArgsConstructor;
+
+import org.springframework.stereotype.Service;
+
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.crypto.MACSigner;
+import com.nimbusds.jose.crypto.MACVerifier;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
+
+import me.sarahlacerda.gua.identityservice.config.OidcProperties;
+
+@Service
+@RequiredArgsConstructor
+public class OidcTokenService {
+
+    private static final String TOKEN_TYPE = "Bearer";
+
+    private final OidcProperties properties;
+
+    public OidcTokenResponse issueTokens(OidcAuthorization authorization) {
+        SignedJWT accessToken = buildJwt(authorization, properties.getAccessTokenTtl().toSeconds());
+        SignedJWT idToken = buildJwt(authorization, properties.getIdTokenTtl().toSeconds());
+
+        return new OidcTokenResponse(
+            serialize(accessToken),
+            properties.getAccessTokenTtl().toSeconds(),
+            authorization.scopeAsString(),
+            TOKEN_TYPE,
+            serialize(idToken)
+        );
+    }
+
+    public Optional<OidcAuthenticatedPrincipal> parseAccessToken(String token) {
+        try {
+            SignedJWT jwt = SignedJWT.parse(token);
+            if (!jwt.verify(new MACVerifier(properties.signingKey()))) {
+                return Optional.empty();
+            }
+
+            JWTClaimsSet claims = jwt.getJWTClaimsSet();
+            Instant now = Instant.now();
+            if (claims.getExpirationTime() == null || now.isAfter(claims.getExpirationTime().toInstant())) {
+                return Optional.empty();
+            }
+            if (!properties.getIssuer().equals(claims.getIssuer())) {
+                return Optional.empty();
+            }
+
+            String scope = claims.getStringClaim("scope");
+            Set<String> scopes = scope == null ? Set.of() : parseScopes(scope);
+            Object nameClaim = claims.getClaim("name");
+            String displayName = nameClaim != null ? nameClaim.toString() : null;
+
+            return Optional.of(new OidcAuthenticatedPrincipal(
+                claims.getSubject(),
+                claims.getStringClaim("phone_number"),
+                displayName,
+                scopes
+            ));
+        } catch (ParseException | JOSEException ex) {
+            return Optional.empty();
+        }
+    }
+
+    private SignedJWT buildJwt(OidcAuthorization authorization, long ttlSeconds) {
+        Instant now = Instant.now();
+        Instant expiresAt = now.plusSeconds(ttlSeconds);
+
+        JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder()
+            .issuer(properties.getIssuer())
+            .subject(authorization.userId())
+            .audience(authorization.clientId())
+            .issueTime(Date.from(now))
+            .expirationTime(Date.from(expiresAt))
+            .claim("scope", authorization.scopeAsString())
+            .claim("phone_number", authorization.phoneNumber());
+
+        if (authorization.displayName() != null) {
+            builder.claim("name", authorization.displayName());
+        }
+
+        JWTClaimsSet claims = builder.build();
+        SignedJWT signedJWT = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.HS256).keyID(properties.getJwkKeyId()).build(), claims);
+        try {
+            signedJWT.sign(new MACSigner(properties.signingKey()));
+        } catch (JOSEException ex) {
+            throw new IllegalStateException("Failed to sign JWT", ex);
+        }
+        return signedJWT;
+    }
+
+    private String serialize(SignedJWT jwt) {
+        try {
+            return jwt.serialize();
+        } catch (Exception ex) {
+            throw new IllegalStateException("Unable to serialize JWT", ex);
+        }
+    }
+
+    private Set<String> parseScopes(String scopeClaim) {
+        if (scopeClaim.isBlank()) {
+            return Set.of();
+        }
+        String[] parts = scopeClaim.split(" ");
+        Set<String> scopes = new LinkedHashSet<>();
+        for (String part : parts) {
+            if (!part.isBlank()) {
+                scopes.add(part);
+            }
+        }
+        return scopes.isEmpty() ? Set.of() : scopes;
+    }
+}

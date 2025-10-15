@@ -16,6 +16,7 @@ It is responsible for phone-number–based login, OTP (one-time password) manage
 - 🔐 **OTP storage with expiry** (Redis-backed).
 - 🗄️ **Persistent user identities** (PostgreSQL, with Flyway for schema migrations).
 - ⚡ **REST API endpoints** for clients (Element-X fork → Gua client).
+- 🛂 **Minimal OpenID Connect provider** for Matrix Authentication Service (authorization code + userinfo).
 - 🚀 **Extensible**
 
 ---
@@ -46,6 +47,9 @@ Spin up Redis, Postgres, and a disposable Synapse homeserver with a single comma
 source scripts/start-dev-test-stack.sh
 ```
 
+> [!NOTE]
+> The helper script expects a running Docker daemon. If you're using a sandboxed development environment, start Docker (or a rootless Docker setup) before invoking the script.
+
 Running the script normally (`bash scripts/start-dev-test-stack.sh`) will still launch the containers; it also writes the computed environment variables to `.env.identity-service` so you can load them manually with `source .env.identity-service` or copy them into IntelliJ.
 
 What the script does:
@@ -69,6 +73,26 @@ docker compose -f docker-compose.test.yml down
 ```bash
 ./gradlew test
 ```
+
+---
+
+## 🔐 OpenID Connect bridge
+
+The service doubles as a lightweight OIDC-compatible identity provider so that [Matrix Authentication Service (MAS)](https://github.com/element-hq/matrix-authentication-service/) can delegate user login to phone-based OTP flows.
+
+### Endpoints
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /.well-known/openid-configuration` | Discovery metadata describing issuer, authorization, token, userinfo, and JWKS endpoints |
+| `GET /.well-known/jwks.json` | Publishes the HMAC signing key used for ID/access tokens |
+| `GET /oauth2/authorize` | Accepts `client_id`, `redirect_uri`, `response_type=code`, `scope`, `phone_number`, `otp_code`, optional `display_name`/`state`; issues an authorization code after validating the OTP |
+| `POST /oauth2/token` | Exchanges an authorization code for a signed access token (and ID token) |
+| `GET /userinfo` | Returns the authenticated subject (`sub`), `phone_number`, and optional `name` |
+
+Tokens are signed with the secret supplied via `OIDC_JWT_SIGNING_SECRET` (HMAC-SHA256). The external issuer URL is derived from `IDENTITY_BASE_URL`, so ensure it points to the publicly reachable base path (e.g. `https://identity.example.com`).
+
+Authorization codes are short-lived (default 5 minutes) and stored in Redis to maintain statelessness across multiple instances.
 
 ---
 
@@ -101,6 +125,7 @@ An example `docker-compose.identity.yml` is included. Provide environment values
 - `SPRING_DATA_REDIS_*` – Redis host/port
 - `IDENTITY_MATRIX_*` – Synapse endpoints and admin token
 - `IDENTITY_DIRECTORY_PEPPER` – server-side secret used to hash phone digests
+- `OIDC_JWT_SIGNING_SECRET` – HMAC secret used to sign OIDC access and ID tokens
 
 Then run:
 

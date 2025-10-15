@@ -27,6 +27,8 @@ public class SecurityConfig {
         http.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
         http.authorizeHttpRequests(authorize -> authorize
             .requestMatchers(HttpMethod.POST, "/otp/send", "/otp/verify", "/security/pin/reset", "/security/pin/reset/complete").permitAll()
+            .requestMatchers(HttpMethod.GET, "/.well-known/**", "/oauth2/authorize", "/userinfo").permitAll()
+            .requestMatchers(HttpMethod.POST, "/oauth2/token").permitAll()
             .requestMatchers("/swagger-ui/**", "/swagger-ui.html", "/api-docs/**", "/v3/api-docs/**").permitAll()
             .anyRequest().authenticated()
         );
@@ -42,6 +44,10 @@ public class SecurityConfig {
             mvc.pattern(HttpMethod.POST, "/otp/verify"),
             mvc.pattern(HttpMethod.POST, "/security/pin/reset"),
             mvc.pattern(HttpMethod.POST, "/security/pin/reset/complete"),
+            mvc.pattern(HttpMethod.GET, "/.well-known/**"),
+            mvc.pattern(HttpMethod.GET, "/oauth2/authorize"),
+            mvc.pattern(HttpMethod.GET, "/userinfo"),
+            mvc.pattern(HttpMethod.POST, "/oauth2/token"),
             mvc.pattern("/swagger-ui/**"),
             mvc.pattern("/swagger-ui.html"),
             mvc.pattern("/api-docs/**"),

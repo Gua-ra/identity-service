@@ -22,6 +22,11 @@ for cmd in docker curl openssl jq; do
   require_cmd "$cmd"
 done
 
+if ! docker info >/dev/null 2>&1; then
+  echo "Error: unable to communicate with the Docker daemon. Ensure Docker is running and accessible (hint: rootless Docker or docker-desktop)." >&2
+  exit 1
+fi
+
 mkdir -p "$SYNAPSE_DATA_DIR"
 
 echo "Starting development dependencies with docker compose..."

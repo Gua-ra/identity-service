@@ -89,3 +89,11 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
   flyway:
     enabled: true
+
+oidc:
+  issuer: ${IDENTITY_BASE_URL}
+  jwt-signing-secret: ${OIDC_JWT_SIGNING_SECRET}
+  authorization-code-ttl: ${OIDC_AUTHORIZATION_CODE_TTL:PT5M}
+  access-token-ttl: ${OIDC_ACCESS_TOKEN_TTL:PT15M}
+  id-token-ttl: ${OIDC_ID_TOKEN_TTL:PT15M}
+  jwk-key-id: ${OIDC_JWK_KEY_ID:oidc-signing-key}
