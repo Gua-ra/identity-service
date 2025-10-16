@@ -1,11 +1,12 @@
 package me.sarahlacerda.gua.identityservice.config;
 
-import java.util.List;
-
+import me.sarahlacerda.gua.identityservice.security.MatrixTokenAuthenticationFilter;
+import me.sarahlacerda.gua.identityservice.security.MatrixTokenValidator;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -15,22 +16,37 @@ import org.springframework.security.web.servlet.util.matcher.MvcRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.web.servlet.handler.HandlerMappingIntrospector;
 
-import me.sarahlacerda.gua.identityservice.security.MatrixTokenAuthenticationFilter;
-import me.sarahlacerda.gua.identityservice.security.MatrixTokenValidator;
+import java.util.List;
+import java.util.stream.Stream;
 
 @Configuration
 public class SecurityConfig {
 
+    private static final List<String> OPEN_POST_ENDPOINTS = List.of(
+            "/otp/send",
+            "/otp/verify",
+            "/security/pin/reset",
+            "/security/pin/reset/complete",
+            "/oauth2/token"
+    );
+
+    private static final List<String> OPEN_GET_ENDPOINTS = List.of(
+            "/.well-known/**",
+            "/oauth2/**",
+            "/swagger-ui/**",
+            "/swagger-ui.html",
+            "/api-docs/**",
+            "/v3/api-docs/**"
+    );
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, MatrixTokenAuthenticationFilter matrixTokenAuthenticationFilter) throws Exception {
-        http.csrf(csrf -> csrf.disable());
+        http.csrf(AbstractHttpConfigurer::disable);
         http.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
         http.authorizeHttpRequests(authorize -> authorize
-            .requestMatchers(HttpMethod.POST, "/otp/send", "/otp/verify", "/security/pin/reset", "/security/pin/reset/complete").permitAll()
-            .requestMatchers(HttpMethod.GET, "/.well-known/**", "/oauth2/authorize", "/userinfo").permitAll()
-            .requestMatchers(HttpMethod.POST, "/oauth2/token").permitAll()
-            .requestMatchers("/swagger-ui/**", "/swagger-ui.html", "/api-docs/**", "/v3/api-docs/**").permitAll()
-            .anyRequest().authenticated()
+                .requestMatchers(HttpMethod.POST, OPEN_POST_ENDPOINTS.toArray(String[]::new)).permitAll()
+                .requestMatchers(HttpMethod.GET, OPEN_GET_ENDPOINTS.toArray(String[]::new)).permitAll()
+                .anyRequest().authenticated()
         );
         http.addFilterBefore(matrixTokenAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
@@ -39,20 +55,12 @@ public class SecurityConfig {
     @Bean
     public MatrixTokenAuthenticationFilter matrixTokenAuthenticationFilter(MatrixTokenValidator tokenValidator, HandlerMappingIntrospector introspector) {
         MvcRequestMatcher.Builder mvc = new MvcRequestMatcher.Builder(introspector);
-        List<RequestMatcher> openEndpoints = List.of(
-            mvc.pattern(HttpMethod.POST, "/otp/send"),
-            mvc.pattern(HttpMethod.POST, "/otp/verify"),
-            mvc.pattern(HttpMethod.POST, "/security/pin/reset"),
-            mvc.pattern(HttpMethod.POST, "/security/pin/reset/complete"),
-            mvc.pattern(HttpMethod.GET, "/.well-known/**"),
-            mvc.pattern(HttpMethod.GET, "/oauth2/authorize"),
-            mvc.pattern(HttpMethod.GET, "/userinfo"),
-            mvc.pattern(HttpMethod.POST, "/oauth2/token"),
-            mvc.pattern("/swagger-ui/**"),
-            mvc.pattern("/swagger-ui.html"),
-            mvc.pattern("/api-docs/**"),
-            mvc.pattern("/v3/api-docs/**")
-        );
+
+        List<RequestMatcher> openEndpoints = Stream.concat(
+                OPEN_GET_ENDPOINTS.stream().map(pattern -> (RequestMatcher) mvc.pattern(pattern)),
+                OPEN_POST_ENDPOINTS.stream().map(pattern -> (RequestMatcher) mvc.pattern(HttpMethod.POST, pattern))
+        ).toList();
+
         return new MatrixTokenAuthenticationFilter(tokenValidator, openEndpoints);
     }
 
