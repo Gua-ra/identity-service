@@ -49,7 +49,7 @@ public class OidcDiscoveryController {
             "response_types_supported", List.of("code"),
             "grant_types_supported", List.of("authorization_code"),
             "scopes_supported", List.of("openid", "profile", "phone"),
-            "token_endpoint_auth_methods_supported", List.of("none"),
+            "token_endpoint_auth_methods_supported", List.of("client_secret_basic", "client_secret_post"),
             "id_token_signing_alg_values_supported", List.of("HS256")
         );
     }
