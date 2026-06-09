@@ -48,70 +48,70 @@ import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationServi
 @Tag(name = "Account", description = "Privileged account operations gated by phone-OTP reauthentication")
 public class AccountController {
 
-    private static final Logger log = LoggerFactory.getLogger(AccountController.class);
-    private static final long REAUTH_TOKEN_TTL_SECONDS = 300L;
+        private static final Logger log = LoggerFactory.getLogger(AccountController.class);
+        private static final long REAUTH_TOKEN_TTL_SECONDS = 300L;
 
-    private final AccountReauthService reauthService;
-    private final AuthenticatedUserAccessor authenticatedUserAccessor;
-    private final MatrixAdminClient matrixAdminClient;
-    private final TokenRevocationService tokenRevocationService;
+        private final AccountReauthService reauthService;
+        private final AuthenticatedUserAccessor authenticatedUserAccessor;
+        private final MatrixAdminClient matrixAdminClient;
+        private final TokenRevocationService tokenRevocationService;
 
-    @PostMapping("/reauth/start")
-    @Operation(summary = "Send a fresh OTP for account reauthentication", description = "Sends an OTP via SMS to the phone linked to the authenticated user.")
-    @ApiResponses({
-            @ApiResponse(responseCode = "204", description = "OTP dispatched"),
-            @ApiResponse(responseCode = "401", description = "Caller not authenticated", content = @Content),
-            @ApiResponse(responseCode = "429", description = "OTP rate limit hit", content = @Content)
-    })
-    public ResponseEntity<Void> startReauth(
-            @RequestHeader(value = "Accept-Language", required = false) String acceptLanguage,
-            @Parameter(hidden = true) HttpServletRequest servletRequest) {
-        String userId = authenticatedUserAccessor.requireCurrentUserId();
-        reauthService.startReauth(userId, servletRequest.getRemoteAddr(), acceptLanguage);
-        return ResponseEntity.noContent().build();
-    }
+        @PostMapping("/reauth/start")
+        @Operation(summary = "Send a fresh OTP for account reauthentication", description = "Sends an OTP via SMS to the phone linked to the authenticated user.")
+        @ApiResponses({
+                        @ApiResponse(responseCode = "204", description = "OTP dispatched"),
+                        @ApiResponse(responseCode = "401", description = "Caller not authenticated", content = @Content),
+                        @ApiResponse(responseCode = "429", description = "OTP rate limit hit", content = @Content)
+        })
+        public ResponseEntity<Void> startReauth(
+                        @RequestHeader(value = "Accept-Language", required = false) String acceptLanguage,
+                        @Parameter(hidden = true) HttpServletRequest servletRequest) {
+                String userId = authenticatedUserAccessor.requireCurrentUserId();
+                reauthService.startReauth(userId, servletRequest.getRemoteAddr(), acceptLanguage);
+                return ResponseEntity.noContent().build();
+        }
 
-    @PostMapping("/reauth/verify")
-    @Operation(summary = "Exchange OTP code for a single-use reauth token")
-    @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Reauth token issued", content = @Content(schema = @Schema(implementation = AccountReauthTokenResponse.class))),
-            @ApiResponse(responseCode = "401", description = "Invalid or expired OTP", content = @Content)
-    })
-    public ResponseEntity<AccountReauthTokenResponse> verifyReauth(
-            @RequestBody @Valid AccountReauthVerifyRequest request) {
-        String userId = authenticatedUserAccessor.requireCurrentUserId();
-        String token = reauthService.verifyReauth(userId, request.getCode());
-        return ResponseEntity.ok(new AccountReauthTokenResponse(token, REAUTH_TOKEN_TTL_SECONDS));
-    }
+        @PostMapping("/reauth/verify")
+        @Operation(summary = "Exchange OTP code for a single-use reauth token")
+        @ApiResponses({
+                        @ApiResponse(responseCode = "200", description = "Reauth token issued", content = @Content(schema = @Schema(implementation = AccountReauthTokenResponse.class))),
+                        @ApiResponse(responseCode = "401", description = "Invalid or expired OTP", content = @Content)
+        })
+        public ResponseEntity<AccountReauthTokenResponse> verifyReauth(
+                        @RequestBody @Valid AccountReauthVerifyRequest request) {
+                String userId = authenticatedUserAccessor.requireCurrentUserId();
+                String token = reauthService.verifyReauth(userId, request.getCode());
+                return ResponseEntity.ok(new AccountReauthTokenResponse(token, REAUTH_TOKEN_TTL_SECONDS));
+        }
 
-    @PostMapping("/deactivate")
-    @Operation(summary = "Deactivate the calling user's Matrix account", description = "Spends a reauth token (from /account/reauth/verify) and asks the homeserver to deactivate the user.")
-    @ApiResponses({
-            @ApiResponse(responseCode = "204", description = "Account deactivated"),
-            @ApiResponse(responseCode = "401", description = "Reauth token missing/invalid/expired", content = @Content)
-    })
-    public ResponseEntity<Void> deactivateAccount(@RequestBody @Valid AccountDeactivateRequest request) {
-        String userId = authenticatedUserAccessor.requireCurrentUserId();
-        reauthService.requireValidReauth(userId, request.getReauthToken());
-        matrixAdminClient.deactivateUser(userId, request.isEraseData());
-        tokenRevocationService.revokeAllTokens(userId);
-        log.info("Account deactivated for {} (erase={})", userId, request.isEraseData());
-        return ResponseEntity.noContent().build();
-    }
+        @PostMapping("/deactivate")
+        @Operation(summary = "Deactivate the calling user's Matrix account", description = "Spends a reauth token (from /account/reauth/verify) and asks the homeserver to deactivate the user.")
+        @ApiResponses({
+                        @ApiResponse(responseCode = "204", description = "Account deactivated"),
+                        @ApiResponse(responseCode = "401", description = "Reauth token missing/invalid/expired", content = @Content)
+        })
+        public ResponseEntity<Void> deactivateAccount(@RequestBody @Valid AccountDeactivateRequest request) {
+                String userId = authenticatedUserAccessor.requireCurrentUserId();
+                reauthService.requireValidReauth(userId, request.getReauthToken());
+                matrixAdminClient.deactivateUser(userId, request.isEraseData());
+                tokenRevocationService.revokeAllTokens(userId);
+                log.info("Account deactivated for {} (erase={})", userId, request.isEraseData());
+                return ResponseEntity.noContent().build();
+        }
 
-    @PostMapping("/reset-identity-credentials")
-    @Operation(summary = "Mint a one-time UIA credential for client.resetIdentity", description = "Rotates the homeserver password and returns the new value so the Matrix SDK can answer the m.login.password UIA stage without prompting the user.")
-    @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Ephemeral UIA credentials issued", content = @Content(schema = @Schema(implementation = IdentityResetCredentialsResponse.class))),
-            @ApiResponse(responseCode = "401", description = "Reauth token missing/invalid/expired", content = @Content)
-    })
-    public ResponseEntity<IdentityResetCredentialsResponse> resetIdentityCredentials(
-            @RequestBody @Valid IdentityResetCredentialsRequest request) {
-        String userId = authenticatedUserAccessor.requireCurrentUserId();
-        reauthService.requireValidReauth(userId, request.getReauthToken());
-        String password = matrixAdminClient.rotatePassword(userId);
-        tokenRevocationService.revokeAllTokens(userId);
-        log.info("Issued identity-reset UIA credentials for {}", userId);
-        return ResponseEntity.ok(new IdentityResetCredentialsResponse(userId, password));
-    }
+        @PostMapping("/reset-identity-credentials")
+        @Operation(summary = "Mint a one-time UIA credential for client.resetIdentity", description = "Rotates the homeserver password and returns the new value so the Matrix SDK can answer the m.login.password UIA stage without prompting the user.")
+        @ApiResponses({
+                        @ApiResponse(responseCode = "200", description = "Ephemeral UIA credentials issued", content = @Content(schema = @Schema(implementation = IdentityResetCredentialsResponse.class))),
+                        @ApiResponse(responseCode = "401", description = "Reauth token missing/invalid/expired", content = @Content)
+        })
+        public ResponseEntity<IdentityResetCredentialsResponse> resetIdentityCredentials(
+                        @RequestBody @Valid IdentityResetCredentialsRequest request) {
+                String userId = authenticatedUserAccessor.requireCurrentUserId();
+                reauthService.requireValidReauth(userId, request.getReauthToken());
+                String password = matrixAdminClient.rotatePassword(userId);
+                tokenRevocationService.revokeAllTokens(userId);
+                log.info("Issued identity-reset UIA credentials for {}", userId);
+                return ResponseEntity.ok(new IdentityResetCredentialsResponse(userId, password));
+        }
 }

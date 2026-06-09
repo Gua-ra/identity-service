@@ -41,12 +41,11 @@ public class OidcTokenService {
         SignedJWT idToken = buildJwt(authorization, properties.getIdTokenTtl().toSeconds());
 
         return new OidcTokenResponse(
-            serialize(accessToken),
-            properties.getAccessTokenTtl().toSeconds(),
-            authorization.scopeAsString(),
-            TOKEN_TYPE,
-            serialize(idToken)
-        );
+                serialize(accessToken),
+                properties.getAccessTokenTtl().toSeconds(),
+                authorization.scopeAsString(),
+                TOKEN_TYPE,
+                serialize(idToken));
     }
 
     public Optional<OidcAuthenticatedPrincipal> parseAccessToken(String token) {
@@ -81,11 +80,10 @@ public class OidcTokenService {
             String displayName = nameClaim != null ? nameClaim.toString() : null;
 
             return Optional.of(new OidcAuthenticatedPrincipal(
-                claims.getSubject(),
-                claims.getStringClaim("phone_number"),
-                displayName,
-                scopes
-            ));
+                    claims.getSubject(),
+                    claims.getStringClaim("phone_number"),
+                    displayName,
+                    scopes));
         } catch (ParseException | JOSEException ex) {
             return Optional.empty();
         }
@@ -102,8 +100,8 @@ public class OidcTokenService {
             return false;
         }
         Set<String> knownClientIds = properties.getClients().stream()
-            .map(OidcProperties.ClientRegistration::getClientId)
-            .collect(Collectors.toSet());
+                .map(OidcProperties.ClientRegistration::getClientId)
+                .collect(Collectors.toSet());
         return audience.stream().anyMatch(knownClientIds::contains);
     }
 
@@ -112,14 +110,14 @@ public class OidcTokenService {
         Instant expiresAt = now.plusSeconds(ttlSeconds);
 
         JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder()
-            .issuer(properties.getIssuer())
-            .subject(authorization.userId())
-            .audience(authorization.clientId())
-            .jwtID(UUID.randomUUID().toString())
-            .issueTime(Date.from(now))
-            .expirationTime(Date.from(expiresAt))
-            .claim("scope", authorization.scopeAsString())
-            .claim("phone_number", authorization.phoneNumber());
+                .issuer(properties.getIssuer())
+                .subject(authorization.userId())
+                .audience(authorization.clientId())
+                .jwtID(UUID.randomUUID().toString())
+                .issueTime(Date.from(now))
+                .expirationTime(Date.from(expiresAt))
+                .claim("scope", authorization.scopeAsString())
+                .claim("phone_number", authorization.phoneNumber());
 
         if (authorization.displayName() != null) {
             builder.claim("name", authorization.displayName());
@@ -127,9 +125,8 @@ public class OidcTokenService {
 
         JWTClaimsSet claims = builder.build();
         SignedJWT signedJWT = new SignedJWT(
-            new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(signingKey.getKeyID()).build(),
-            claims
-        );
+                new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(signingKey.getKeyID()).build(),
+                claims);
         try {
             signedJWT.sign(new RSASSASigner(signingKey.toRSAPrivateKey()));
         } catch (JOSEException ex) {
@@ -160,4 +157,3 @@ public class OidcTokenService {
         return scopes.isEmpty() ? Set.of() : scopes;
     }
 }
-

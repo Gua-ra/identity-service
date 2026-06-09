@@ -28,9 +28,9 @@ import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationServi
 import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 
 @WebMvcTest(OidcUserInfoController.class)
-@Import({OidcUserInfoControllerTest.TestConfiguration.class, OidcSigningKeyConfig.class})
+@Import({ OidcUserInfoControllerTest.TestConfiguration.class, OidcSigningKeyConfig.class })
 @TestPropertySource(properties = {
-    "oidc.issuer=https://identity.example.com"
+        "oidc.issuer=https://identity.example.com"
 })
 @org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc(addFilters = false)
 class OidcUserInfoControllerTest {
@@ -49,21 +49,20 @@ class OidcUserInfoControllerTest {
     @BeforeEach
     void setUp() {
         tokens = tokenService.issueTokens(new OidcAuthorization(
-            "user-123",
-            "+15551234567",
-            "Alice",
-            Set.of("openid", "profile"),
-            "mas"
-        ));
+                "user-123",
+                "+15551234567",
+                "Alice",
+                Set.of("openid", "profile"),
+                "mas"));
     }
 
     @Test
     void userInfoReturnsClaimsFromAccessToken() throws Exception {
         mockMvc.perform(get("/userinfo").header("Authorization", "Bearer " + tokens.accessToken()))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.sub").value("user-123"))
-            .andExpect(jsonPath("$.phone_number").value("+15551234567"))
-            .andExpect(jsonPath("$.name").value("Alice"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sub").value("user-123"))
+                .andExpect(jsonPath("$.phone_number").value("+15551234567"))
+                .andExpect(jsonPath("$.name").value("Alice"));
     }
 
     static class TestConfiguration {
@@ -75,7 +74,7 @@ class OidcUserInfoControllerTest {
 
         @Bean
         OidcTokenService oidcTokenService(OidcProperties properties, RSAKey oidcSigningKey,
-                                          TokenRevocationService tokenRevocationService) {
+                TokenRevocationService tokenRevocationService) {
             if (properties.getClients().isEmpty()) {
                 OidcProperties.ClientRegistration mas = new OidcProperties.ClientRegistration();
                 mas.setClientId("mas");

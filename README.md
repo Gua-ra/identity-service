@@ -47,7 +47,7 @@ Infra: **PostgreSQL** (identities), **Redis** (ephemeral tokens), **Synapse** + 
 
 ```mermaid
 flowchart LR
-    Clients["Gua clients<br/>(iOS, web; Android planned)"] -->|phone OTP, PIN,<br/>bearer token| IDS["Identity Service"]
+    Clients["Gua Frontend<br/>(iOS, Web, Android)"] -->|phone OTP, PIN,<br/>bearer token| IDS["Identity Service"]
     IDS -->|provision / admin| Synapse["Synapse<br/>homeserver"]
     MAS["Matrix Auth Service"] -->|OIDC authorization-code| IDS
     Clients -->|login via| MAS

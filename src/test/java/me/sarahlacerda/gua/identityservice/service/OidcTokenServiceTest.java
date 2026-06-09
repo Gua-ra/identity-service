@@ -67,12 +67,11 @@ class OidcTokenServiceTest {
     @Test
     void issueTokensProducesRs256SignedJwtWithClaims() throws ParseException {
         OidcAuthorization authorization = new OidcAuthorization(
-            "user-123",
-            "+15551234567",
-            "Alice",
-            Set.of("openid", "profile"),
-            "mas"
-        );
+                "user-123",
+                "+15551234567",
+                "Alice",
+                Set.of("openid", "profile"),
+                "mas");
 
         OidcTokenResponse tokens = tokenService.issueTokens(authorization);
 
@@ -90,8 +89,7 @@ class OidcTokenServiceTest {
     @Test
     void parseAccessTokenRoundTrips() {
         OidcAuthorization authorization = new OidcAuthorization(
-            "user-99", "+15550009999", null, Set.of("openid"), "gua-ios"
-        );
+                "user-99", "+15550009999", null, Set.of("openid"), "gua-ios");
         OidcTokenResponse tokens = tokenService.issueTokens(authorization);
 
         OidcAuthenticatedPrincipal principal = tokenService.parseAccessToken(tokens.accessToken()).orElseThrow();
@@ -103,13 +101,12 @@ class OidcTokenServiceTest {
     @Test
     void parseAccessTokenRejectsTamperedSignature() {
         OidcAuthorization authorization = new OidcAuthorization(
-            "user-99", "+15550009999", null, Set.of("openid"), "gua-ios"
-        );
+                "user-99", "+15550009999", null, Set.of("openid"), "gua-ios");
         String token = tokenService.issueTokens(authorization).accessToken();
         // Flip a few characters in the signature segment.
         int lastDot = token.lastIndexOf('.');
         String tampered = token.substring(0, lastDot + 1) + (token.charAt(lastDot + 1) == 'A' ? "B" : "A")
-            + token.substring(lastDot + 2);
+                + token.substring(lastDot + 2);
 
         assertThat(tokenService.parseAccessToken(tampered)).isEmpty();
     }
@@ -118,12 +115,12 @@ class OidcTokenServiceTest {
     void parseAccessTokenRejectsExpiredToken() throws Exception {
         // Build a token with an expiration in the past, signed with the real key.
         SignedJWT expired = signTestToken(builder -> builder
-            .issuer(properties.getIssuer())
-            .subject("user-1")
-            .audience("mas")
-            .expirationTime(Date.from(java.time.Instant.now().minusSeconds(60)))
-            .claim("scope", "openid")
-            .claim("phone_number", "+15550000000"));
+                .issuer(properties.getIssuer())
+                .subject("user-1")
+                .audience("mas")
+                .expirationTime(Date.from(java.time.Instant.now().minusSeconds(60)))
+                .claim("scope", "openid")
+                .claim("phone_number", "+15550000000"));
 
         assertThat(tokenService.parseAccessToken(expired.serialize())).isEmpty();
     }
@@ -131,12 +128,12 @@ class OidcTokenServiceTest {
     @Test
     void parseAccessTokenRejectsWrongIssuer() throws Exception {
         SignedJWT wrongIssuer = signTestToken(builder -> builder
-            .issuer("https://attacker.example.com")
-            .subject("user-1")
-            .audience("mas")
-            .expirationTime(Date.from(java.time.Instant.now().plusSeconds(60)))
-            .claim("scope", "openid")
-            .claim("phone_number", "+15550000000"));
+                .issuer("https://attacker.example.com")
+                .subject("user-1")
+                .audience("mas")
+                .expirationTime(Date.from(java.time.Instant.now().plusSeconds(60)))
+                .claim("scope", "openid")
+                .claim("phone_number", "+15550000000"));
 
         assertThat(tokenService.parseAccessToken(wrongIssuer.serialize())).isEmpty();
     }
@@ -148,17 +145,17 @@ class OidcTokenServiceTest {
         gen.initialize(2048);
         KeyPair other = gen.generateKeyPair();
         RSAKey otherKey = new RSAKey.Builder((RSAPublicKey) other.getPublic())
-            .privateKey((RSAPrivateKey) other.getPrivate())
-            .keyID("other")
-            .build();
+                .privateKey((RSAPrivateKey) other.getPrivate())
+                .keyID("other")
+                .build();
         JWTClaimsSet claims = new JWTClaimsSet.Builder()
-            .issuer(properties.getIssuer())
-            .subject("user-x")
-            .audience("mas")
-            .expirationTime(Date.from(java.time.Instant.now().plusSeconds(60)))
-            .claim("scope", "openid")
-            .claim("phone_number", "+15550000000")
-            .build();
+                .issuer(properties.getIssuer())
+                .subject("user-x")
+                .audience("mas")
+                .expirationTime(Date.from(java.time.Instant.now().plusSeconds(60)))
+                .claim("scope", "openid")
+                .claim("phone_number", "+15550000000")
+                .build();
         SignedJWT signed = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID("other").build(), claims);
         signed.sign(new RSASSASigner(otherKey.toRSAPrivateKey()));
 
@@ -168,13 +165,13 @@ class OidcTokenServiceTest {
     @Test
     void parseAccessTokenRejectsUnknownAudience() throws Exception {
         SignedJWT unknownAudience = signTestToken(builder -> builder
-            .issuer(properties.getIssuer())
-            .subject("user-1")
-            .audience("some-other-app")
-            .issueTime(Date.from(Instant.now()))
-            .expirationTime(Date.from(Instant.now().plusSeconds(60)))
-            .claim("scope", "openid")
-            .claim("phone_number", "+15550000000"));
+                .issuer(properties.getIssuer())
+                .subject("user-1")
+                .audience("some-other-app")
+                .issueTime(Date.from(Instant.now()))
+                .expirationTime(Date.from(Instant.now().plusSeconds(60)))
+                .claim("scope", "openid")
+                .claim("phone_number", "+15550000000"));
 
         assertThat(tokenService.parseAccessToken(unknownAudience.serialize())).isEmpty();
     }
@@ -182,12 +179,12 @@ class OidcTokenServiceTest {
     @Test
     void parseAccessTokenRejectsMissingAudience() throws Exception {
         SignedJWT noAudience = signTestToken(builder -> builder
-            .issuer(properties.getIssuer())
-            .subject("user-1")
-            .issueTime(Date.from(Instant.now()))
-            .expirationTime(Date.from(Instant.now().plusSeconds(60)))
-            .claim("scope", "openid")
-            .claim("phone_number", "+15550000000"));
+                .issuer(properties.getIssuer())
+                .subject("user-1")
+                .issueTime(Date.from(Instant.now()))
+                .expirationTime(Date.from(Instant.now().plusSeconds(60)))
+                .claim("scope", "openid")
+                .claim("phone_number", "+15550000000"));
 
         assertThat(tokenService.parseAccessToken(noAudience.serialize())).isEmpty();
     }
@@ -195,8 +192,7 @@ class OidcTokenServiceTest {
     @Test
     void parseAccessTokenRejectsRevokedToken() {
         OidcAuthorization authorization = new OidcAuthorization(
-            "user-99", "+15550009999", null, Set.of("openid"), "gua-ios"
-        );
+                "user-99", "+15550009999", null, Set.of("openid"), "gua-ios");
         OidcTokenResponse tokens = tokenService.issueTokens(authorization);
         when(tokenRevocationService.isRevoked(eq("user-99"), any())).thenReturn(true);
 
@@ -211,13 +207,13 @@ class OidcTokenServiceTest {
         assertThat(publicSet.getKeys().get(0).getAlgorithm()).isEqualTo(JWSAlgorithm.RS256);
     }
 
-    private SignedJWT signTestToken(java.util.function.Consumer<JWTClaimsSet.Builder> claimsCustomizer) throws JOSEException {
+    private SignedJWT signTestToken(java.util.function.Consumer<JWTClaimsSet.Builder> claimsCustomizer)
+            throws JOSEException {
         JWTClaimsSet.Builder b = new JWTClaimsSet.Builder();
         claimsCustomizer.accept(b);
         SignedJWT signed = new SignedJWT(
-            new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(signingKey.getKeyID()).build(),
-            b.build()
-        );
+                new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(signingKey.getKeyID()).build(),
+                b.build());
         signed.sign(new RSASSASigner(signingKey.toRSAPrivateKey()));
         return signed;
     }
@@ -233,6 +229,6 @@ class OidcTokenServiceTest {
         }
         assertThat(claims.getStringClaim("scope")).isEqualTo(authorization.scopeAsString());
         assertThat(Duration.between(claims.getIssueTime().toInstant(), claims.getExpirationTime().toInstant()))
-            .isEqualTo(properties.getAccessTokenTtl());
+                .isEqualTo(properties.getAccessTokenTtl());
     }
 }
