@@ -24,6 +24,7 @@ import me.sarahlacerda.gua.identityservice.config.OidcSigningKeyConfig;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenResponse;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
+import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
 import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 
 @WebMvcTest(OidcUserInfoController.class)
@@ -68,8 +69,21 @@ class OidcUserInfoControllerTest {
     static class TestConfiguration {
 
         @Bean
-        OidcTokenService oidcTokenService(OidcProperties properties, RSAKey oidcSigningKey) {
-            return new OidcTokenService(properties, oidcSigningKey);
+        TokenRevocationService tokenRevocationService() {
+            return org.mockito.Mockito.mock(TokenRevocationService.class);
+        }
+
+        @Bean
+        OidcTokenService oidcTokenService(OidcProperties properties, RSAKey oidcSigningKey,
+                                          TokenRevocationService tokenRevocationService) {
+            if (properties.getClients().isEmpty()) {
+                OidcProperties.ClientRegistration mas = new OidcProperties.ClientRegistration();
+                mas.setClientId("mas");
+                OidcProperties.ClientRegistration ios = new OidcProperties.ClientRegistration();
+                ios.setClientId("gua-ios");
+                properties.setClients(java.util.List.of(mas, ios));
+            }
+            return new OidcTokenService(properties, oidcSigningKey, tokenRevocationService);
         }
     }
 }

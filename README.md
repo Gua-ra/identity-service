@@ -55,7 +55,7 @@ flowchart LR
     IDS --- Redis[("Redis")]
 ```
 
-The identity service is **both** an OIDC provider (MAS delegates phone-OTP login to it) **and** the issuer/validator of the bearer tokens its own client-facing REST API requires. Tokens are verified locally against the published JWKS — the service does **not** call Synapse `/whoami` for verification.
+The identity service is **both** an OIDC provider (MAS delegates phone-OTP login to it) **and** the issuer/validator of the bearer tokens its own client-facing REST API requires. Tokens are primarily verified locally against the published JWKS (RS256 signature, issuer, audience, and expiry). As a fallback, a token that is not one of this service's own JWTs is verified against Synapse's `/whoami` endpoint, which lets a native client reuse its Matrix SDK session token to call a subset of endpoints.
 
 ---
 ## 🚧 Local development stack
@@ -189,7 +189,7 @@ Additional first-party app clients (web today, Android in future) are registered
 
 ### API authentication
 
-Client-facing REST endpoints require an access token **issued by this service** in the `Authorization: Bearer <token>` header. The token is verified locally against the published JWKS (`OidcAccessTokenValidator`); the service no longer calls Synapse's `/whoami` endpoint for verification. Authorization codes and other short-lived tokens are stored in Redis to keep the service horizontally scalable.
+Client-facing REST endpoints require an access token in the `Authorization: Bearer <token>` header. `OidcAccessTokenValidator` first tries to verify the token locally against the published JWKS — checking the RS256 signature, the issuer, that the audience matches a registered client, and that the token has not expired or been revoked. If the token is not one of this service's own JWTs, it falls back to Synapse's `/whoami` endpoint so a native client can reuse its Matrix SDK session token (these tokens are granted no OIDC scopes). Access tokens carry a `jti` and can be invalidated ahead of expiry via a per-user revoke-before cutoff in Redis, which `/account/deactivate` and `/account/reset-identity-credentials` set. Authorization codes and other short-lived tokens are stored in Redis to keep the service horizontally scalable.
 
 ---
 

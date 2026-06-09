@@ -30,6 +30,7 @@ import me.sarahlacerda.gua.identityservice.controller.dto.IdentityResetCredentia
 import me.sarahlacerda.gua.identityservice.controller.dto.IdentityResetCredentialsResponse;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.security.AccountReauthService;
+import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
 
 /**
  * Account management endpoints that require fresh OTP reauthentication. Modeled
@@ -53,6 +54,7 @@ public class AccountController {
     private final AccountReauthService reauthService;
     private final AuthenticatedUserAccessor authenticatedUserAccessor;
     private final MatrixAdminClient matrixAdminClient;
+    private final TokenRevocationService tokenRevocationService;
 
     @PostMapping("/reauth/start")
     @Operation(summary = "Send a fresh OTP for account reauthentication", description = "Sends an OTP via SMS to the phone linked to the authenticated user.")
@@ -92,6 +94,7 @@ public class AccountController {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
         reauthService.requireValidReauth(userId, request.getReauthToken());
         matrixAdminClient.deactivateUser(userId, request.isEraseData());
+        tokenRevocationService.revokeAllTokens(userId);
         log.info("Account deactivated for {} (erase={})", userId, request.isEraseData());
         return ResponseEntity.noContent().build();
     }
@@ -107,6 +110,7 @@ public class AccountController {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
         reauthService.requireValidReauth(userId, request.getReauthToken());
         String password = matrixAdminClient.rotatePassword(userId);
+        tokenRevocationService.revokeAllTokens(userId);
         log.info("Issued identity-reset UIA credentials for {}", userId);
         return ResponseEntity.ok(new IdentityResetCredentialsResponse(userId, password));
     }

@@ -4,8 +4,11 @@ import java.text.ParseException;
 import java.time.Instant;
 import java.util.Date;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
 
 import lombok.RequiredArgsConstructor;
 
@@ -21,6 +24,7 @@ import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 
 import me.sarahlacerda.gua.identityservice.config.OidcProperties;
+import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
 
 @Service
 @RequiredArgsConstructor
@@ -30,6 +34,7 @@ public class OidcTokenService {
 
     private final OidcProperties properties;
     private final RSAKey signingKey;
+    private final TokenRevocationService tokenRevocationService;
 
     public OidcTokenResponse issueTokens(OidcAuthorization authorization) {
         SignedJWT accessToken = buildJwt(authorization, properties.getAccessTokenTtl().toSeconds());
@@ -62,6 +67,13 @@ public class OidcTokenService {
             if (!properties.getIssuer().equals(claims.getIssuer())) {
                 return Optional.empty();
             }
+            if (!hasKnownAudience(claims.getAudience())) {
+                return Optional.empty();
+            }
+            Instant issuedAt = claims.getIssueTime() == null ? null : claims.getIssueTime().toInstant();
+            if (tokenRevocationService.isRevoked(claims.getSubject(), issuedAt)) {
+                return Optional.empty();
+            }
 
             String scope = claims.getStringClaim("scope");
             Set<String> scopes = scope == null ? Set.of() : parseScopes(scope);
@@ -79,6 +91,22 @@ public class OidcTokenService {
         }
     }
 
+    /**
+     * Per RFC 9068 a resource server must reject access tokens that were not issued
+     * for it. Every token we mint carries the requesting client id as its audience,
+     * so we accept a token only when its audience includes a currently-registered
+     * client.
+     */
+    private boolean hasKnownAudience(List<String> audience) {
+        if (audience == null || audience.isEmpty()) {
+            return false;
+        }
+        Set<String> knownClientIds = properties.getClients().stream()
+            .map(OidcProperties.ClientRegistration::getClientId)
+            .collect(Collectors.toSet());
+        return audience.stream().anyMatch(knownClientIds::contains);
+    }
+
     private SignedJWT buildJwt(OidcAuthorization authorization, long ttlSeconds) {
         Instant now = Instant.now();
         Instant expiresAt = now.plusSeconds(ttlSeconds);
@@ -87,6 +115,7 @@ public class OidcTokenService {
             .issuer(properties.getIssuer())
             .subject(authorization.userId())
             .audience(authorization.clientId())
+            .jwtID(UUID.randomUUID().toString())
             .issueTime(Date.from(now))
             .expirationTime(Date.from(expiresAt))
             .claim("scope", authorization.scopeAsString())

@@ -1,6 +1,10 @@
 package me.sarahlacerda.gua.identityservice.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -8,7 +12,9 @@ import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.text.ParseException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Date;
+import java.util.List;
 import java.util.Set;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -29,12 +35,14 @@ import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthenticatedPrincip
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenResponse;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
+import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
 
 class OidcTokenServiceTest {
 
     private OidcTokenService tokenService;
     private OidcProperties properties;
     private RSAKey signingKey;
+    private TokenRevocationService tokenRevocationService;
 
     @BeforeEach
     void setUp() {
@@ -43,9 +51,17 @@ class OidcTokenServiceTest {
         properties.setAccessTokenTtl(Duration.ofMinutes(15));
         properties.setIdTokenTtl(Duration.ofMinutes(15));
         properties.getSigning().setKeyId("test-key-id");
+        properties.setClients(List.of(client("mas"), client("gua-ios")));
 
         signingKey = new OidcSigningKeyConfig().oidcSigningKey(properties);
-        tokenService = new OidcTokenService(properties, signingKey);
+        tokenRevocationService = mock(TokenRevocationService.class);
+        tokenService = new OidcTokenService(properties, signingKey, tokenRevocationService);
+    }
+
+    private static OidcProperties.ClientRegistration client(String clientId) {
+        OidcProperties.ClientRegistration registration = new OidcProperties.ClientRegistration();
+        registration.setClientId(clientId);
+        return registration;
     }
 
     @Test
@@ -147,6 +163,44 @@ class OidcTokenServiceTest {
         signed.sign(new RSASSASigner(otherKey.toRSAPrivateKey()));
 
         assertThat(tokenService.parseAccessToken(signed.serialize())).isEmpty();
+    }
+
+    @Test
+    void parseAccessTokenRejectsUnknownAudience() throws Exception {
+        SignedJWT unknownAudience = signTestToken(builder -> builder
+            .issuer(properties.getIssuer())
+            .subject("user-1")
+            .audience("some-other-app")
+            .issueTime(Date.from(Instant.now()))
+            .expirationTime(Date.from(Instant.now().plusSeconds(60)))
+            .claim("scope", "openid")
+            .claim("phone_number", "+15550000000"));
+
+        assertThat(tokenService.parseAccessToken(unknownAudience.serialize())).isEmpty();
+    }
+
+    @Test
+    void parseAccessTokenRejectsMissingAudience() throws Exception {
+        SignedJWT noAudience = signTestToken(builder -> builder
+            .issuer(properties.getIssuer())
+            .subject("user-1")
+            .issueTime(Date.from(Instant.now()))
+            .expirationTime(Date.from(Instant.now().plusSeconds(60)))
+            .claim("scope", "openid")
+            .claim("phone_number", "+15550000000"));
+
+        assertThat(tokenService.parseAccessToken(noAudience.serialize())).isEmpty();
+    }
+
+    @Test
+    void parseAccessTokenRejectsRevokedToken() {
+        OidcAuthorization authorization = new OidcAuthorization(
+            "user-99", "+15550009999", null, Set.of("openid"), "gua-ios"
+        );
+        OidcTokenResponse tokens = tokenService.issueTokens(authorization);
+        when(tokenRevocationService.isRevoked(eq("user-99"), any())).thenReturn(true);
+
+        assertThat(tokenService.parseAccessToken(tokens.accessToken())).isEmpty();
     }
 
     @Test
