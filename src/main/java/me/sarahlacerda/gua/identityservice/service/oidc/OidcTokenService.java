@@ -14,8 +14,9 @@ import org.springframework.stereotype.Service;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
-import com.nimbusds.jose.crypto.MACSigner;
-import com.nimbusds.jose.crypto.MACVerifier;
+import com.nimbusds.jose.crypto.RSASSASigner;
+import com.nimbusds.jose.crypto.RSASSAVerifier;
+import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 
@@ -28,6 +29,7 @@ public class OidcTokenService {
     private static final String TOKEN_TYPE = "Bearer";
 
     private final OidcProperties properties;
+    private final RSAKey signingKey;
 
     public OidcTokenResponse issueTokens(OidcAuthorization authorization) {
         SignedJWT accessToken = buildJwt(authorization, properties.getAccessTokenTtl().toSeconds());
@@ -45,7 +47,10 @@ public class OidcTokenService {
     public Optional<OidcAuthenticatedPrincipal> parseAccessToken(String token) {
         try {
             SignedJWT jwt = SignedJWT.parse(token);
-            if (!jwt.verify(new MACVerifier(properties.signingKey()))) {
+            if (!JWSAlgorithm.RS256.equals(jwt.getHeader().getAlgorithm())) {
+                return Optional.empty();
+            }
+            if (!jwt.verify(new RSASSAVerifier(signingKey.toRSAPublicKey()))) {
                 return Optional.empty();
             }
 
@@ -92,9 +97,12 @@ public class OidcTokenService {
         }
 
         JWTClaimsSet claims = builder.build();
-        SignedJWT signedJWT = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.HS256).keyID(properties.getJwkKeyId()).build(), claims);
+        SignedJWT signedJWT = new SignedJWT(
+            new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(signingKey.getKeyID()).build(),
+            claims
+        );
         try {
-            signedJWT.sign(new MACSigner(properties.signingKey()));
+            signedJWT.sign(new RSASSASigner(signingKey.toRSAPrivateKey()));
         } catch (JOSEException ex) {
             throw new IllegalStateException("Failed to sign JWT", ex);
         }
@@ -123,3 +131,4 @@ public class OidcTokenService {
         return scopes.isEmpty() ? Set.of() : scopes;
     }
 }
+

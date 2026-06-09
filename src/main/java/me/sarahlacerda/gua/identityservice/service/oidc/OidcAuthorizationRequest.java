@@ -9,7 +9,9 @@ public record OidcAuthorizationRequest(
     Set<String> scope,
     String phoneNumber,
     String otpCode,
-    String displayName
+    String displayName,
+    String codeChallenge,
+    String codeChallengeMethod
 ) {
 
     public OidcAuthorizationRequest {

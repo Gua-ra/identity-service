@@ -61,8 +61,9 @@ public class OidcAuthorizationService {
         );
 
         String code = generateCode();
-        persist(code, authorization, request.redirectUri());
-        return new OidcAuthorizationCode(code, authorization, request.redirectUri());
+        persist(code, authorization, request.redirectUri(), request.codeChallenge());
+        return new OidcAuthorizationCode(code, authorization, request.redirectUri(),
+            Optional.ofNullable(request.codeChallenge()));
     }
 
     public Optional<OidcAuthorizationCode> consumeAuthorizationCode(String code) {
@@ -81,20 +82,22 @@ public class OidcAuthorizationService {
                 Set.copyOf(stored.scope()),
                 stored.clientId()
             );
-            return Optional.of(new OidcAuthorizationCode(code, authorization, stored.redirectUri()));
+            return Optional.of(new OidcAuthorizationCode(code, authorization, stored.redirectUri(),
+                Optional.ofNullable(stored.codeChallenge())));
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("Failed to deserialize authorization code", ex);
         }
     }
 
-    private void persist(String code, OidcAuthorization authorization, String redirectUri) {
+    private void persist(String code, OidcAuthorization authorization, String redirectUri, String codeChallenge) {
         AuthorizationCodePayload payload = new AuthorizationCodePayload(
             authorization.userId(),
             authorization.phoneNumber(),
             authorization.displayName(),
             authorization.scope(),
             authorization.clientId(),
-            redirectUri
+            redirectUri,
+            codeChallenge
         );
         try {
             redisTemplate.opsForValue().set(
@@ -130,6 +133,7 @@ public class OidcAuthorizationService {
         String displayName,
         Set<String> scope,
         String clientId,
-        String redirectUri
+        String redirectUri,
+        String codeChallenge
     ) {}
 }

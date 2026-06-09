@@ -6,28 +6,30 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.Set;
 
+import com.nimbusds.jose.jwk.RSAKey;
+
 import me.sarahlacerda.gua.identityservice.controller.oidc.OidcUserInfoController;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
 import me.sarahlacerda.gua.identityservice.config.OidcProperties;
+import me.sarahlacerda.gua.identityservice.config.OidcSigningKeyConfig;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenResponse;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
 import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 
 @WebMvcTest(OidcUserInfoController.class)
-@Import(OidcUserInfoControllerTest.TestConfiguration.class)
+@Import({OidcUserInfoControllerTest.TestConfiguration.class, OidcSigningKeyConfig.class})
 @TestPropertySource(properties = {
-    "oidc.issuer=https://identity.example.com",
-    "oidc.jwt-signing-secret=super-secret-signing-key-value-that-is-long"
+    "oidc.issuer=https://identity.example.com"
 })
 @org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc(addFilters = false)
 class OidcUserInfoControllerTest {
@@ -38,7 +40,7 @@ class OidcUserInfoControllerTest {
     @Autowired
     private OidcTokenService tokenService;
 
-    @MockBean
+    @MockitoBean
     private EndpointRateLimiter endpointRateLimiter;
 
     private OidcTokenResponse tokens;
@@ -66,8 +68,8 @@ class OidcUserInfoControllerTest {
     static class TestConfiguration {
 
         @Bean
-        OidcTokenService oidcTokenService(OidcProperties properties) {
-            return new OidcTokenService(properties);
+        OidcTokenService oidcTokenService(OidcProperties properties, RSAKey oidcSigningKey) {
+            return new OidcTokenService(properties, oidcSigningKey);
         }
     }
 }

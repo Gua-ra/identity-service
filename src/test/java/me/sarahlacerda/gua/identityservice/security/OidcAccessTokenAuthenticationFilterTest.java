@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import java.io.IOException;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 import jakarta.servlet.FilterChain;
@@ -25,17 +26,19 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 
-class MatrixTokenAuthenticationFilterTest {
+import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthenticatedPrincipal;
 
-    private MatrixTokenValidator tokenValidator;
-    private MatrixTokenAuthenticationFilter filter;
+class OidcAccessTokenAuthenticationFilterTest {
+
+    private OidcAccessTokenValidator tokenValidator;
+    private OidcAccessTokenAuthenticationFilter filter;
 
     @BeforeEach
     void setUp() {
-        tokenValidator = mock(MatrixTokenValidator.class);
+        tokenValidator = mock(OidcAccessTokenValidator.class);
         RequestMatcher sendMatcher = request -> "POST".equals(request.getMethod()) && "/otp/send".equals(request.getRequestURI());
         RequestMatcher verifyMatcher = request -> "POST".equals(request.getMethod()) && "/otp/verify".equals(request.getRequestURI());
-        filter = new MatrixTokenAuthenticationFilter(tokenValidator, List.of(sendMatcher, verifyMatcher));
+        filter = new OidcAccessTokenAuthenticationFilter(tokenValidator, List.of(sendMatcher, verifyMatcher));
     }
 
     @AfterEach
@@ -58,7 +61,8 @@ class MatrixTokenAuthenticationFilterTest {
     @Test
     void authenticatesValidBearerToken() throws ServletException, IOException {
         String token = "token-123";
-        when(tokenValidator.validate(token)).thenReturn(Optional.of("@user:domain"));
+        OidcAuthenticatedPrincipal principal = new OidcAuthenticatedPrincipal("@user:domain", "+15555551212", "User", Set.of("openid"));
+        when(tokenValidator.validate(token)).thenReturn(Optional.of(principal));
 
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/secure");
         request.addHeader("Authorization", "Bearer " + token);
@@ -70,7 +74,9 @@ class MatrixTokenAuthenticationFilterTest {
         filter.doFilter(request, response, chain);
 
         assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_OK);
-        assertThat(principalOnChain.get()).isEqualTo("@user:domain");
+        assertThat(principalOnChain.get()).isInstanceOf(OidcAuthenticatedPrincipal.class);
+        OidcAuthenticatedPrincipal authenticatedPrincipal = (OidcAuthenticatedPrincipal) principalOnChain.get();
+        assertThat(authenticatedPrincipal.userId()).isEqualTo("@user:domain");
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
     }
 
