@@ -15,7 +15,7 @@ The **Gua Identity Service** is a Spring Boot–based microservice that handles 
 - 🔐 **OTP management** — Redis-backed codes with TTL, per-phone and per-IP hourly caps, localized SMS templates (en / pt-BR), optional Twilio delivery.
 - 🔢 **Account PIN (two-step verification)** — set, OTP-protected change with a 24h cooldown, recovery reset, 5-attempt lockout with a 15-minute lock, and audit logging.
 - 🛡️ **Privileged account operations** — fresh phone-OTP reauthentication gates account deactivation and identity-credential reset (modeled on Matrix UIA `m.login.msisdn`).
-- 🔑 **OpenID Connect provider** — RS256 authorization-code + PKCE flow, discovery/JWKS endpoints, and seeded clients for MAS (confidential) and the Gua iOS app (public, PKCE-required).
+- 🔑 **OpenID Connect provider** — RS256 authorization-code + PKCE flow, discovery/JWKS endpoints, and seeded clients for MAS (confidential) and the Gua apps (public, PKCE-required).
 - 📇 **Directory lookup** — privacy-preserving phone-hash search using a server-side pepper.
 - 🚦 **Built-in rate limiting** — per-endpoint Resilience4j limiters so the service is safe to run without an upstream WAF.
 - 🗄️ **Persistent identities** — PostgreSQL with Flyway migrations.
@@ -47,10 +47,10 @@ Infra: **PostgreSQL** (identities), **Redis** (ephemeral tokens), **Synapse** + 
 
 ```mermaid
 flowchart LR
-    iOS["Gua iOS app<br/>(Element-X fork)"] -->|phone OTP, PIN,<br/>bearer token| IDS["Identity Service"]
+    Clients["Gua clients<br/>(iOS, web; Android planned)"] -->|phone OTP, PIN,<br/>bearer token| IDS["Identity Service"]
     IDS -->|provision / admin| Synapse["Synapse<br/>homeserver"]
     MAS["Matrix Auth Service"] -->|OIDC authorization-code| IDS
-    iOS -->|login via| MAS
+    Clients -->|login via| MAS
     IDS --- PG[("PostgreSQL")]
     IDS --- Redis[("Redis")]
 ```
@@ -184,6 +184,8 @@ Seeded clients (`oidc.clients` in `application.yml`):
 | --- | --- | --- | --- |
 | `mas` | Confidential (`client_secret`) | optional | `openid`, `profile`, `phone` |
 | `gua-ios` | Public | **required** (`S256`) | `openid`, `profile`, `phone` |
+
+Additional first-party app clients (web today, Android in future) are registered as further public, PKCE-required entries under `oidc.clients`.
 
 ### API authentication
 
