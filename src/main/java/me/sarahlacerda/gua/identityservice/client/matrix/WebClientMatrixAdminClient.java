@@ -1,7 +1,7 @@
 package me.sarahlacerda.gua.identityservice.client.matrix;
 
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -12,6 +12,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.function.client.ClientRequest;
+import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriUtils;
 
@@ -30,14 +32,45 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
     public WebClientMatrixAdminClient(WebClient.Builder webClientBuilder, IdentityServiceProperties properties) {
         IdentityServiceProperties.MatrixProperties matrix = properties.getMatrix();
         this.adminClient = webClientBuilder.clone()
-            .baseUrl(matrix.getAdminApiBaseUrl())
-            .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + matrix.getAdminAccessToken())
-            .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-            .build();
+                .baseUrl(matrix.getAdminApiBaseUrl())
+                .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + matrix.getAdminAccessToken())
+                .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                .filter(maskingRequestLogger())
+                .build();
         this.clientApi = webClientBuilder.clone()
-            .baseUrl(matrix.getClientApiBaseUrl())
-            .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-            .build();
+                .baseUrl(matrix.getClientApiBaseUrl())
+                .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                .build();
+    }
+
+    private static ExchangeFilterFunction maskingRequestLogger() {
+        // Provides a safe DEBUG trace of admin requests with Authorization redacted so
+        // wiretap-style
+        // logging is unnecessary (and so the bearer token never appears in logs).
+        return ExchangeFilterFunction.ofRequestProcessor(request -> {
+            if (log.isDebugEnabled()) {
+                log.debug("Matrix admin {} {} headers=[{}]",
+                        request.method(),
+                        request.url(),
+                        summarizeHeaders(request));
+            }
+            return Mono.just(request);
+        });
+    }
+
+    private static String summarizeHeaders(ClientRequest request) {
+        StringBuilder sb = new StringBuilder();
+        request.headers().forEach((name, values) -> {
+            if (sb.length() > 0)
+                sb.append(", ");
+            sb.append(name).append('=');
+            if (HttpHeaders.AUTHORIZATION.equalsIgnoreCase(name) || "X-Auth-Token".equalsIgnoreCase(name)) {
+                sb.append("***");
+            } else {
+                sb.append(values);
+            }
+        });
+        return sb.toString();
     }
 
     @Override
@@ -53,89 +86,179 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
         }
 
         adminClient.put()
-            .uri(builder -> builder.path("/_synapse/admin/v2/users/{userId}").build(encode(userId)))
-            .bodyValue(body)
-            .retrieve()
-            .bodyToMono(Void.class)
-            .doOnSuccess(unused -> log.debug("Upserted Matrix user {}", userId))
-            .doOnError(ex -> log.error("Failed to upsert Matrix user {}: {}", userId, ex.getMessage()))
-            .block();
+                .uri(builder -> builder.path("/_synapse/admin/v2/users/{userId}").build(encode(userId)))
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(Void.class)
+                .doOnSuccess(unused -> log.debug("Upserted Matrix user {}", userId))
+                .doOnError(ex -> log.error("Failed to upsert Matrix user {}: {}", userId, ex.getMessage()))
+                .block();
     }
 
     @Override
     public List<String> getLinkedPhones(String userId) {
-        return adminClient.get()
-            .uri(builder -> builder.path("/_synapse/admin/v2/users/{userId}").build(encode(userId)))
-            .retrieve()
-            .bodyToMono(UserDetailsResponse.class)
-            .map(UserDetailsResponse::msisdnAddresses)
-            .blockOptional()
-            .orElse(List.of());
+        return fetchThreepids(userId).stream()
+                .filter(t -> "msisdn".equalsIgnoreCase(t.medium()))
+                .map(ThreePid::address)
+                .toList();
     }
 
     @Override
     public void linkPhone(String userId, String phone) {
-        Map<String, Object> payload = Map.of(
-            "threepid", Map.of(
-                "medium", "msisdn",
-                "address", phone,
-                "validated_at", Instant.now().toEpochMilli(),
-                "added_at", Instant.now().toEpochMilli()
-            )
-        );
-
-        adminClient.post()
-            .uri(builder -> builder.path("/_synapse/admin/v2/users/{userId}/threepid").build(encode(userId)))
-            .bodyValue(payload)
-            .retrieve()
-            .bodyToMono(Void.class)
-            .doOnError(ex -> log.warn("Failed to link phone {} to {}: {}", phone, userId, ex.getMessage()))
-            .onErrorResume(ex -> Mono.empty())
-            .block();
+        List<ThreePid> current = fetchThreepids(userId);
+        boolean alreadyLinked = current.stream()
+                .anyMatch(t -> "msisdn".equalsIgnoreCase(t.medium()) && phone.equals(t.address()));
+        if (alreadyLinked) {
+            return;
+        }
+        List<Map<String, String>> updated = new ArrayList<>();
+        for (ThreePid t : current) {
+            updated.add(Map.of("medium", t.medium(), "address", t.address()));
+        }
+        updated.add(Map.of("medium", "msisdn", "address", phone));
+        putThreepids(userId, updated, "link", phone);
     }
 
     @Override
     public void unlinkPhone(String userId, String phone) {
-        adminClient.delete()
-            .uri(builder -> builder
-                .path("/_synapse/admin/v2/users/{userId}/threepid/msisdn/{phone}")
-                .build(encode(userId), UriUtils.encodePathSegment(phone, StandardCharsets.UTF_8)))
-            .retrieve()
-            .bodyToMono(Void.class)
-            .doOnError(ex -> log.warn("Failed to unlink phone {} from {}: {}", phone, userId, ex.getMessage()))
-            .onErrorResume(ex -> Mono.empty())
-            .block();
+        List<ThreePid> current = fetchThreepids(userId);
+        List<Map<String, String>> updated = new ArrayList<>();
+        boolean removed = false;
+        for (ThreePid t : current) {
+            if ("msisdn".equalsIgnoreCase(t.medium()) && phone.equals(t.address())) {
+                removed = true;
+                continue;
+            }
+            updated.add(Map.of("medium", t.medium(), "address", t.address()));
+        }
+        if (!removed) {
+            return;
+        }
+        putThreepids(userId, updated, "unlink", phone);
+    }
+
+    private List<ThreePid> fetchThreepids(String userId) {
+        UserDetailsResponse details = adminClient.get()
+                .uri(builder -> builder.path("/_synapse/admin/v2/users/{userId}").build(encode(userId)))
+                .retrieve()
+                .bodyToMono(UserDetailsResponse.class)
+                .onErrorResume(ex -> {
+                    log.warn("Failed to fetch Matrix user {}: {}", userId, ex.getMessage());
+                    return Mono.empty();
+                })
+                .block();
+        return details == null ? List.of() : Optional.ofNullable(details.threepids()).orElse(List.of());
+    }
+
+    private void putThreepids(String userId, List<Map<String, String>> threepids, String op, String phone) {
+        Map<String, Object> body = Map.of("threepids", threepids);
+        adminClient.put()
+                .uri(builder -> builder.path("/_synapse/admin/v2/users/{userId}").build(encode(userId)))
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(Void.class)
+                .doOnError(ex -> log.warn("Failed to {} phone {} for {}: {}", op, phone, userId, ex.getMessage()))
+                .block();
     }
 
     @Override
     public MatrixLoginResponse login(String userId, String password) {
         return clientApi.post()
-            .uri("/_matrix/client/v3/login")
-            .bodyValue(Map.of(
-                "type", "m.login.password",
-                "identifier", Map.of("type", "m.id.user", "user", userId),
-                "password", password,
-                "refresh_token", false
-            ))
-            .retrieve()
-            .bodyToMono(MatrixLoginResponse.class)
-            .block();
+                .uri("/_matrix/client/v3/login")
+                .bodyValue(Map.of(
+                        "type", "m.login.password",
+                        "identifier", Map.of("type", "m.id.user", "user", userId),
+                        "password", password,
+                        "refresh_token", false))
+                .retrieve()
+                .bodyToMono(MatrixLoginResponse.class)
+                .block();
+    }
+
+    @Override
+    public Optional<String> whoami(String userAccessToken) {
+        if (userAccessToken == null || userAccessToken.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            Map<String, Object> body = clientApi.get()
+                    .uri("/_matrix/client/v3/account/whoami")
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + userAccessToken)
+                    .exchangeToMono(response -> {
+                        if (response.statusCode().is2xxSuccessful()) {
+                            return response.bodyToMono(Map.class).map(m -> (Map<String, Object>) m);
+                        }
+                        return response.releaseBody().then(Mono.empty());
+                    })
+                    .block();
+            if (body == null) {
+                return Optional.empty();
+            }
+            Object userId = body.get("user_id");
+            return userId == null ? Optional.empty() : Optional.of(userId.toString());
+        } catch (Exception ex) {
+            log.debug("whoami lookup failed: {}", ex.getMessage());
+            return Optional.empty();
+        }
     }
 
     private String encode(String value) {
         return UriUtils.encodePathSegment(value, StandardCharsets.UTF_8);
     }
 
-    private record UserDetailsResponse(List<ThreePid> threepids) {
-        List<String> msisdnAddresses() {
-            return Optional.ofNullable(threepids)
-                .orElse(List.of())
-                .stream()
-                .filter(threepid -> "msisdn".equalsIgnoreCase(threepid.medium()))
-                .map(ThreePid::address)
-                .toList();
-        }
+    @Override
+    public boolean userExists(String userId) {
+        String path = "/_synapse/admin/v2/users/" + encode(userId);
+        Boolean exists = adminClient.get()
+                .uri(uriBuilder -> uriBuilder.path(path).build())
+                .exchangeToMono(response -> {
+                    if (response.statusCode().is2xxSuccessful()) {
+                        return response.releaseBody().thenReturn(Boolean.TRUE);
+                    }
+                    if (response.statusCode().value() == 404) {
+                        return response.releaseBody().thenReturn(Boolean.FALSE);
+                    }
+                    return response.createException().flatMap(Mono::error);
+                })
+                .onErrorResume(ex -> {
+                    log.warn("Failed to check existence of Matrix user {}: {}", userId, ex.getMessage());
+                    return Mono.just(Boolean.FALSE);
+                })
+                .block();
+        return Boolean.TRUE.equals(exists);
     }
 
-    private record ThreePid(String medium, String address) { }
+    @Override
+    public void deactivateUser(String userId, boolean erase) {
+        adminClient.post()
+                .uri(builder -> builder.path("/_synapse/admin/v1/deactivate/{userId}").build(encode(userId)))
+                .bodyValue(Map.of("erase", erase))
+                .retrieve()
+                .bodyToMono(Void.class)
+                .doOnSuccess(unused -> log.info("Deactivated Matrix user {} (erase={})", userId, erase))
+                .doOnError(ex -> log.error("Failed to deactivate Matrix user {}: {}", userId, ex.getMessage()))
+                .block();
+    }
+
+    @Override
+    public String rotatePassword(String userId) {
+        byte[] bytes = new byte[24];
+        new java.security.SecureRandom().nextBytes(bytes);
+        String password = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        adminClient.put()
+                .uri(builder -> builder.path("/_synapse/admin/v2/users/{userId}").build(encode(userId)))
+                .bodyValue(Map.of("password", password, "logout_devices", false))
+                .retrieve()
+                .bodyToMono(Void.class)
+                .doOnSuccess(unused -> log.info("Rotated Matrix password for {} (logout_devices=false)", userId))
+                .doOnError(ex -> log.error("Failed to rotate Matrix password for {}: {}", userId, ex.getMessage()))
+                .block();
+        return password;
+    }
+
+    private record UserDetailsResponse(List<ThreePid> threepids) {
+    }
+
+    private record ThreePid(String medium, String address) {
+    }
 }
