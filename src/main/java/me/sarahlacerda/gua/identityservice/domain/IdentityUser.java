@@ -49,6 +49,9 @@ public class IdentityUser {
     @Column(name = "pin_locked_until")
     private Instant pinLockedUntil;
 
+    @Column(name = "last_pin_change_at")
+    private Instant lastPinChangeAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
