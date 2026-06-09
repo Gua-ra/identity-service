@@ -4,10 +4,10 @@ identity:
     ttl: ${IDENTITY_OTP_TTL:PT5M}
     max-requests-per-phone-per-hour: ${IDENTITY_OTP_MAX_PHONE_PER_HOUR:5}
     max-requests-per-ip-per-hour: ${IDENTITY_OTP_MAX_IP_PER_HOUR:10}
-    sms-template: ${IDENTITY_OTP_SMS_TEMPLATE:Your Gua verification code is %s}
+    sms-template: ${IDENTITY_OTP_SMS_TEMPLATE:Your Gua verification code is %s. Never share this code with anyone. Gua will never ask you for it.}
     localized-sms-templates:
-      en: ${IDENTITY_OTP_SMS_TEMPLATE_EN:Your Gua verification code is %s}
-      pt-br: ${IDENTITY_OTP_SMS_TEMPLATE_PT_BR:Seu código de verificação Gua é %s}
+      en: ${IDENTITY_OTP_SMS_TEMPLATE_EN:Your Gua verification code is %s. Never share this code with anyone. Gua will never ask you for it.}
+      pt-br: ${IDENTITY_OTP_SMS_TEMPLATE_PT_BR:Seu código de verificação Gua é %s. Nunca compartilhe este código com ninguém. A Gua nunca vai pedir esse código.}
   matrix:
     admin-api-base-url: ${IDENTITY_MATRIX_ADMIN_API_BASE_URL}
     client-api-base-url: ${IDENTITY_MATRIX_CLIENT_API_BASE_URL}
@@ -37,6 +37,16 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_OTP_VERIFY_LIMIT:10}
         refresh-period: ${IDENTITY_RATE_LIMIT_OTP_VERIFY_REFRESH:PT1M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_OTP_VERIFY_TIMEOUT:PT0S}
+      - path: /signup/complete
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_SIGNUP_COMPLETE_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_SIGNUP_COMPLETE_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_SIGNUP_COMPLETE_TIMEOUT:PT0S}
+      - path: /signin/verify-pin
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_SIGNIN_VERIFY_PIN_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_SIGNIN_VERIFY_PIN_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_SIGNIN_VERIFY_PIN_TIMEOUT:PT0S}
       - path: /otp/change-number
         methods: [POST]
         limit-for-period: ${IDENTITY_RATE_LIMIT_OTP_CHANGE_NUMBER_LIMIT:3}
@@ -57,6 +67,16 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_COMPLETE_LIMIT:3}
         refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_COMPLETE_REFRESH:PT1H}
         timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_COMPLETE_TIMEOUT:PT0S}
+      - path: /security/pin/change/start
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_CHANGE_START_LIMIT:5}
+        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_CHANGE_START_REFRESH:PT1H}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_CHANGE_START_TIMEOUT:PT0S}
+      - path: /security/pin/change/complete
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_CHANGE_COMPLETE_LIMIT:5}
+        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_CHANGE_COMPLETE_REFRESH:PT1H}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_CHANGE_COMPLETE_TIMEOUT:PT0S}
       - path: /directory/lookup
         methods: [POST]
         limit-for-period: ${IDENTITY_RATE_LIMIT_DIRECTORY_LOOKUP_LIMIT:30}
@@ -92,8 +112,36 @@ spring:
 
 oidc:
   issuer: ${IDENTITY_BASE_URL}
-  jwt-signing-secret: ${OIDC_JWT_SIGNING_SECRET}
   authorization-code-ttl: ${OIDC_AUTHORIZATION_CODE_TTL:PT5M}
   access-token-ttl: ${OIDC_ACCESS_TOKEN_TTL:PT15M}
   id-token-ttl: ${OIDC_ID_TOKEN_TTL:PT15M}
-  jwk-key-id: ${OIDC_JWK_KEY_ID:oidc-signing-key}
+  signing:
+    key-id: ${OIDC_JWK_KEY_ID:oidc-signing-key}
+    private-key: ${OIDC_RSA_PRIVATE_KEY:}
+    public-key: ${OIDC_RSA_PUBLIC_KEY:}
+  clients:
+    - client-id: ${OIDC_CLIENT_MAS_ID:mas}
+      client-secret: ${OIDC_CLIENT_MAS_SECRET:}
+      redirect-uris: ${OIDC_CLIENT_MAS_REDIRECTS:http://localhost:8080/upstream/account/callback/oidc,http://localhost:8081/upstream/account/callback/oidc}
+      allowed-scopes: openid,profile,phone
+      require-pkce: ${OIDC_CLIENT_MAS_REQUIRE_PKCE:false}
+    - client-id: ${OIDC_CLIENT_GUA_IOS_ID:gua-ios}
+      redirect-uris: ${OIDC_CLIENT_GUA_IOS_REDIRECTS:me.sarahlacerda.gua://oidc}
+      allowed-scopes: openid,profile,phone
+      require-pkce: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: ${MANAGEMENT_ENDPOINTS_EXPOSURE:health,info}
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  health:
+    redis:
+      enabled: true
+    db:
+      enabled: true

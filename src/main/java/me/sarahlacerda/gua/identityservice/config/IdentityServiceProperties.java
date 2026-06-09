@@ -47,7 +47,7 @@ public class IdentityServiceProperties {
         private int maxRequestsPerIpPerHour = 10;
 
         @NotBlank
-        private String smsTemplate = "Your Gua verification code is %s";
+        private String smsTemplate = "Your Gua verification code is %s. Never share this code with anyone. Gua will never ask you for it.";
 
         @NotNull
         private Map<String, String> localizedSmsTemplates = new HashMap<>();
@@ -90,6 +90,12 @@ public class IdentityServiceProperties {
 
         @NotNull
         private Duration pinLockDuration = Duration.ofMinutes(15);
+
+        @NotNull
+        private Duration pinChangeCooldown = Duration.ofHours(24);
+
+        @NotNull
+        private Duration pinChangeChallengeTtl = Duration.ofMinutes(5);
     }
 
     @Getter

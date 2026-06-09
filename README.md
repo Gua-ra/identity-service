@@ -12,7 +12,7 @@ It is responsible for phone-number–based login, OTP (one-time password) manage
 
 ## ✨ Features (planned / implemented)
 
-- 📱 **Phone number login**: request OTP → verify OTP → issue Matrix-compatible access.
+- 📱 **Phone number login**: request OTP → verify OTP → issue OIDC tokens consumed by MAS/Synapse.
 - 🔐 **OTP storage with expiry** (Redis-backed).
 - 🗄️ **Persistent user identities** (PostgreSQL, with Flyway for schema migrations).
 - ⚡ **REST API endpoints** for clients (Element-X fork → Gua client).
@@ -92,6 +92,10 @@ Tokens are signed with the secret supplied via `OIDC_JWT_SIGNING_SECRET` (HMAC-S
 
 Authorization codes are short-lived (default 5 minutes) and stored in Redis to maintain statelessness across multiple instances.
 
+### API authentication
+
+Client-facing REST endpoints (directory lookup, PIN management, etc.) require the MAS-issued OIDC access token in the `Authorization: Bearer <token>` header. The identity service validates these JWTs locally and no longer calls Synapse’s `/whoami` endpoint for token verification.
+
 ---
 
 ## 🛡️ Rate limiting
@@ -121,7 +125,7 @@ An example `docker-compose.identity.yml` is included. Provide environment values
 
 - `SPRING_DATASOURCE_*` – JDBC details for Postgres
 - `SPRING_DATA_REDIS_*` – Redis host/port
-- `IDENTITY_MATRIX_*` – Synapse endpoints and admin token
+- `IDENTITY_MATRIX_*` – Synapse endpoints and admin token (used for provisioning Matrix sessions; validation is handled locally)
 - `IDENTITY_DIRECTORY_PEPPER` – server-side secret used to hash phone digests
 - `OIDC_JWT_SIGNING_SECRET` – HMAC secret used to sign OIDC access and ID tokens
 

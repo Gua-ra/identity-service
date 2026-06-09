@@ -12,7 +12,8 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.RateLimitConfig;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.RateLimitProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.RateLimitRule;
-import me.sarahlacerda.gua.identityservice.security.MatrixAuthentication;
+import me.sarahlacerda.gua.identityservice.security.OidcAuthenticationToken;
+import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthenticatedPrincipal;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -66,7 +67,8 @@ class EndpointRateLimiterTest {
 
     @Test
     void resolveShouldMatchSpecificRuleAndEmbedIdentity() {
-        SecurityContextHolder.getContext().setAuthentication(new MatrixAuthentication("@alice:gua.local", "token"));
+        OidcAuthenticatedPrincipal principal = new OidcAuthenticatedPrincipal("@alice:gua.local", "+15555550100", "Alice", Set.of("openid"));
+        SecurityContextHolder.getContext().setAuthentication(new OidcAuthenticationToken(principal, "token"));
 
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/otp/send");
         request.setRemoteAddr("192.168.1.10");
