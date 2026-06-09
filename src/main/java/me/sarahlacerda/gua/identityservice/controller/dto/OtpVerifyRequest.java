@@ -20,9 +20,6 @@ public class OtpVerifyRequest {
     @Schema(description = "One-time password that was delivered to the phone", example = "123456")
     private String code;
 
-    @Schema(description = "Optional display name to apply to the Matrix user", example = "Sarah L.")
-    private String displayName;
-
     @Schema(description = "Optional security PIN required for returning users", example = "654321")
     private String pin;
 
