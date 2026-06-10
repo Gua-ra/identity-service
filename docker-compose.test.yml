@@ -36,6 +36,7 @@ services:
     container_name: identity-synapse
     depends_on:
       - synapse-db
+      - mas
     environment:
       SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
       SYNAPSE_LOG_CONFIG: /data/log.config
@@ -55,7 +56,42 @@ services:
     ports:
       - "8008:8008"
 
+  mas:
+    image: ghcr.io/element-hq/matrix-authentication-service:latest
+    container_name: mas
+    depends_on:
+      - mas-db
+    command: [ "server", "--config", "/config/mas.conf.yaml" ]
+    volumes:
+      - ./docker/mas/mas.conf.yaml:/config/mas.conf.yaml:ro
+    environment:
+      RUST_LOG: info
+      MAS_PORT: 8080
+      MAS_DOMAIN: dev.local
+      MAS_PUBLIC_BASE_URL: http://mas:8080
+      MAS_MATRIX_HOMESERVER: dev.local
+      MAS_MATRIX_ENDPOINT: http://synapse:8008
+      MAS_MATRIX_SECRET: dev_shared_secret
+      MAS_ENCRYPTION_SECRET: 4ef37f9c88c1d42ffab7cdd9c49b2c2b2c6e3cf90c7a1b2ed9338da7a1e3f6a7
+      MAS_UPSTREAM_ISSUER: http://host.docker.internal:8080
+      MAS_UPSTREAM_CLIENT_ID: test_client_id
+      MAS_UPSTREAM_CLIENT_SECRET: test_client_secret
+      MAS_UPSTREAM_JWKS_URI: http://host.docker.internal:8080/.well-known/openid-configuration/jwks
+    ports:
+      - "8090:8080"
+
+  mas-db:
+    image: postgres:16-alpine
+    container_name: mas-db
+    environment:
+      POSTGRES_USER: mas
+      POSTGRES_PASSWORD: maspass
+      POSTGRES_DB: mas
+    volumes:
+      - mas-postgres-data:/var/lib/postgresql/data
+
 volumes:
   identity-postgres-data:
   identity-redis-data:
   synapse-postgres-data:
+  mas-postgres-data:

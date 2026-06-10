@@ -7,6 +7,8 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 
+import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthenticatedPrincipal;
+
 @Component
 public class AuthenticatedUserAccessor {
 
@@ -18,6 +20,9 @@ public class AuthenticatedUserAccessor {
         Object principal = authentication.getPrincipal();
         if (principal instanceof String principalUserId) {
             return Optional.of(principalUserId);
+        }
+        if (principal instanceof OidcAuthenticatedPrincipal oidcPrincipal) {
+            return Optional.ofNullable(oidcPrincipal.userId());
         }
         return Optional.empty();
     }

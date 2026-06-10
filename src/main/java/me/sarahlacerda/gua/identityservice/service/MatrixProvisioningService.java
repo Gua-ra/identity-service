@@ -32,14 +32,20 @@ public class MatrixProvisioningService {
         }
         String random = UUID.randomUUID().toString().replace("-", "");
         String localPart = prefix + random;
-        return "@" + localPart + ":" + properties.getMatrix().getHomeserverDomain();
+        return buildUserId(localPart);
     }
 
-    public MatrixSession ensureSessionForUser(String userId, String phone, String displayName, boolean ensurePhoneLinked) {
+    public String buildUserId(String localpart) {
+        return "@" + localpart + ":" + properties.getMatrix().getHomeserverDomain();
+    }
+
+    public MatrixSession ensureSessionForUser(String userId, String phone, String displayName,
+            boolean ensurePhoneLinked) {
         String password = generatePassword();
         matrixAdminClient.upsertUser(userId, password, ensurePhoneLinked ? phone : null, displayName);
         MatrixLoginResponse loginResponse = matrixAdminClient.login(userId, password);
-        return new MatrixSession(loginResponse.accessToken(), loginResponse.userId(), loginResponse.deviceId(), properties.getMatrix().getClientApiBaseUrl());
+        return new MatrixSession(loginResponse.accessToken(), loginResponse.userId(), loginResponse.deviceId(),
+                properties.getMatrix().getClientApiBaseUrl());
     }
 
     public void ensureExclusivePhoneBinding(String userId, String phone) {
@@ -48,8 +54,8 @@ public class MatrixProvisioningService {
             matrixAdminClient.linkPhone(userId, phone);
         }
         currentPhones.stream()
-            .filter(existing -> !existing.equals(phone))
-            .forEach(existing -> matrixAdminClient.unlinkPhone(userId, existing));
+                .filter(existing -> !existing.equals(phone))
+                .forEach(existing -> matrixAdminClient.unlinkPhone(userId, existing));
     }
 
     private String generatePassword() {

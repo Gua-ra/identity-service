@@ -22,6 +22,11 @@ for cmd in docker curl openssl jq; do
   require_cmd "$cmd"
 done
 
+if ! docker info >/dev/null 2>&1; then
+  echo "Error: unable to communicate with the Docker daemon. Ensure Docker is running and accessible (hint: rootless Docker or docker-desktop)." >&2
+  exit 1
+fi
+
 mkdir -p "$SYNAPSE_DATA_DIR"
 
 echo "Starting development dependencies with docker compose..."
@@ -79,6 +84,14 @@ else
   echo "$DIRECTORY_PEPPER" > "$PEPPER_FILE"
 fi
 
+OIDC_SECRET_FILE="$REPO_ROOT/docker/.oidc-jwt-secret"
+if [ -f "$OIDC_SECRET_FILE" ]; then
+  OIDC_JWT_SIGNING_SECRET=$(cat "$OIDC_SECRET_FILE")
+else
+  OIDC_JWT_SIGNING_SECRET=$(openssl rand -hex 32)
+  echo "$OIDC_JWT_SIGNING_SECRET" > "$OIDC_SECRET_FILE"
+fi
+
 read -r -d '' ENV_EXPORTS <<EOS || true
 export IDENTITY_MATRIX_ADMIN_API_BASE_URL=$HOMESERVER_URL
 export IDENTITY_MATRIX_CLIENT_API_BASE_URL=$HOMESERVER_URL
@@ -86,12 +99,18 @@ export IDENTITY_MATRIX_HOME_DOMAIN=$MATRIX_HOME_DOMAIN
 export IDENTITY_MATRIX_ADMIN_TOKEN=$ADMIN_TOKEN
 export IDENTITY_MATRIX_LOCALPART_PREFIX=gua
 export IDENTITY_DIRECTORY_PEPPER=$DIRECTORY_PEPPER
+export IDENTITY_BASE_URL=http://localhost:8080
 export SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/identity
 export SPRING_DATASOURCE_USERNAME=identity
 export SPRING_DATASOURCE_PASSWORD=identity
 export SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver
 export SPRING_DATA_REDIS_HOST=localhost
 export SPRING_DATA_REDIS_PORT=6379
+export OIDC_JWT_SIGNING_SECRET=$OIDC_JWT_SIGNING_SECRET
+export OIDC_AUTHORIZATION_CODE_TTL=PT5M
+export OIDC_ACCESS_TOKEN_TTL=PT15M
+export OIDC_ID_TOKEN_TTL=PT15M
+export OIDC_JWK_KEY_ID=dev-oidc-signing-key
 EOS
 
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then

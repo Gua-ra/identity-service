@@ -2,8 +2,10 @@ package me.sarahlacerda.gua.identityservice.service.security;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,6 +15,8 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.domain.IdentityUser;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinOperationException;
+import me.sarahlacerda.gua.identityservice.exception.PinChangeChallengeNotFoundException;
+import me.sarahlacerda.gua.identityservice.exception.PinChangeCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinLockedException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetNotRequestedException;
@@ -28,6 +32,7 @@ import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditL
 public class UserSecurityService {
 
     private static final String PIN_PATTERN = "\\d{6}";
+    private static final String CHANGE_CHALLENGE_KEY_PREFIX = "pin:change:";
 
     private final IdentityUserRepository repository;
     private final PasswordEncoder passwordEncoder;
@@ -36,17 +41,18 @@ public class UserSecurityService {
     private final PhoneNumberHasher phoneNumberHasher;
     private final OtpService otpService;
     private final SecurityAuditLogger auditLogger;
+    private final StringRedisTemplate redisTemplate;
 
     @Transactional
     public IdentityUser ensureUser(String userId) {
         return repository.findByUserId(userId)
-            .orElseGet(() -> repository.save(IdentityUser.builder().userId(userId).build()));
+                .orElseGet(() -> repository.save(IdentityUser.builder().userId(userId).build()));
     }
 
     @Transactional(readOnly = true)
     public IdentityUser requireExistingUser(String userId) {
         return repository.findByUserId(userId)
-            .orElseThrow(() -> new UnknownUserException("Unknown user: " + userId));
+                .orElseThrow(() -> new UnknownUserException("Unknown user: " + userId));
     }
 
     @Transactional
@@ -71,19 +77,94 @@ public class UserSecurityService {
             throw new InvalidPinException("Current PIN is incorrect");
         }
         applyNewPin(user, newPin);
+        user.setLastPinChangeAt(Instant.now());
         auditLogger.pinUpdated(userId);
+    }
+
+    /**
+     * Step 1 of the OTP-protected PIN change: verify the current PIN, enforce the
+     * change cooldown, and send an
+     * OTP to the verified phone. Returns an opaque challenge that the caller must
+     * redeem in step 2.
+     */
+    @Transactional
+    public String startPinChange(String userId, String phone, String currentPin, String requesterIp) {
+        IdentityUser user = requireExistingUser(userId);
+        if (!user.hasPin()) {
+            throw new InvalidPinOperationException("PIN not set for user");
+        }
+        enforcePinChangeCooldown(user);
+        ensurePhoneBelongsToUser(userId, phone);
+        validatePinOrThrow(userId, currentPin);
+        otpService.sendOtp(phone, requesterIp, null);
+
+        String challengeId = UUID.randomUUID().toString();
+        Duration ttl = properties.getSecurity().getPinChangeChallengeTtl();
+        redisTemplate.opsForValue().set(changeChallengeKey(challengeId), userId + "|" + phone, ttl);
+        auditLogger.pinChangeStarted(userId, maskPhoneNumber(phone), requesterIp);
+        return challengeId;
+    }
+
+    /**
+     * Step 2 of the OTP-protected PIN change: redeem the challenge with the OTP and
+     * the new PIN.
+     */
+    @Transactional
+    public void completePinChange(String userId, String challengeId, String otpCode, String newPin) {
+        IdentityUser user = requireExistingUser(userId);
+        if (!user.hasPin()) {
+            throw new InvalidPinOperationException("PIN not set for user");
+        }
+        enforcePinChangeCooldown(user);
+
+        String key = changeChallengeKey(challengeId);
+        String stored = redisTemplate.opsForValue().get(key);
+        if (!StringUtils.hasText(stored)) {
+            throw new PinChangeChallengeNotFoundException("PIN change challenge missing or expired");
+        }
+        String[] parts = stored.split("\\|", 2);
+        if (parts.length != 2 || !parts[0].equals(userId)) {
+            redisTemplate.delete(key);
+            throw new PinChangeChallengeNotFoundException("PIN change challenge does not belong to caller");
+        }
+        String phone = parts[1];
+        otpService.verifyOtp(phone, otpCode);
+        validatePinFormat(newPin);
+        applyNewPin(user, newPin);
+        user.setLastPinChangeAt(Instant.now());
+        redisTemplate.delete(key);
+        auditLogger.pinChangeCompleted(userId);
+    }
+
+    private void enforcePinChangeCooldown(IdentityUser user) {
+        Instant lastChange = user.getLastPinChangeAt();
+        if (lastChange == null) {
+            return;
+        }
+        Duration cooldown = properties.getSecurity().getPinChangeCooldown();
+        Instant now = Instant.now();
+        Duration since = Duration.between(lastChange, now);
+        if (since.compareTo(cooldown) < 0) {
+            long remaining = cooldown.minus(since).toSeconds();
+            throw new PinChangeCooldownException("PIN change cooldown active", remaining);
+        }
+    }
+
+    private String changeChallengeKey(String challengeId) {
+        return CHANGE_CHALLENGE_KEY_PREFIX + challengeId;
     }
 
     @Transactional(readOnly = true)
     public boolean hasPin(String userId) {
         return repository.findByUserId(userId)
-            .map(IdentityUser::hasPin)
-            .orElse(false);
+                .map(IdentityUser::hasPin)
+                .orElse(false);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(noRollbackFor = { InvalidPinException.class, PinLockedException.class })
     public void validatePinOrThrow(String userId, String providedPin) {
-        IdentityUser user = requireExistingUser(userId);
+        IdentityUser user = repository.findByUserIdForUpdate(userId)
+                .orElseThrow(() -> new UnknownUserException("Unknown user: " + userId));
         if (!user.hasPin()) {
             throw new InvalidPinOperationException("PIN not set for user");
         }
@@ -156,8 +237,8 @@ public class UserSecurityService {
     private void ensurePhoneBelongsToUser(String userId, String phone) {
         String digest = phoneNumberHasher.digest(phone);
         directoryService.findByDigest(digest)
-            .filter(entry -> entry.getUserId().equals(userId))
-            .orElseThrow(() -> new InvalidPinOperationException("Phone number not linked to user"));
+                .filter(entry -> entry.getUserId().equals(userId))
+                .orElseThrow(() -> new InvalidPinOperationException("Phone number not linked to user"));
     }
 
     private void applyNewPin(IdentityUser user, String newPin) {

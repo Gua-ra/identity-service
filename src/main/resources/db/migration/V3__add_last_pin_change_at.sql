@@ -1,0 +1,2 @@
+ALTER TABLE identity_users
+    ADD COLUMN IF NOT EXISTS last_pin_change_at TIMESTAMP WITH TIME ZONE;

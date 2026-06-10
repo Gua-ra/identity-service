@@ -15,16 +15,16 @@ public class OpenApiConfig {
 
     @Bean
     public OpenAPI identityServiceOpenApi() {
-        SecurityScheme matrixTokenScheme = new SecurityScheme()
-            .name("Matrix Token")
+        SecurityScheme oidcAccessTokenScheme = new SecurityScheme()
+            .name("OIDC Access Token")
             .type(SecurityScheme.Type.HTTP)
             .scheme("bearer")
-            .bearerFormat("Matrix Access Token")
-            .description("Matrix client access token issued by Synapse via the OTP login flow. Provide as 'Authorization: Bearer <token>'.");
+            .bearerFormat("JWT")
+            .description("OIDC access token (JWT) issued by the identity service via MAS. Provide as 'Authorization: Bearer <token>'.");
 
         return new OpenAPI()
-            .components(new Components().addSecuritySchemes("matrixToken", matrixTokenScheme))
-            .addSecurityItem(new SecurityRequirement().addList("matrixToken"))
+            .components(new Components().addSecuritySchemes("oidcAccessToken", oidcAccessTokenScheme))
+            .addSecurityItem(new SecurityRequirement().addList("oidcAccessToken"))
             .info(new Info()
                 .title("Gua Identity Service API")
                 .description("Endpoints for OTP, PIN management, and contact discovery in the Gua ecosystem.")

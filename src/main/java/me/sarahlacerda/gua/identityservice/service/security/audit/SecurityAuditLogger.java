@@ -17,4 +17,8 @@ public interface SecurityAuditLogger {
     void pinResetRequested(String userId, String maskedPhone, String requesterIp);
 
     void pinResetCompleted(String userId);
+
+    void pinChangeStarted(String userId, String maskedPhone, String requesterIp);
+
+    void pinChangeCompleted(String userId);
 }

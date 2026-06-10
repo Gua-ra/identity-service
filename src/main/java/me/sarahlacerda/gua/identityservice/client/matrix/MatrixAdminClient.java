@@ -15,4 +15,32 @@ public interface MatrixAdminClient {
     void unlinkPhone(String userId, String phone);
 
     MatrixLoginResponse login(String userId, String password);
+
+    boolean userExists(String userId);
+
+    /**
+     * Deactivates the Matrix user account on the homeserver. When {@code erase} is
+     * true the
+     * homeserver also wipes the user's profile and outbound encryption keys (GDPR
+     * erase).
+     */
+    void deactivateUser(String userId, boolean erase);
+
+    /**
+     * Replaces the user's password on the homeserver via the admin API. Returns the
+     * freshly
+     * generated password so callers can hand it back to the client for a single
+     * User-Interactive
+     * Authentication challenge ({@code m.login.password}). Existing access tokens
+     * are kept alive
+     * ({@code logout_devices=false}) so the active session is not interrupted.
+     */
+    String rotatePassword(String userId);
+
+    /**
+     * Resolves a Matrix user access token to its owning user id by calling
+     * {@code GET /_matrix/client/v3/account/whoami} with the supplied bearer token.
+     * Returns empty if the token is invalid, expired or the homeserver rejects it.
+     */
+    java.util.Optional<String> whoami(String userAccessToken);
 }

@@ -45,4 +45,14 @@ public class LoggingSecurityAuditLogger implements SecurityAuditLogger {
     public void pinResetCompleted(String userId) {
         log.info("PIN reset completed for user {}", userId);
     }
+
+    @Override
+    public void pinChangeStarted(String userId, String maskedPhone, String requesterIp) {
+        log.info("PIN change started for user {} from IP {} (phone={})", userId, requesterIp, maskedPhone);
+    }
+
+    @Override
+    public void pinChangeCompleted(String userId) {
+        log.info("PIN change completed for user {}", userId);
+    }
 }
