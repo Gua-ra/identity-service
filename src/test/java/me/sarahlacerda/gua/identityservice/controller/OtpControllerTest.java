@@ -25,6 +25,7 @@ import me.sarahlacerda.gua.identityservice.controller.dto.OtpVerifyRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.OtpVerifyRequest.DeviceInfo;
 import me.sarahlacerda.gua.identityservice.controller.dto.OtpVerifyResponse;
 import me.sarahlacerda.gua.identityservice.domain.MatrixSession;
+import me.sarahlacerda.gua.identityservice.domain.VerifyOtpResult;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.IdentityOrchestrationService;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService.DeviceMetadata;
@@ -47,8 +48,8 @@ class OtpControllerTest {
         objectMapper = new ObjectMapper();
         OtpController controller = new OtpController(orchestrationService, authenticatedUserAccessor);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
-            .setMessageConverters(new MappingJackson2HttpMessageConverter())
-            .build();
+                .setMessageConverters(new MappingJackson2HttpMessageConverter())
+                .build();
     }
 
     @Test
@@ -60,7 +61,7 @@ class OtpControllerTest {
         mockMvc.perform(MockMvcRequestBuilders.post("/otp/send")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsBytes(request)))
-            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isAccepted());
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isAccepted());
 
         verify(orchestrationService).sendOtp("+12025550123", "127.0.0.1", "pt-BR");
     }
@@ -77,14 +78,37 @@ class OtpControllerTest {
         request.setDevice(deviceInfo);
 
         MatrixSession session = new MatrixSession("token", "@user:domain", "device", "https://matrix");
-        when(orchestrationService.verifyOtpAndSignIn(eq("+12025550123"), eq("123456"), any(), any(), any(DeviceMetadata.class)))
-            .thenReturn(session);
+        when(orchestrationService.verifyOtpAndSignIn(eq("+12025550123"), eq("123456"), any(),
+                any(DeviceMetadata.class)))
+                .thenReturn(VerifyOtpResult.existingUser(session));
 
         mockMvc.perform(MockMvcRequestBuilders.post("/otp/verify")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsBytes(request)))
-            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
-            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.accessToken", is("token")));
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.accessToken",
+                        is("token")))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.isNewUser",
+                        is(false)));
+    }
+
+    @Test
+    void verifyOtpReturnsSignupTokenForNewUser() throws Exception {
+        OtpVerifyRequest request = new OtpVerifyRequest();
+        request.setPhone("+12025550199");
+        request.setCode("123456");
+
+        when(orchestrationService.verifyOtpAndSignIn(eq("+12025550199"), eq("123456"), any(), any()))
+                .thenReturn(VerifyOtpResult.newUser("signup-token-abc"));
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/otp/verify")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(request)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.isNewUser",
+                        is(true)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.signupToken",
+                        is("signup-token-abc")));
     }
 
     @Test
@@ -100,7 +124,7 @@ class OtpControllerTest {
         mockMvc.perform(MockMvcRequestBuilders.post("/otp/change-number")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsBytes(request)))
-            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNoContent());
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNoContent());
 
         verify(orchestrationService).changePhoneNumber("@user:domain", "+19999999999", "123456", "999999");
     }

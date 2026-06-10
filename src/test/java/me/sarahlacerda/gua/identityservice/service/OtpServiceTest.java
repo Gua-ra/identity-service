@@ -58,10 +58,13 @@ class OtpServiceTest {
 
         otpService.sendOtp("+12025550123", "127.0.0.1", null);
 
-        verify(rateLimiter).checkRate("otp:rate:phone:+12025550123", properties.getOtp().getMaxRequestsPerPhonePerHour(), Duration.ofHours(1));
-        verify(rateLimiter).checkRate("otp:rate:ip:127.0.0.1", properties.getOtp().getMaxRequestsPerIpPerHour(), Duration.ofHours(1));
+        verify(rateLimiter).checkRate("otp:rate:phone:+12025550123",
+                properties.getOtp().getMaxRequestsPerPhonePerHour(), Duration.ofHours(1));
+        verify(rateLimiter).checkRate("otp:rate:ip:127.0.0.1", properties.getOtp().getMaxRequestsPerIpPerHour(),
+                Duration.ofHours(1));
         verify(valueOperations).set(eq("otp:code:+12025550123"), eq("123456"), eq(properties.getOtp().getTtl()));
-        verify(smsSender).send("+12025550123", "Your Gua verification code is 123456");
+        verify(smsSender).send("+12025550123",
+                "Your Gua verification code is 123456. Never share this code with anyone. Gua will never ask you for it.");
     }
 
     @Test
@@ -80,16 +83,16 @@ class OtpServiceTest {
         when(valueOperations.get("otp:code:+12025550123")).thenReturn("654321");
 
         assertThatThrownBy(() -> otpService.verifyOtp("+12025550123", "123456"))
-            .isInstanceOf(InvalidOtpException.class);
+                .isInstanceOf(InvalidOtpException.class);
     }
 
     @Test
     void sendOtpTransformsRateLimiterExceptions() {
         Mockito.doThrow(new RateLimiterException("fail")).when(rateLimiter)
-            .checkRate(eq("otp:rate:phone:+12025550123"), anyInt(), any(Duration.class));
+                .checkRate(eq("otp:rate:phone:+12025550123"), anyInt(), any(Duration.class));
 
         assertThatThrownBy(() -> otpService.sendOtp("+12025550123", null, null))
-            .isInstanceOf(OtpRateLimitedException.class);
+                .isInstanceOf(OtpRateLimitedException.class);
     }
 
     @Test
@@ -99,7 +102,8 @@ class OtpServiceTest {
 
         otpService.sendOtp("+12025550123", null, null);
 
-        verify(rateLimiter).checkRate("otp:rate:phone:+12025550123", properties.getOtp().getMaxRequestsPerPhonePerHour(), Duration.ofHours(1));
+        verify(rateLimiter).checkRate("otp:rate:phone:+12025550123",
+                properties.getOtp().getMaxRequestsPerPhonePerHour(), Duration.ofHours(1));
         verifyNoMoreInteractions(rateLimiter);
     }
 

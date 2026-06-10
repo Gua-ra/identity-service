@@ -6,9 +6,10 @@ import org.springframework.boot.autoconfigure.security.servlet.UserDetailsServic
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
+import me.sarahlacerda.gua.identityservice.config.OidcProperties;
 
 @SpringBootApplication(exclude = UserDetailsServiceAutoConfiguration.class)
-@EnableConfigurationProperties(IdentityServiceProperties.class)
+@EnableConfigurationProperties({IdentityServiceProperties.class, OidcProperties.class})
 public class IdentityServiceApplication {
 
     public static void main(String[] args) {

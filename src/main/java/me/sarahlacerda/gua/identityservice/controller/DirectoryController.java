@@ -38,7 +38,7 @@ public class DirectoryController {
     @Operation(
         summary = "Resolve contact digests",
         description = "Accepts a list of HMAC digests of phone numbers generated on the client and returns the contacts that are already using Gua. Used for contact discovery",
-        security = @SecurityRequirement(name = "matrixToken")
+        security = @SecurityRequirement(name = "oidcAccessToken")
     )
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Matches returned", content = @Content(schema = @Schema(implementation = DirectoryLookupResponse.class))),

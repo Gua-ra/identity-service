@@ -16,15 +16,17 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-public class MatrixTokenAuthenticationFilter extends OncePerRequestFilter {
+import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthenticatedPrincipal;
+
+public class OidcAccessTokenAuthenticationFilter extends OncePerRequestFilter {
 
     private static final String AUTHORIZATION_HEADER = "Authorization";
     private static final String BEARER_PREFIX = "Bearer ";
 
-    private final MatrixTokenValidator tokenValidator;
+    private final OidcAccessTokenValidator tokenValidator;
     private final List<RequestMatcher> openEndpoints;
 
-    public MatrixTokenAuthenticationFilter(MatrixTokenValidator tokenValidator, List<RequestMatcher> openEndpoints) {
+    public OidcAccessTokenAuthenticationFilter(OidcAccessTokenValidator tokenValidator, List<RequestMatcher> openEndpoints) {
         this.tokenValidator = tokenValidator;
         this.openEndpoints = openEndpoints != null ? openEndpoints : Collections.emptyList();
     }
@@ -57,15 +59,15 @@ public class MatrixTokenAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
-        Optional<String> maybeUserId = tokenValidator.validate(token);
-        if (maybeUserId.isEmpty()) {
+        Optional<OidcAuthenticatedPrincipal> maybePrincipal = tokenValidator.validate(token);
+        if (maybePrincipal.isEmpty()) {
             response.setStatus(HttpStatus.UNAUTHORIZED.value());
             response.setHeader(HttpHeaders.WWW_AUTHENTICATE, "Bearer");
             SecurityContextHolder.clearContext();
             return;
         }
 
-        MatrixAuthentication authentication = new MatrixAuthentication(maybeUserId.get(), token);
+        OidcAuthenticationToken authentication = new OidcAuthenticationToken(maybePrincipal.get(), token);
         SecurityContextHolder.getContext().setAuthentication(authentication);
         try {
             filterChain.doFilter(request, response);

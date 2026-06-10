@@ -40,3 +40,5 @@ out/
 docker/synapse/data/
 .env.identity-service
 docker/.identity-pepper
+docker/.oidc-jwt-secret
+docker/mas/mas.conf.yaml

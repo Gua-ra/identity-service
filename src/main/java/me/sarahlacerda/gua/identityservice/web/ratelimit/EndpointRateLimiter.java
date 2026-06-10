@@ -13,7 +13,8 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.RateLimitConfig;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.RateLimitProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.RateLimitRule;
-import me.sarahlacerda.gua.identityservice.security.MatrixAuthentication;
+import me.sarahlacerda.gua.identityservice.security.OidcAuthenticationToken;
+import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthenticatedPrincipal;
 
 import org.springframework.http.HttpMethod;
 import org.springframework.security.core.Authentication;
@@ -124,11 +125,17 @@ public class EndpointRateLimiter {
         if (authentication == null || !authentication.isAuthenticated()) {
             return null;
         }
-        if (authentication instanceof MatrixAuthentication matrixAuthentication) {
-            Object principal = matrixAuthentication.getPrincipal();
+        if (authentication instanceof OidcAuthenticationToken oidcAuthentication) {
+            Object principal = oidcAuthentication.getPrincipal();
+            if (principal instanceof OidcAuthenticatedPrincipal oidcPrincipal) {
+                return oidcPrincipal.userId();
+            }
             return principal != null ? principal.toString() : null;
         }
         Object principal = authentication.getPrincipal();
+        if (principal instanceof OidcAuthenticatedPrincipal oidcPrincipal) {
+            return oidcPrincipal.userId();
+        }
         return principal != null ? principal.toString() : null;
     }
 
