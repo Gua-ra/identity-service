@@ -68,7 +68,7 @@ class UserSecurityServiceTest {
         valueOps = mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
         service = new UserSecurityService(repository, passwordEncoder, properties, directoryService, phoneNumberHasher,
-                otpService, auditLogger, redisTemplate);
+                otpService, auditLogger, redisTemplate, new PinPolicy());
     }
 
     @Test
@@ -132,11 +132,11 @@ class UserSecurityServiceTest {
         when(phoneNumberHasher.digest("+12025550123")).thenReturn("digest");
         when(directoryService.findByDigest("digest")).thenReturn(Optional.of(directoryEntry("@user:gua.global")));
 
-        service.completePinReset("@user:gua.global", "+12025550123", "876543", "111111");
+        service.completePinReset("@user:gua.global", "+12025550123", "876543", "284917");
 
         verify(otpService).verifyOtp("+12025550123", "876543");
         verify(auditLogger).pinResetCompleted("@user:gua.global");
-        assertThat(passwordEncoder.matches("111111", user.getPinHash())).isTrue();
+        assertThat(passwordEncoder.matches("284917", user.getPinHash())).isTrue();
         assertThat(user.getPinResetRequestedAt()).isNull();
     }
 
@@ -203,12 +203,12 @@ class UserSecurityServiceTest {
         when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
         when(valueOps.get("pin:change:chal-1")).thenReturn("@user:gua.global|+12025550123");
 
-        service.completePinChange("@user:gua.global", "chal-1", "876543", "654321");
+        service.completePinChange("@user:gua.global", "chal-1", "876543", "284917");
 
         verify(otpService).verifyOtp("+12025550123", "876543");
         verify(redisTemplate).delete("pin:change:chal-1");
         verify(auditLogger).pinChangeCompleted("@user:gua.global");
-        assertThat(passwordEncoder.matches("654321", user.getPinHash())).isTrue();
+        assertThat(passwordEncoder.matches("284917", user.getPinHash())).isTrue();
         assertThat(user.getLastPinChangeAt()).isNotNull();
     }
 

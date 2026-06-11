@@ -34,6 +34,7 @@ import me.sarahlacerda.gua.identityservice.exception.PinResetNotRequestedExcepti
 import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
 import me.sarahlacerda.gua.identityservice.exception.UnknownUserException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
+import me.sarahlacerda.gua.identityservice.exception.WeakPinException;
 
 @RestControllerAdvice
 public class RestExceptionHandler {
@@ -82,6 +83,12 @@ public class RestExceptionHandler {
     public ResponseEntity<ErrorResponse> handleUsernameTaken(UsernameTakenException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(new ErrorResponse("username_taken", ex.getMessage()));
+    }
+
+    @ExceptionHandler(WeakPinException.class)
+    public ResponseEntity<ErrorResponse> handleWeakPin(WeakPinException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(new ErrorResponse("weak_pin", ex.getMessage()));
     }
 
     @ExceptionHandler(InvalidPinException.class)

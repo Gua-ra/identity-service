@@ -1,0 +1,53 @@
+secrets:
+  encryption: "4ef37f9c88c1d42ffab7cdd9c49b2c2b2c6e3cf90c7a1b2ed9338da7a1e3f6a7"
+  keys:
+    - kid: "oidc-signing-key"
+      use: "sig"
+      algorithm: "RS256"
+      key: |
+        -----BEGIN RSA PRIVATE KEY-----
+        MIICXQIBAAKBgQCsHDK6hXm/gX2yALGpN4jVc+SOshcvFkYGqoAO5AcebxcUf+SR
+        o/n5aJ3bQyfrLsmGie08PaFflmnu5gCe3786yFwC+Ex5+oeb5SNcK91hanmzviVv
+        MfVn+b1KfbfGzYeSwiHKkpxHePAjw5ZC1+4IPF3caxHhP2fPN8RWYseEqQIDAQAB
+        AoGAIJPR0lZzfhlPpoLVHheh8e1W5N+23bXUmWxqgucMpekXME0pAZxNM7Vms9sZ
+        Uj3v7WRsIEv2ILbC5HJqyafGdVTMFQUgZyeKjRWk7EGrdEeLWDMbAGu7EfgeEvKa
+        +bS+HMIgQZKfG0mqouwYnaCXgjVeUCPVHfKmNs+7CSq5VZECQQDv+wVWrnjsXurK
+        p3HdF0QpMVhS2++0LPsx42osIQBN4Lyh2D+Fr2u465z8UdqjHBwfv2xZH6NNmWwY
+        MuQoiUsFAkEAt5lajgDj2vcMG55xV8xTtzWVNq39EnDJVUD5/1+WB00otbflAk3K
+        oEzoimXoBtFT9XsOROSwJ1W2zo0SxDXsVQJBAIqkNPNdHNNCCtdFYYzfcityLJrC
+        IXuwOPcbcS1Ja4mSeqft7NTpAYz14d4L1ApDpSPaTVg35Pph1ocsb4/TsZkCQQCu
+        i3OEpyH4DIANTc9ReeZoud82kaiTvHgbvd8uQlBedqNqRv7H9u7ZAOTelk1FFgLs
+        0OVa59L0Qk++BG4/7UfVAkAfkaHYUciXSCPwba6w5gsDGkxKEekRtdfHXuVq43et
+        +klkK97/AhYMyPIh0+C13ozTOr3CBDKgCPbqIP9wFPmf
+        -----END RSA PRIVATE KEY-----
+
+database:
+  uri: "postgresql://mas:maspass@mas-db:5432/mas"
+
+default:
+  clients:
+    - client_id: "test_client_id"
+      client_auth_method: "client_secret_basic"
+      client_secret: "test_client_secret"
+      redirect_uris:
+        - "http://localhost:3000/callback"
+      grant_types:
+        - "authorization_code"
+      response_types:
+        - "code"
+      scopes:
+        - "openid"
+        - "profile"
+        - "phone_number"
+
+  upstream_oauth:
+    providers:
+      - id: "gua_identity"
+        issuer: "http://host.docker.internal:8080"
+        client_id: "gua_identity_client"
+        client_secret: "gua_identity_secret"
+        scopes:
+          - "openid"
+          - "profile"
+          - "phone_number"
+        jwks_uri: "http://host.docker.internal:8080/oauth2/keys.json"

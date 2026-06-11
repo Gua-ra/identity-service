@@ -1,0 +1,304 @@
+Standard Commons Logging discovery in action with spring-jcl: please remove commons-logging.jar from classpath in order to avoid potential conflicts
+Standard Commons Logging discovery in action with spring-jcl: please remove commons-logging.jar from classpath in order to avoid potential conflicts
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v3.5.6)
+
+2026-06-11T10:40:49.729-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.IdentityServiceApplication       : Starting IdentityServiceApplication using Java 21.0.8 with PID 98802 (/Users/sarah/IdeaProjects/identity-service/build/classes/java/main started by sarah in /Users/sarah/IdeaProjects/identity-service)
+2026-06-11T10:40:49.731-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.IdentityServiceApplication       : No active profile set, falling back to 1 default profile: "default"
+2026-06-11T10:40:49.751-04:00  INFO 98802 --- [  restartedMain] .e.DevToolsPropertyDefaultsPostProcessor : Devtools property defaults active! Set 'spring.devtools.add-properties' to 'false' to disable
+2026-06-11T10:40:49.751-04:00  INFO 98802 --- [  restartedMain] .e.DevToolsPropertyDefaultsPostProcessor : For additional web related logging consider setting the 'logging.level.web' property to 'DEBUG'
+2026-06-11T10:40:50.444-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Multiple Spring Data modules found, entering strict repository configuration mode
+2026-06-11T10:40:50.445-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data JPA repositories in DEFAULT mode.
+2026-06-11T10:40:50.529-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 78 ms. Found 3 JPA repository interfaces.
+2026-06-11T10:40:50.542-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Multiple Spring Data modules found, entering strict repository configuration mode
+2026-06-11T10:40:50.542-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data Redis repositories in DEFAULT mode.
+2026-06-11T10:40:50.551-04:00  INFO 98802 --- [  restartedMain] .RepositoryConfigurationExtensionSupport : Spring Data Redis - Could not safely identify store assignment for repository candidate interface me.sarahlacerda.gua.identityservice.repository.DirectoryEntryRepository; If you want this repository to be a Redis repository, consider annotating your entities with one of these annotations: org.springframework.data.redis.core.RedisHash (preferred), or consider extending one of the following types with your repository: org.springframework.data.keyvalue.repository.KeyValueRepository
+2026-06-11T10:40:50.551-04:00  INFO 98802 --- [  restartedMain] .RepositoryConfigurationExtensionSupport : Spring Data Redis - Could not safely identify store assignment for repository candidate interface me.sarahlacerda.gua.identityservice.repository.IdentityUserRepository; If you want this repository to be a Redis repository, consider annotating your entities with one of these annotations: org.springframework.data.redis.core.RedisHash (preferred), or consider extending one of the following types with your repository: org.springframework.data.keyvalue.repository.KeyValueRepository
+2026-06-11T10:40:50.551-04:00  INFO 98802 --- [  restartedMain] .RepositoryConfigurationExtensionSupport : Spring Data Redis - Could not safely identify store assignment for repository candidate interface me.sarahlacerda.gua.identityservice.repository.TrustedDeviceRepository; If you want this repository to be a Redis repository, consider annotating your entities with one of these annotations: org.springframework.data.redis.core.RedisHash (preferred), or consider extending one of the following types with your repository: org.springframework.data.keyvalue.repository.KeyValueRepository
+2026-06-11T10:40:50.551-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 3 ms. Found 0 Redis repository interfaces.
+2026-06-11T10:40:51.077-04:00  INFO 98802 --- [  restartedMain] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port 8080 (http)
+2026-06-11T10:40:51.086-04:00  INFO 98802 --- [  restartedMain] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-06-11T10:40:51.087-04:00  INFO 98802 --- [  restartedMain] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/10.1.46]
+2026-06-11T10:40:51.107-04:00  INFO 98802 --- [  restartedMain] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-06-11T10:40:51.107-04:00  INFO 98802 --- [  restartedMain] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1355 ms
+Standard Commons Logging discovery in action with spring-jcl: please remove commons-logging.jar from classpath in order to avoid potential conflicts
+2026-06-11T10:40:51.280-04:00  WARN 98802 --- [  restartedMain] m.s.g.i.config.OidcSigningKeyConfig      : No oidc.signing.private-key configured — generating an ephemeral RSA key for THIS process only. Configure OIDC_RSA_PRIVATE_KEY for production.
+2026-06-11T10:40:51.658-04:00 ERROR 98802 --- [  restartedMain] i.n.r.d.DnsServerAddressStreamProviders  : Unable to load io.netty.resolver.dns.macos.MacOSDnsServerAddressStreamProvider, fallback to system defaults. This may result in incorrect DNS resolutions on MacOS. Check whether you have a dependency on 'io.netty:netty-resolver-dns-native-macos'. Use DEBUG level to see the full stack: java.lang.UnsatisfiedLinkError: failed to load the required native library
+2026-06-11T10:40:52.199-04:00  INFO 98802 --- [  restartedMain] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-06-11T10:40:52.318-04:00  INFO 98802 --- [  restartedMain] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Added connection org.postgresql.jdbc.PgConnection@22e6e5b
+2026-06-11T10:40:52.319-04:00  INFO 98802 --- [  restartedMain] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+2026-06-11T10:40:52.334-04:00  INFO 98802 --- [  restartedMain] org.flywaydb.core.FlywayExecutor         : Database: jdbc:postgresql://localhost:5432/identity (PostgreSQL 16.10)
+2026-06-11T10:40:52.376-04:00  INFO 98802 --- [  restartedMain] o.f.core.internal.command.DbValidate     : Successfully validated 3 migrations (execution time 00:00.016s)
+2026-06-11T10:40:52.400-04:00  INFO 98802 --- [  restartedMain] o.f.core.internal.command.DbMigrate      : Current version of schema "public": 3
+2026-06-11T10:40:52.402-04:00  INFO 98802 --- [  restartedMain] o.f.core.internal.command.DbMigrate      : Schema "public" is up to date. No migration necessary.
+2026-06-11T10:40:52.467-04:00  INFO 98802 --- [  restartedMain] o.hibernate.jpa.internal.util.LogHelper  : HHH000204: Processing PersistenceUnitInfo [name: default]
+2026-06-11T10:40:52.503-04:00  INFO 98802 --- [  restartedMain] org.hibernate.Version                    : HHH000412: Hibernate ORM core version 6.6.29.Final
+2026-06-11T10:40:52.521-04:00  INFO 98802 --- [  restartedMain] o.h.c.internal.RegionFactoryInitiator    : HHH000026: Second-level cache disabled
+2026-06-11T10:40:52.666-04:00  INFO 98802 --- [  restartedMain] o.s.o.j.p.SpringPersistenceUnitInfo      : No LoadTimeWeaver setup: ignoring JPA class transformer
+2026-06-11T10:40:52.701-04:00  WARN 98802 --- [  restartedMain] org.hibernate.orm.deprecation            : HHH90000025: PostgreSQLDialect does not need to be specified explicitly using 'hibernate.dialect' (remove the property setting and it will be selected by default)
+2026-06-11T10:40:52.710-04:00  INFO 98802 --- [  restartedMain] org.hibernate.orm.connections.pooling    : HHH10001005: Database info:
+	Database JDBC URL [Connecting through datasource 'HikariDataSource (HikariPool-1)']
+	Database driver: undefined/unknown
+	Database version: 16.10
+	Autocommit mode: undefined/unknown
+	Isolation level: undefined/unknown
+	Minimum pool size: undefined/unknown
+	Maximum pool size: undefined/unknown
+2026-06-11T10:40:53.165-04:00  INFO 98802 --- [  restartedMain] o.h.e.t.j.p.i.JtaPlatformInitiator       : HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform integration)
+2026-06-11T10:40:53.167-04:00  INFO 98802 --- [  restartedMain] j.LocalContainerEntityManagerFactoryBean : Initialized JPA EntityManagerFactory for persistence unit 'default'
+2026-06-11T10:40:53.443-04:00  INFO 98802 --- [  restartedMain] o.s.d.j.r.query.QueryEnhancerFactory     : Hibernate is in classpath; If applicable, HQL parser will be used.
+2026-06-11T10:40:53.838-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.service.oidc.OidcClientService   : Registered 2 OIDC clients
+2026-06-11T10:40:53.936-04:00  WARN 98802 --- [  restartedMain] JpaBaseConfiguration$JpaWebConfiguration : spring.jpa.open-in-view is enabled by default. Therefore, database queries may be performed during view rendering. Explicitly configure spring.jpa.open-in-view to disable this warning
+2026-06-11T10:40:54.256-04:00  INFO 98802 --- [  restartedMain] o.s.b.a.e.web.EndpointLinksResolver      : Exposing 2 endpoints beneath base path '/actuator'
+2026-06-11T10:40:54.980-04:00  INFO 98802 --- [  restartedMain] o.s.b.a.h2.H2ConsoleAutoConfiguration    : H2 console available at '/h2-console'. Database available at 'jdbc:postgresql://localhost:5432/identity'
+2026-06-11T10:40:55.162-04:00  INFO 98802 --- [  restartedMain] o.s.b.d.a.OptionalLiveReloadServer       : LiveReload server is running on port 35729
+2026-06-11T10:40:55.244-04:00  INFO 98802 --- [  restartedMain] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port 8080 (http) with context path '/'
+2026-06-11T10:40:55.258-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.IdentityServiceApplication       : Started IdentityServiceApplication in 5.732 seconds (process running for 5.951)
+2026-06-11T10:40:56.517-04:00  INFO 98802 --- [nio-8080-exec-1] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-06-11T10:40:56.517-04:00  INFO 98802 --- [nio-8080-exec-1] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-06-11T10:40:56.520-04:00  INFO 98802 --- [nio-8080-exec-1] o.s.web.servlet.DispatcherServlet        : Completed initialization in 3 ms
+2026-06-11T10:41:07.867-04:00  WARN 98802 --- [nio-8080-exec-6] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException: Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash]
+2026-06-11T10:42:00.713-04:00  INFO 98802 --- [nio-8080-exec-2] m.s.g.i.service.LoggingSmsSender         : Pretending to send SMS to +14155559000 with body: Your Gua verification code is 192793. Never share this code with anyone. Gua will never ask you for it.
+2026-06-11T10:44:40.011-04:00  INFO 98802 --- [nio-8080-exec-5] m.s.g.i.service.LoggingSmsSender         : Pretending to send SMS to +14155559111 with body: Your Gua verification code is 988732. Never share this code with anyone. Gua will never ask you for it.
+2026-06-11T10:55:23.348-04:00  INFO 98802 --- [nio-8080-exec-9] m.s.g.i.service.LoggingSmsSender         : Pretending to send SMS to +14155559222 with body: Your Gua verification code is 573415. Never share this code with anyone. Gua will never ask you for it.
+2026-06-11T10:56:54.465-04:00  WARN 98802 --- [nio-8080-exec-8] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.LoginFlowException: Your login session has expired. Please start again.]
+2026-06-11T10:56:54.475-04:00  WARN 98802 --- [nio-8080-exec-8] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.LoginFlowException: Your login session has expired. Please start again.]
+2026-06-11T11:02:04.815-04:00  INFO 98802 --- [io-8080-exec-10] m.s.g.i.service.LoggingSmsSender         : Pretending to send SMS to +112399985856 with body: Your Gua verification code is 330474. Never share this code with anyone. Gua will never ask you for it.
+2026-06-11T11:02:29.592-04:00  WARN 98802 --- [nio-8080-exec-5] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException: Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash]
+2026-06-11T11:02:31.213-04:00  WARN 98802 --- [nio-8080-exec-6] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException: Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash]
+2026-06-11T11:02:31.779-04:00  WARN 98802 --- [nio-8080-exec-7] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException: Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash]
+2026-06-11T11:02:33.187-04:00  WARN 98802 --- [nio-8080-exec-9] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException: Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash]
+2026-06-11T11:02:33.898-04:00  WARN 98802 --- [nio-8080-exec-8] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException: Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash]
+2026-06-11T11:02:35.193-04:00  WARN 98802 --- [io-8080-exec-10] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException: Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash]
+2026-06-11T11:02:36.636-04:00  WARN 98802 --- [nio-8080-exec-1] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException: Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash]
+2026-06-11T11:44:41.017-04:00  WARN 98802 --- [nio-8080-exec-1] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.LoginFlowException: Your login session has expired. Please start again.]
+2026-06-11T11:48:17.198-04:00  INFO 98802 --- [nio-8080-exec-6] m.s.g.i.service.LoggingSmsSender         : Pretending to send SMS to +5511987654321 with body: Your Gua verification code is 409021. Never share this code with anyone. Gua will never ask you for it.
+2026-06-11T12:21:52.026-04:00  INFO 98802 --- [nio-8080-exec-5] m.s.g.i.service.LoggingSmsSender         : Pretending to send SMS to +14155559222 with body: Your Gua verification code is 692300. Never share this code with anyone. Gua will never ask you for it.
+2026-06-11T12:22:10.523-04:00  WARN 98802 --- [nio-8080-exec-8] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.LoginFlowException: Your login session has expired. Please start again.]
+2026-06-11T12:22:10.528-04:00  WARN 98802 --- [io-8080-exec-10] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.LoginFlowException: Your login session has expired. Please start again.]
+2026-06-11T12:32:46.564-04:00  INFO 98802 --- [nio-8080-exec-6] m.s.g.i.service.LoggingSmsSender         : Pretending to send SMS to +13213213211 with body: Seu código de verificação Gua é 124765. Nunca compartilhe este código com ninguém. A Gua nunca vai pedir esse código.
+2026-06-11T12:33:08.004-04:00  WARN 98802 --- [nio-8080-exec-7] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidOtpException: Invalid or expired verification code]
+2026-06-11T12:33:35.800-04:00  WARN 98802 --- [nio-8080-exec-2] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException: Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash]
+2026-06-11T12:33:36.527-04:00  WARN 98802 --- [nio-8080-exec-3] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException: Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash]
+2026-06-11T12:33:36.999-04:00  WARN 98802 --- [nio-8080-exec-4] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException: Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash]
+2026-06-11T12:33:37.461-04:00  WARN 98802 --- [nio-8080-exec-5] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException: Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash]
+2026-06-11T17:37:55.350-04:00  WARN 98802 --- [nio-8080-exec-8] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.LoginFlowException: Your login session has expired. Please start again.]
+2026-06-11T17:37:55.340-04:00  WARN 98802 --- [nio-8080-exec-9] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.LoginFlowException: Your login session has expired. Please start again.]
+2026-06-11T17:39:10.319-04:00  INFO 98802 --- [nio-8080-exec-3] m.s.g.i.service.LoggingSmsSender         : Pretending to send SMS to +55519292123456 with body: Your Gua verification code is 533982. Never share this code with anyone. Gua will never ask you for it.
+2026-06-11T17:39:24.303-04:00  WARN 98802 --- [nio-8080-exec-4] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidOtpException: Invalid or expired verification code]
+2026-06-11T17:39:29.533-04:00  WARN 98802 --- [nio-8080-exec-7] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException: Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash]
+2026-06-11T17:39:29.960-04:00  WARN 98802 --- [nio-8080-exec-8] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException: Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash]
+2026-06-11T17:39:39.001-04:00  WARN 98802 --- [nio-8080-exec-2] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.InvalidPinException: PIN must be a 6-digit numeric value]
+2026-06-11T17:39:57.704-04:00  INFO 98802 --- [nio-8080-exec-3] m.s.g.i.s.s.a.LoggingSecurityAuditLogger : PIN initialized for user @ssss:dev.local
+2026-06-11T17:45:57.957-04:00  INFO 98802 --- [io-8080-exec-10] m.s.g.i.service.LoggingSmsSender         : Pretending to send SMS to +11999555444 with body: Your Gua verification code is 478198. Never share this code with anyone. Gua will never ask you for it.
+2026-06-11T17:50:08.185-04:00  INFO 98802 --- [   File Watcher] rtingClassPathChangeChangedEventListener : Restarting due to 13 class path changes (0 additions, 0 deletions, 13 modifications)
+2026-06-11T17:50:08.315-04:00  INFO 98802 --- [      Thread-17] o.s.b.w.e.tomcat.GracefulShutdown        : Commencing graceful shutdown. Waiting for active requests to complete
+2026-06-11T17:50:08.341-04:00  INFO 98802 --- [tomcat-shutdown] o.s.b.w.e.tomcat.GracefulShutdown        : Graceful shutdown complete
+2026-06-11T17:50:08.559-04:00  INFO 98802 --- [      Thread-17] j.LocalContainerEntityManagerFactoryBean : Closing JPA EntityManagerFactory for persistence unit 'default'
+2026-06-11T17:50:08.594-04:00  INFO 98802 --- [      Thread-17] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Shutdown initiated...
+2026-06-11T17:50:08.599-04:00  INFO 98802 --- [      Thread-17] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Shutdown completed.
+Standard Commons Logging discovery in action with spring-jcl: please remove commons-logging.jar from classpath in order to avoid potential conflicts
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v3.5.6)
+
+2026-06-11T17:50:08.999-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.IdentityServiceApplication       : Starting IdentityServiceApplication using Java 21.0.8 with PID 98802 (/Users/sarah/IdeaProjects/identity-service/build/classes/java/main started by sarah in /Users/sarah/IdeaProjects/identity-service)
+2026-06-11T17:50:08.999-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.IdentityServiceApplication       : No active profile set, falling back to 1 default profile: "default"
+2026-06-11T17:50:09.854-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Multiple Spring Data modules found, entering strict repository configuration mode
+2026-06-11T17:50:09.854-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data JPA repositories in DEFAULT mode.
+2026-06-11T17:50:09.897-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 39 ms. Found 3 JPA repository interfaces.
+2026-06-11T17:50:09.902-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Multiple Spring Data modules found, entering strict repository configuration mode
+2026-06-11T17:50:09.902-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data Redis repositories in DEFAULT mode.
+2026-06-11T17:50:09.917-04:00  INFO 98802 --- [  restartedMain] .RepositoryConfigurationExtensionSupport : Spring Data Redis - Could not safely identify store assignment for repository candidate interface me.sarahlacerda.gua.identityservice.repository.DirectoryEntryRepository; If you want this repository to be a Redis repository, consider annotating your entities with one of these annotations: org.springframework.data.redis.core.RedisHash (preferred), or consider extending one of the following types with your repository: org.springframework.data.keyvalue.repository.KeyValueRepository
+2026-06-11T17:50:09.918-04:00  INFO 98802 --- [  restartedMain] .RepositoryConfigurationExtensionSupport : Spring Data Redis - Could not safely identify store assignment for repository candidate interface me.sarahlacerda.gua.identityservice.repository.IdentityUserRepository; If you want this repository to be a Redis repository, consider annotating your entities with one of these annotations: org.springframework.data.redis.core.RedisHash (preferred), or consider extending one of the following types with your repository: org.springframework.data.keyvalue.repository.KeyValueRepository
+2026-06-11T17:50:09.919-04:00  INFO 98802 --- [  restartedMain] .RepositoryConfigurationExtensionSupport : Spring Data Redis - Could not safely identify store assignment for repository candidate interface me.sarahlacerda.gua.identityservice.repository.TrustedDeviceRepository; If you want this repository to be a Redis repository, consider annotating your entities with one of these annotations: org.springframework.data.redis.core.RedisHash (preferred), or consider extending one of the following types with your repository: org.springframework.data.keyvalue.repository.KeyValueRepository
+2026-06-11T17:50:09.919-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 13 ms. Found 0 Redis repository interfaces.
+2026-06-11T17:50:10.247-04:00  INFO 98802 --- [  restartedMain] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port 8080 (http)
+2026-06-11T17:50:10.248-04:00  INFO 98802 --- [  restartedMain] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-06-11T17:50:10.248-04:00  INFO 98802 --- [  restartedMain] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/10.1.46]
+2026-06-11T17:50:10.259-04:00  INFO 98802 --- [  restartedMain] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-06-11T17:50:10.259-04:00  INFO 98802 --- [  restartedMain] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1258 ms
+Standard Commons Logging discovery in action with spring-jcl: please remove commons-logging.jar from classpath in order to avoid potential conflicts
+2026-06-11T17:50:10.372-04:00  WARN 98802 --- [  restartedMain] m.s.g.i.config.OidcSigningKeyConfig      : No oidc.signing.private-key configured — generating an ephemeral RSA key for THIS process only. Configure OIDC_RSA_PRIVATE_KEY for production.
+2026-06-11T17:50:10.855-04:00  INFO 98802 --- [  restartedMain] com.zaxxer.hikari.HikariDataSource       : HikariPool-2 - Starting...
+2026-06-11T17:50:10.897-04:00  INFO 98802 --- [  restartedMain] com.zaxxer.hikari.pool.HikariPool        : HikariPool-2 - Added connection org.postgresql.jdbc.PgConnection@523c0373
+2026-06-11T17:50:10.897-04:00  INFO 98802 --- [  restartedMain] com.zaxxer.hikari.HikariDataSource       : HikariPool-2 - Start completed.
+2026-06-11T17:50:10.905-04:00  INFO 98802 --- [  restartedMain] org.flywaydb.core.FlywayExecutor         : Database: jdbc:postgresql://localhost:5432/identity (PostgreSQL 16.10)
+2026-06-11T17:50:11.045-04:00  INFO 98802 --- [  restartedMain] o.f.core.internal.command.DbValidate     : Successfully validated 3 migrations (execution time 00:00.035s)
+2026-06-11T17:50:11.072-04:00  INFO 98802 --- [  restartedMain] o.f.core.internal.command.DbMigrate      : Current version of schema "public": 3
+2026-06-11T17:50:11.073-04:00  INFO 98802 --- [  restartedMain] o.f.core.internal.command.DbMigrate      : Schema "public" is up to date. No migration necessary.
+2026-06-11T17:50:11.155-04:00  INFO 98802 --- [  restartedMain] o.hibernate.jpa.internal.util.LogHelper  : HHH000204: Processing PersistenceUnitInfo [name: default]
+2026-06-11T17:50:11.164-04:00  INFO 98802 --- [  restartedMain] o.h.c.internal.RegionFactoryInitiator    : HHH000026: Second-level cache disabled
+2026-06-11T17:50:11.189-04:00  INFO 98802 --- [  restartedMain] o.s.o.j.p.SpringPersistenceUnitInfo      : No LoadTimeWeaver setup: ignoring JPA class transformer
+2026-06-11T17:50:11.266-04:00  WARN 98802 --- [  restartedMain] org.hibernate.orm.deprecation            : HHH90000025: PostgreSQLDialect does not need to be specified explicitly using 'hibernate.dialect' (remove the property setting and it will be selected by default)
+2026-06-11T17:50:11.269-04:00  INFO 98802 --- [  restartedMain] org.hibernate.orm.connections.pooling    : HHH10001005: Database info:
+	Database JDBC URL [Connecting through datasource 'HikariDataSource (HikariPool-2)']
+	Database driver: undefined/unknown
+	Database version: 16.10
+	Autocommit mode: undefined/unknown
+	Isolation level: undefined/unknown
+	Minimum pool size: undefined/unknown
+	Maximum pool size: undefined/unknown
+2026-06-11T17:50:11.320-04:00  INFO 98802 --- [  restartedMain] o.h.e.t.j.p.i.JtaPlatformInitiator       : HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform integration)
+2026-06-11T17:50:11.321-04:00  INFO 98802 --- [  restartedMain] j.LocalContainerEntityManagerFactoryBean : Initialized JPA EntityManagerFactory for persistence unit 'default'
+2026-06-11T17:50:11.668-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.service.oidc.OidcClientService   : Registered 2 OIDC clients
+2026-06-11T17:50:11.751-04:00  WARN 98802 --- [  restartedMain] JpaBaseConfiguration$JpaWebConfiguration : spring.jpa.open-in-view is enabled by default. Therefore, database queries may be performed during view rendering. Explicitly configure spring.jpa.open-in-view to disable this warning
+2026-06-11T17:50:11.979-04:00  INFO 98802 --- [  restartedMain] o.s.b.a.e.web.EndpointLinksResolver      : Exposing 2 endpoints beneath base path '/actuator'
+2026-06-11T17:50:12.571-04:00  INFO 98802 --- [  restartedMain] o.s.b.a.h2.H2ConsoleAutoConfiguration    : H2 console available at '/h2-console'. Database available at 'jdbc:postgresql://localhost:5432/identity'
+2026-06-11T17:50:12.624-04:00  INFO 98802 --- [  restartedMain] o.s.b.d.a.OptionalLiveReloadServer       : LiveReload server is running on port 35729
+2026-06-11T17:50:12.667-04:00  INFO 98802 --- [  restartedMain] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port 8080 (http) with context path '/'
+2026-06-11T17:50:12.675-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.IdentityServiceApplication       : Started IdentityServiceApplication in 3.716 seconds (process running for 25763.154)
+2026-06-11T17:50:12.678-04:00  INFO 98802 --- [  restartedMain] .ConditionEvaluationDeltaLoggingListener : Condition evaluation unchanged
+2026-06-11T17:52:59.754-04:00  INFO 98802 --- [nio-8080-exec-1] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-06-11T17:52:59.769-04:00  INFO 98802 --- [nio-8080-exec-1] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-06-11T17:52:59.899-04:00  INFO 98802 --- [nio-8080-exec-1] o.s.web.servlet.DispatcherServlet        : Completed initialization in 129 ms
+2026-06-11T17:53:02.095-04:00  INFO 98802 --- [nio-8080-exec-4] m.s.g.i.service.LoggingSmsSender         : Pretending to send SMS to +11999555444 with body: Your Gua verification code is 307251. Never share this code with anyone. Gua will never ask you for it.
+2026-06-11T17:53:36.657-04:00  INFO 98802 --- [nio-8080-exec-2] m.s.g.i.service.LoggingSmsSender         : Pretending to send SMS to +11999555441 with body: Your Gua verification code is 894853. Never share this code with anyone. Gua will never ask you for it.
+2026-06-11T18:45:57.414-04:00  WARN 98802 --- [io-8080-exec-10] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.LoginFlowException: Your login session has expired. Please start again.]
+2026-06-11T18:45:59.436-04:00  WARN 98802 --- [nio-8080-exec-1] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.LoginFlowException: Your login session has expired. Please start again.]
+2026-06-11T18:46:18.403-04:00  WARN 98802 --- [nio-8080-exec-2] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.LoginFlowException: Your login session has expired. Please start again.]
+2026-06-11T18:49:42.474-04:00  INFO 98802 --- [   File Watcher] rtingClassPathChangeChangedEventListener : Restarting due to 19 class path changes (1 addition, 0 deletions, 18 modifications)
+2026-06-11T18:49:42.688-04:00  INFO 98802 --- [      Thread-19] o.s.b.w.e.tomcat.GracefulShutdown        : Commencing graceful shutdown. Waiting for active requests to complete
+2026-06-11T18:49:42.727-04:00  INFO 98802 --- [tomcat-shutdown] o.s.b.w.e.tomcat.GracefulShutdown        : Graceful shutdown complete
+2026-06-11T18:49:42.976-04:00  INFO 98802 --- [      Thread-19] j.LocalContainerEntityManagerFactoryBean : Closing JPA EntityManagerFactory for persistence unit 'default'
+2026-06-11T18:49:43.063-04:00  INFO 98802 --- [      Thread-19] com.zaxxer.hikari.HikariDataSource       : HikariPool-2 - Shutdown initiated...
+2026-06-11T18:49:43.077-04:00  INFO 98802 --- [      Thread-19] com.zaxxer.hikari.HikariDataSource       : HikariPool-2 - Shutdown completed.
+Standard Commons Logging discovery in action with spring-jcl: please remove commons-logging.jar from classpath in order to avoid potential conflicts
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v3.5.6)
+
+2026-06-11T18:49:43.843-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.IdentityServiceApplication       : Starting IdentityServiceApplication using Java 21.0.8 with PID 98802 (/Users/sarah/IdeaProjects/identity-service/build/classes/java/main started by sarah in /Users/sarah/IdeaProjects/identity-service)
+2026-06-11T18:49:43.843-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.IdentityServiceApplication       : No active profile set, falling back to 1 default profile: "default"
+2026-06-11T18:49:44.963-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Multiple Spring Data modules found, entering strict repository configuration mode
+2026-06-11T18:49:44.963-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data JPA repositories in DEFAULT mode.
+2026-06-11T18:49:44.996-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 29 ms. Found 3 JPA repository interfaces.
+2026-06-11T18:49:45.002-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Multiple Spring Data modules found, entering strict repository configuration mode
+2026-06-11T18:49:45.002-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data Redis repositories in DEFAULT mode.
+2026-06-11T18:49:45.015-04:00  INFO 98802 --- [  restartedMain] .RepositoryConfigurationExtensionSupport : Spring Data Redis - Could not safely identify store assignment for repository candidate interface me.sarahlacerda.gua.identityservice.repository.DirectoryEntryRepository; If you want this repository to be a Redis repository, consider annotating your entities with one of these annotations: org.springframework.data.redis.core.RedisHash (preferred), or consider extending one of the following types with your repository: org.springframework.data.keyvalue.repository.KeyValueRepository
+2026-06-11T18:49:45.015-04:00  INFO 98802 --- [  restartedMain] .RepositoryConfigurationExtensionSupport : Spring Data Redis - Could not safely identify store assignment for repository candidate interface me.sarahlacerda.gua.identityservice.repository.IdentityUserRepository; If you want this repository to be a Redis repository, consider annotating your entities with one of these annotations: org.springframework.data.redis.core.RedisHash (preferred), or consider extending one of the following types with your repository: org.springframework.data.keyvalue.repository.KeyValueRepository
+2026-06-11T18:49:45.015-04:00  INFO 98802 --- [  restartedMain] .RepositoryConfigurationExtensionSupport : Spring Data Redis - Could not safely identify store assignment for repository candidate interface me.sarahlacerda.gua.identityservice.repository.TrustedDeviceRepository; If you want this repository to be a Redis repository, consider annotating your entities with one of these annotations: org.springframework.data.redis.core.RedisHash (preferred), or consider extending one of the following types with your repository: org.springframework.data.keyvalue.repository.KeyValueRepository
+2026-06-11T18:49:45.015-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 10 ms. Found 0 Redis repository interfaces.
+2026-06-11T18:49:45.640-04:00  INFO 98802 --- [  restartedMain] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port 8080 (http)
+2026-06-11T18:49:45.642-04:00  INFO 98802 --- [  restartedMain] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-06-11T18:49:45.643-04:00  INFO 98802 --- [  restartedMain] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/10.1.46]
+2026-06-11T18:49:45.666-04:00  INFO 98802 --- [  restartedMain] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-06-11T18:49:45.666-04:00  INFO 98802 --- [  restartedMain] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1818 ms
+Standard Commons Logging discovery in action with spring-jcl: please remove commons-logging.jar from classpath in order to avoid potential conflicts
+2026-06-11T18:49:45.787-04:00  WARN 98802 --- [  restartedMain] m.s.g.i.config.OidcSigningKeyConfig      : No oidc.signing.private-key configured — generating an ephemeral RSA key for THIS process only. Configure OIDC_RSA_PRIVATE_KEY for production.
+2026-06-11T18:49:46.235-04:00  INFO 98802 --- [  restartedMain] com.zaxxer.hikari.HikariDataSource       : HikariPool-3 - Starting...
+2026-06-11T18:49:46.319-04:00  INFO 98802 --- [  restartedMain] com.zaxxer.hikari.pool.HikariPool        : HikariPool-3 - Added connection org.postgresql.jdbc.PgConnection@1d039067
+2026-06-11T18:49:46.319-04:00  INFO 98802 --- [  restartedMain] com.zaxxer.hikari.HikariDataSource       : HikariPool-3 - Start completed.
+2026-06-11T18:49:46.330-04:00  INFO 98802 --- [  restartedMain] org.flywaydb.core.FlywayExecutor         : Database: jdbc:postgresql://localhost:5432/identity (PostgreSQL 16.10)
+2026-06-11T18:49:46.403-04:00  INFO 98802 --- [  restartedMain] o.f.core.internal.command.DbValidate     : Successfully validated 3 migrations (execution time 00:00.017s)
+2026-06-11T18:49:46.472-04:00  INFO 98802 --- [  restartedMain] o.f.core.internal.command.DbMigrate      : Current version of schema "public": 3
+2026-06-11T18:49:46.473-04:00  INFO 98802 --- [  restartedMain] o.f.core.internal.command.DbMigrate      : Schema "public" is up to date. No migration necessary.
+2026-06-11T18:49:46.516-04:00  INFO 98802 --- [  restartedMain] o.hibernate.jpa.internal.util.LogHelper  : HHH000204: Processing PersistenceUnitInfo [name: default]
+2026-06-11T18:49:46.518-04:00  INFO 98802 --- [  restartedMain] o.h.c.internal.RegionFactoryInitiator    : HHH000026: Second-level cache disabled
+2026-06-11T18:49:46.528-04:00  INFO 98802 --- [  restartedMain] o.s.o.j.p.SpringPersistenceUnitInfo      : No LoadTimeWeaver setup: ignoring JPA class transformer
+2026-06-11T18:49:46.546-04:00  WARN 98802 --- [  restartedMain] org.hibernate.orm.deprecation            : HHH90000025: PostgreSQLDialect does not need to be specified explicitly using 'hibernate.dialect' (remove the property setting and it will be selected by default)
+2026-06-11T18:49:46.548-04:00  INFO 98802 --- [  restartedMain] org.hibernate.orm.connections.pooling    : HHH10001005: Database info:
+	Database JDBC URL [Connecting through datasource 'HikariDataSource (HikariPool-3)']
+	Database driver: undefined/unknown
+	Database version: 16.10
+	Autocommit mode: undefined/unknown
+	Isolation level: undefined/unknown
+	Minimum pool size: undefined/unknown
+	Maximum pool size: undefined/unknown
+2026-06-11T18:49:46.614-04:00  INFO 98802 --- [  restartedMain] o.h.e.t.j.p.i.JtaPlatformInitiator       : HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform integration)
+2026-06-11T18:49:46.614-04:00  INFO 98802 --- [  restartedMain] j.LocalContainerEntityManagerFactoryBean : Initialized JPA EntityManagerFactory for persistence unit 'default'
+2026-06-11T18:49:46.895-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.service.oidc.OidcClientService   : Registered 2 OIDC clients
+2026-06-11T18:49:46.981-04:00  WARN 98802 --- [  restartedMain] JpaBaseConfiguration$JpaWebConfiguration : spring.jpa.open-in-view is enabled by default. Therefore, database queries may be performed during view rendering. Explicitly configure spring.jpa.open-in-view to disable this warning
+2026-06-11T18:49:47.215-04:00  INFO 98802 --- [  restartedMain] o.s.b.a.e.web.EndpointLinksResolver      : Exposing 2 endpoints beneath base path '/actuator'
+2026-06-11T18:49:47.779-04:00  INFO 98802 --- [  restartedMain] o.s.b.a.h2.H2ConsoleAutoConfiguration    : H2 console available at '/h2-console'. Database available at 'jdbc:postgresql://localhost:5432/identity'
+2026-06-11T18:49:47.829-04:00  INFO 98802 --- [  restartedMain] o.s.b.d.a.OptionalLiveReloadServer       : LiveReload server is running on port 35729
+2026-06-11T18:49:47.849-04:00  INFO 98802 --- [  restartedMain] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port 8080 (http) with context path '/'
+2026-06-11T18:49:47.855-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.IdentityServiceApplication       : Started IdentityServiceApplication in 4.086 seconds (process running for 29338.405)
+2026-06-11T18:49:47.857-04:00  INFO 98802 --- [  restartedMain] .ConditionEvaluationDeltaLoggingListener : Condition evaluation unchanged
+2026-06-11T18:55:23.639-04:00  INFO 98802 --- [nio-8080-exec-1] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-06-11T18:55:23.659-04:00  INFO 98802 --- [nio-8080-exec-1] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-06-11T18:55:23.858-04:00  INFO 98802 --- [nio-8080-exec-1] o.s.web.servlet.DispatcherServlet        : Completed initialization in 198 ms
+2026-06-11T18:55:24.224-04:00  WARN 98802 --- [nio-8080-exec-1] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [me.sarahlacerda.gua.identityservice.exception.LoginFlowException: Your login session has expired. Please start again.]
+2026-06-11T18:56:40.772-04:00  INFO 98802 --- [   File Watcher] rtingClassPathChangeChangedEventListener : Restarting due to 22 class path changes (1 addition, 0 deletions, 21 modifications)
+2026-06-11T18:56:40.874-04:00  INFO 98802 --- [      Thread-35] o.s.b.w.e.tomcat.GracefulShutdown        : Commencing graceful shutdown. Waiting for active requests to complete
+2026-06-11T18:56:40.913-04:00  INFO 98802 --- [tomcat-shutdown] o.s.b.w.e.tomcat.GracefulShutdown        : Graceful shutdown complete
+2026-06-11T18:56:41.061-04:00  INFO 98802 --- [      Thread-35] j.LocalContainerEntityManagerFactoryBean : Closing JPA EntityManagerFactory for persistence unit 'default'
+2026-06-11T18:56:41.146-04:00  INFO 98802 --- [      Thread-35] com.zaxxer.hikari.HikariDataSource       : HikariPool-3 - Shutdown initiated...
+2026-06-11T18:56:41.164-04:00  INFO 98802 --- [      Thread-35] com.zaxxer.hikari.HikariDataSource       : HikariPool-3 - Shutdown completed.
+Standard Commons Logging discovery in action with spring-jcl: please remove commons-logging.jar from classpath in order to avoid potential conflicts
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v3.5.6)
+
+2026-06-11T18:56:41.847-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.IdentityServiceApplication       : Starting IdentityServiceApplication using Java 21.0.8 with PID 98802 (/Users/sarah/IdeaProjects/identity-service/build/classes/java/main started by sarah in /Users/sarah/IdeaProjects/identity-service)
+2026-06-11T18:56:41.847-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.IdentityServiceApplication       : No active profile set, falling back to 1 default profile: "default"
+2026-06-11T18:56:42.814-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Multiple Spring Data modules found, entering strict repository configuration mode
+2026-06-11T18:56:42.816-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data JPA repositories in DEFAULT mode.
+2026-06-11T18:56:42.855-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 38 ms. Found 3 JPA repository interfaces.
+2026-06-11T18:56:42.860-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Multiple Spring Data modules found, entering strict repository configuration mode
+2026-06-11T18:56:42.860-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data Redis repositories in DEFAULT mode.
+2026-06-11T18:56:42.877-04:00  INFO 98802 --- [  restartedMain] .RepositoryConfigurationExtensionSupport : Spring Data Redis - Could not safely identify store assignment for repository candidate interface me.sarahlacerda.gua.identityservice.repository.DirectoryEntryRepository; If you want this repository to be a Redis repository, consider annotating your entities with one of these annotations: org.springframework.data.redis.core.RedisHash (preferred), or consider extending one of the following types with your repository: org.springframework.data.keyvalue.repository.KeyValueRepository
+2026-06-11T18:56:42.877-04:00  INFO 98802 --- [  restartedMain] .RepositoryConfigurationExtensionSupport : Spring Data Redis - Could not safely identify store assignment for repository candidate interface me.sarahlacerda.gua.identityservice.repository.IdentityUserRepository; If you want this repository to be a Redis repository, consider annotating your entities with one of these annotations: org.springframework.data.redis.core.RedisHash (preferred), or consider extending one of the following types with your repository: org.springframework.data.keyvalue.repository.KeyValueRepository
+2026-06-11T18:56:42.878-04:00  INFO 98802 --- [  restartedMain] .RepositoryConfigurationExtensionSupport : Spring Data Redis - Could not safely identify store assignment for repository candidate interface me.sarahlacerda.gua.identityservice.repository.TrustedDeviceRepository; If you want this repository to be a Redis repository, consider annotating your entities with one of these annotations: org.springframework.data.redis.core.RedisHash (preferred), or consider extending one of the following types with your repository: org.springframework.data.keyvalue.repository.KeyValueRepository
+2026-06-11T18:56:42.878-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 14 ms. Found 0 Redis repository interfaces.
+2026-06-11T18:56:43.184-04:00  INFO 98802 --- [  restartedMain] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port 8080 (http)
+2026-06-11T18:56:43.185-04:00  INFO 98802 --- [  restartedMain] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-06-11T18:56:43.185-04:00  INFO 98802 --- [  restartedMain] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/10.1.46]
+2026-06-11T18:56:43.193-04:00  INFO 98802 --- [  restartedMain] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-06-11T18:56:43.193-04:00  INFO 98802 --- [  restartedMain] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1344 ms
+Standard Commons Logging discovery in action with spring-jcl: please remove commons-logging.jar from classpath in order to avoid potential conflicts
+2026-06-11T18:56:43.297-04:00  WARN 98802 --- [  restartedMain] m.s.g.i.config.OidcSigningKeyConfig      : No oidc.signing.private-key configured — generating an ephemeral RSA key for THIS process only. Configure OIDC_RSA_PRIVATE_KEY for production.
+2026-06-11T18:56:43.875-04:00  INFO 98802 --- [  restartedMain] com.zaxxer.hikari.HikariDataSource       : HikariPool-4 - Starting...
+2026-06-11T18:56:44.005-04:00  INFO 98802 --- [  restartedMain] com.zaxxer.hikari.pool.HikariPool        : HikariPool-4 - Added connection org.postgresql.jdbc.PgConnection@25ebe89f
+2026-06-11T18:56:44.005-04:00  INFO 98802 --- [  restartedMain] com.zaxxer.hikari.HikariDataSource       : HikariPool-4 - Start completed.
+2026-06-11T18:56:44.013-04:00  INFO 98802 --- [  restartedMain] org.flywaydb.core.FlywayExecutor         : Database: jdbc:postgresql://localhost:5432/identity (PostgreSQL 16.10)
+2026-06-11T18:56:44.184-04:00  INFO 98802 --- [  restartedMain] o.f.core.internal.command.DbValidate     : Successfully validated 3 migrations (execution time 00:00.029s)
+2026-06-11T18:56:44.221-04:00  INFO 98802 --- [  restartedMain] o.f.core.internal.command.DbMigrate      : Current version of schema "public": 3
+2026-06-11T18:56:44.225-04:00  INFO 98802 --- [  restartedMain] o.f.core.internal.command.DbMigrate      : Schema "public" is up to date. No migration necessary.
+2026-06-11T18:56:44.291-04:00  INFO 98802 --- [  restartedMain] o.hibernate.jpa.internal.util.LogHelper  : HHH000204: Processing PersistenceUnitInfo [name: default]
+2026-06-11T18:56:44.293-04:00  INFO 98802 --- [  restartedMain] o.h.c.internal.RegionFactoryInitiator    : HHH000026: Second-level cache disabled
+2026-06-11T18:56:44.300-04:00  INFO 98802 --- [  restartedMain] o.s.o.j.p.SpringPersistenceUnitInfo      : No LoadTimeWeaver setup: ignoring JPA class transformer
+2026-06-11T18:56:44.318-04:00  WARN 98802 --- [  restartedMain] org.hibernate.orm.deprecation            : HHH90000025: PostgreSQLDialect does not need to be specified explicitly using 'hibernate.dialect' (remove the property setting and it will be selected by default)
+2026-06-11T18:56:44.321-04:00  INFO 98802 --- [  restartedMain] org.hibernate.orm.connections.pooling    : HHH10001005: Database info:
+	Database JDBC URL [Connecting through datasource 'HikariDataSource (HikariPool-4)']
+	Database driver: undefined/unknown
+	Database version: 16.10
+	Autocommit mode: undefined/unknown
+	Isolation level: undefined/unknown
+	Minimum pool size: undefined/unknown
+	Maximum pool size: undefined/unknown
+2026-06-11T18:56:44.377-04:00  INFO 98802 --- [  restartedMain] o.h.e.t.j.p.i.JtaPlatformInitiator       : HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform integration)
+2026-06-11T18:56:44.378-04:00  INFO 98802 --- [  restartedMain] j.LocalContainerEntityManagerFactoryBean : Initialized JPA EntityManagerFactory for persistence unit 'default'
+2026-06-11T18:56:44.767-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.service.oidc.OidcClientService   : Registered 2 OIDC clients
+2026-06-11T18:56:44.983-04:00  WARN 98802 --- [  restartedMain] JpaBaseConfiguration$JpaWebConfiguration : spring.jpa.open-in-view is enabled by default. Therefore, database queries may be performed during view rendering. Explicitly configure spring.jpa.open-in-view to disable this warning
+2026-06-11T18:56:45.737-04:00  INFO 98802 --- [  restartedMain] o.s.b.a.e.web.EndpointLinksResolver      : Exposing 2 endpoints beneath base path '/actuator'
+2026-06-11T18:56:51.108-04:00  INFO 98802 --- [  restartedMain] o.s.b.a.h2.H2ConsoleAutoConfiguration    : H2 console available at '/h2-console'. Database available at 'jdbc:postgresql://localhost:5432/identity'
+2026-06-11T18:56:51.333-04:00  INFO 98802 --- [  restartedMain] o.s.b.d.a.OptionalLiveReloadServer       : LiveReload server is running on port 35729
+2026-06-11T18:56:51.469-04:00  INFO 98802 --- [  restartedMain] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port 8080 (http) with context path '/'
+2026-06-11T18:56:51.503-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.IdentityServiceApplication       : Started IdentityServiceApplication in 9.703 seconds (process running for 29761.957)
+2026-06-11T18:56:51.512-04:00  INFO 98802 --- [  restartedMain] .ConditionEvaluationDeltaLoggingListener : Condition evaluation unchanged
