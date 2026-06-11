@@ -19,6 +19,7 @@ import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.MatrixProvisioningService;
 import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
+import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 
 @Service
@@ -31,6 +32,7 @@ public class OidcAuthorizationService {
     private final OtpService otpService;
     private final DirectoryService directoryService;
     private final PhoneNumberHasher phoneNumberHasher;
+    private final PhoneNumberMasker phoneNumberMasker;
     private final MatrixProvisioningService matrixProvisioningService;
     private final UserSecurityService userSecurityService;
     private final StringRedisTemplate redisTemplate;
@@ -49,7 +51,7 @@ public class OidcAuthorizationService {
 
         String resolvedDisplayName = resolveDisplayName(request.displayName(), existingEntry);
 
-        directoryService.upsertByDigest(digest, userId, resolvedDisplayName);
+        directoryService.upsertByDigest(digest, phoneNumberMasker.mask(request.phoneNumber()), userId, resolvedDisplayName);
         userSecurityService.recordSuccessfulLogin(userId);
 
         OidcAuthorization authorization = new OidcAuthorization(

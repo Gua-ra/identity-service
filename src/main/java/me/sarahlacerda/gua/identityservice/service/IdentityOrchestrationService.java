@@ -31,6 +31,7 @@ public class IdentityOrchestrationService {
     private final PinChallengeService pinChallengeService;
     private final DirectoryService directoryService;
     private final PhoneNumberHasher phoneNumberHasher;
+    private final PhoneNumberMasker phoneNumberMasker;
     private final UserSecurityService userSecurityService;
     private final TrustedDeviceService trustedDeviceService;
     private final DeviceNotificationService deviceNotificationService;
@@ -123,7 +124,7 @@ public class IdentityOrchestrationService {
                 true);
 
         final String digest = phoneNumberHasher.digest(e164PhoneNumber);
-        directoryService.upsertByDigest(digest, userId, resolvedDisplayName);
+        directoryService.upsertByDigest(digest, phoneNumberMasker.mask(e164PhoneNumber), userId, resolvedDisplayName);
         userSecurityService.recordSuccessfulLogin(userId);
         registerDeviceIfPresent(userId, session, deviceMetadata);
 
@@ -173,7 +174,7 @@ public class IdentityOrchestrationService {
                 true);
 
         try {
-            directoryService.upsertByDigest(digest, userId, resolvedDisplayName);
+            directoryService.upsertByDigest(digest, phoneNumberMasker.mask(phone), userId, resolvedDisplayName);
         } catch (DataIntegrityViolationException ex) {
             throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
         }
@@ -212,7 +213,7 @@ public class IdentityOrchestrationService {
                 .forEach(directoryService::deleteByDigest);
 
         try {
-            directoryService.upsertByDigest(newDigest, userId, displayName);
+            directoryService.upsertByDigest(newDigest, phoneNumberMasker.mask(newPhone), userId, displayName);
         } catch (DataIntegrityViolationException ex) {
             // Concurrent request already bound this digest to a different account; surface
             // a clean conflict.

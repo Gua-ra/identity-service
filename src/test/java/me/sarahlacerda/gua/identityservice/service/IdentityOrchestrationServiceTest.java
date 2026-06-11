@@ -3,6 +3,7 @@ package me.sarahlacerda.gua.identityservice.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -69,6 +70,7 @@ class IdentityOrchestrationServiceTest {
                 pinChallengeService,
                 directoryService,
                 phoneNumberHasher,
+                new PhoneNumberMasker(),
                 userSecurityService,
                 trustedDeviceService,
                 deviceNotificationService,
@@ -94,7 +96,7 @@ class IdentityOrchestrationServiceTest {
 
         verify(otpService).verifyOtp(phone, "123456");
         verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(), eq(true));
-        verify(directoryService, never()).upsertByDigest(any(), any(), any());
+        verify(directoryService, never()).upsertByDigest(any(), anyString(), any(), any());
         assertThat(result.isNewUser()).isTrue();
         assertThat(result.signupToken()).isEqualTo("signup-abc");
         assertThat(result.session()).isNull();
@@ -131,7 +133,7 @@ class IdentityOrchestrationServiceTest {
         verify(matrixProvisioningService, never()).generateOpaqueUserId();
         verify(userSecurityService).validatePinOrThrow(existingEntry.getUserId(), "111111");
         verify(userSecurityService, never()).setInitialPin(any(), any());
-        verify(directoryService).upsertByDigest(digest, existingEntry.getUserId(), "Existing User");
+        verify(directoryService).upsertByDigest(eq(digest), anyString(), eq(existingEntry.getUserId()), eq("Existing User"));
         verify(userSecurityService).recordSuccessfulLogin(existingEntry.getUserId());
         verify(deviceNotificationService, never()).notifyNewDevice(any(), any(), any());
         assertThat(result.isNewUser()).isFalse();
@@ -164,7 +166,7 @@ class IdentityOrchestrationServiceTest {
 
         verify(signupTokenService).consume("signup-abc");
         verify(userSecurityService).setInitialPin(userId, "654321");
-        verify(directoryService).upsertByDigest(digest, userId, "Alice L.");
+        verify(directoryService).upsertByDigest(eq(digest), anyString(), eq(userId), eq("Alice L."));
         verify(userSecurityService).recordSuccessfulLogin(userId);
         verify(deviceNotificationService).notifyNewDevice(userId, "device-1", metadata);
         assertThat(result).isEqualTo(session);
@@ -252,7 +254,7 @@ class IdentityOrchestrationServiceTest {
         verify(matrixProvisioningService).ensureExclusivePhoneBinding(userId, newPhone);
         verify(directoryService).deleteByDigest("old-1");
         verify(directoryService).deleteByDigest("old-2");
-        verify(directoryService).upsertByDigest(newDigest, userId, "Display Name");
+        verify(directoryService).upsertByDigest(eq(newDigest), anyString(), eq(userId), eq("Display Name"));
     }
 
     @Test
@@ -320,7 +322,7 @@ class IdentityOrchestrationServiceTest {
 
         verify(matrixProvisioningService).ensureExclusivePhoneBinding(userId, newPhone);
         verify(directoryService).deleteByDigest("other");
-        verify(directoryService).upsertByDigest(newDigest, userId, "Display");
+        verify(directoryService).upsertByDigest(eq(newDigest), anyString(), eq(userId), eq("Display"));
     }
 
     @Test
@@ -376,7 +378,7 @@ class IdentityOrchestrationServiceTest {
 
         verify(userSecurityService).validatePinOrThrow(entry.getUserId(), "654321");
         verify(pinChallengeService).consume("chal-xyz");
-        verify(directoryService).upsertByDigest(digest, entry.getUserId(), "Alice");
+        verify(directoryService).upsertByDigest(eq(digest), anyString(), eq(entry.getUserId()), eq("Alice"));
         verify(userSecurityService).recordSuccessfulLogin(entry.getUserId());
         assertThat(result).isEqualTo(session);
     }

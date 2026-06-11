@@ -22,6 +22,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthenticatedPrincipal;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
 
@@ -31,6 +32,7 @@ import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
 public class OidcUserInfoController {
 
     private final OidcTokenService tokenService;
+    private final DirectoryService directoryService;
 
     @GetMapping("/userinfo")
     @Operation(
@@ -62,9 +64,11 @@ public class OidcUserInfoController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
         OidcAuthenticatedPrincipal user = principal.get();
+        String maskedPhone = directoryService.findMaskedPhoneByUserId(user.userId()).orElse(null);
         return ResponseEntity.ok(new UserInfoResponse(
             user.userId(),
             user.phoneNumber(),
+            maskedPhone,
             user.displayName(),
             user.preferredUsername()));
     }
@@ -73,6 +77,7 @@ public class OidcUserInfoController {
     public record UserInfoResponse(
         String sub,
         @JsonProperty("phone_number") String phoneNumber,
+        @JsonProperty("phone_number_masked") String phoneNumberMasked,
         String name,
         @JsonProperty("preferred_username") String preferredUsername
     ) {}
