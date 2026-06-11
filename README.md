@@ -60,7 +60,39 @@ The identity service is **both** an OIDC provider (MAS delegates phone-OTP login
 For login, MAS redirects the browser to `GET /oauth2/authorize`; the identity service parks the request in a short-lived, Redis-backed login session and hands off to the **`gua-idp-web`** single-page UI, which walks the user through phone → OTP → PIN (returning) or profile (new user) via the `/login/*` API before an authorization code is issued back to MAS.
 
 ---
-## 🚧 Local development stack
+
+## 🔀 MAS fork — `Gua-ra/gua-auth-service`
+
+The identity stack uses **[`Gua-ra/gua-auth-service`](https://github.com/Gua-ra/gua-auth-service)**, a minimal fork of [`element-hq/matrix-authentication-service`](https://github.com/element-hq/matrix-authentication-service) (MAS).
+
+### Why a fork?
+
+The upstream consent screen ("Continue to {client}?") exposes the homeserver name (`dev.local` / `gua.app`) to users, conflicts with Gua's centralised model where the backend chooses the homeserver, and adds an unnecessary extra step when users only interact with first-party clients they implicitly trust.
+
+The fork adds a single `[gua]` config section that lists client IDs whose consent screen is **skipped**; the OPA policy is still enforced. All Gua-specific code lives in files that **have no upstream equivalent** (`crates/config/src/sections/gua.rs`, `crates/handlers/src/gua/mod.rs`, `gua/README.md`), minimising merge conflicts on upstream updates.
+
+### Docker image
+
+```
+ghcr.io/gua-ra/gua-auth-service:v1.18.0-gua.1
+```
+
+Tag convention: `v<upstream-mas-version>-gua.<patch>` (mirrors [Tchap's approach](https://github.com/tchapgouv/matrix-authentication-service)).
+
+### Enabling skip-consent in `mas.conf.yaml`
+
+```yaml
+gua:
+  skip_consent_client_ids:
+    - 01JXTEST000000000000BCDE01   # gua-ios client ID
+```
+
+### Upgrading the fork
+
+See `gua/README.md` in the fork repository for the upgrade runbook.
+
+---
+
 
 Spin up Redis, Postgres, and a disposable Synapse homeserver with a single command:
 
@@ -74,7 +106,7 @@ Running the script normally (`bash scripts/start-dev-test-stack.sh`) will still 
 
 What the script does:
 
-1. Starts all dependencies using `docker-compose.test.yml` (PostgreSQL, Redis, a disposable Synapse homeserver, and a MAS container).
+1. Starts all dependencies using `docker-compose.test.yml` (PostgreSQL, Redis, a disposable Synapse homeserver, and a **MAS container** running the `Gua-ra/gua-auth-service` fork image).
 2. Waits for Synapse to become healthy.
 3. Creates (or reuses) an admin Matrix user and captures its access token.
 4. Generates a directory pepper (stored at `docker/.identity-pepper`) for consistent hashing.
