@@ -128,6 +128,9 @@ public class LoginFlowController {
             DirectoryEntry entry = existing.get();
             session.setUserId(entry.getUserId());
             session.setDisplayName(entry.getDisplayName());
+            // Returning users are still NEW to MAS on their first delegated login, which
+            // requires a localpart. Re-emit it from the stable MXID we already store.
+            session.setPreferredUsername(localpartOf(entry.getUserId()));
             session.setNewUser(false);
             if (userSecurityService.hasPin(entry.getUserId())) {
                 session.setPhase(Phase.PIN_REQUIRED);
@@ -173,10 +176,10 @@ public class LoginFlowController {
             throw new UsernameTakenException("Username already taken");
         }
 
-        // The OIDC subject is an opaque, stable id; the chosen handle travels as the
-        // preferred_username claim so MAS uses it as the Matrix localpart on first
-        // provisioning. After that, MAS keys off the immutable sub.
-        String userId = matrixProvisioningService.generateOpaqueUserId();
+        // The Matrix localpart is the chosen handle. Build the stable subject (the
+        // OIDC sub / directory userId) from the same localpart so sub, the directory
+        // entry, and the preferred_username claim MAS imports all agree.
+        String userId = matrixProvisioningService.buildUserId(localpart);
         String displayName = StringUtils.hasText(request.displayName()) ? request.displayName().trim() : localpart;
         String digest = phoneNumberHasher.digest(session.getPhoneNumber());
         try {
@@ -264,6 +267,16 @@ public class LoginFlowController {
                 session.getCsrfToken(),
                 session.isNewUser(),
                 redirectUrl);
+    }
+
+    /** Extracts the localpart from a Matrix user id, e.g. {@code @alice:dev.local -> alice}. */
+    private static String localpartOf(String matrixUserId) {
+        if (matrixUserId == null || matrixUserId.isBlank()) {
+            return null;
+        }
+        String value = matrixUserId.startsWith("@") ? matrixUserId.substring(1) : matrixUserId;
+        int colon = value.indexOf(':');
+        return colon >= 0 ? value.substring(0, colon) : value;
     }
 
     private static String maskPhone(String phone) {

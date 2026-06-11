@@ -211,7 +211,6 @@ class LoginFlowControllerTest {
         when(usernamePolicy.normalizeAndValidate("Alice")).thenReturn("alice");
         when(matrixProvisioningService.buildUserId("alice")).thenReturn("@alice:gua.local");
         when(matrixAdminClient.userExists("@alice:gua.local")).thenReturn(false);
-        when(matrixProvisioningService.generateOpaqueUserId()).thenReturn("opaque-1");
         when(authorizationService.issueCode(any(), eq(CALLBACK), any()))
             .thenReturn(issuedCode());
 
@@ -223,7 +222,7 @@ class LoginFlowControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.phase").value("COMPLETED"));
 
-        verify(directoryService).upsertByDigest(any(), eq("opaque-1"), eq("Alice A"));
+        verify(directoryService).upsertByDigest(any(), eq("@alice:gua.local"), eq("Alice A"));
     }
 
     @Test
