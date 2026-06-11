@@ -13,10 +13,10 @@ The **Gua Identity Service** is a Spring Boot–based microservice that handles 
 
 - 📱 **Phone sign-up & sign-in** — request OTP → verify OTP → either provision a new Matrix user, resume an existing session, or fall through to a PIN challenge for users with two-step verification enabled.
 - 🔐 **OTP management** — Redis-backed codes with TTL, per-phone and per-IP hourly caps, localized SMS templates (en / pt-BR), optional Twilio delivery.
-- 🔢 **Account PIN (two-step verification)** — set, OTP-protected change with a 24h cooldown, recovery reset, 5-attempt lockout with a 15-minute lock, and audit logging.
+- 🔢 **Account PIN (two-step verification)** — set, OTP-protected change with a 24h cooldown, recovery reset, 5-attempt lockout with a 15-minute lock, and audit logging. A NIST-aligned strength policy rejects non-6-digit, all-repeated, sequential, and common PINs.
 - 🛡️ **Privileged account operations** — fresh phone-OTP reauthentication gates account deactivation and identity-credential reset (modeled on Matrix UIA `m.login.msisdn`).
 - 🔑 **OpenID Connect provider** — RS256 authorization-code + PKCE flow with an **interactive browser login** (phone → OTP → PIN/profile) that MAS redirects into, discovery/JWKS endpoints, and seeded clients for MAS (confidential) and the Gua apps (public, PKCE-required).
-- 📇 **Directory lookup** — privacy-preserving phone-hash search using a server-side pepper.
+- 📇 **Directory lookup** — privacy-preserving phone-hash search using a server-side pepper. The raw phone number is never stored; only an irreversible HMAC digest plus a display-only masked form (e.g. `••••4567`).
 - 🚦 **Built-in rate limiting** — per-endpoint Resilience4j limiters so the service is safe to run without an upstream WAF.
 - 🗄️ **Persistent identities** — PostgreSQL with Flyway migrations.
 - 📚 **OpenAPI/Swagger UI** at `/swagger-ui.html`.
@@ -175,6 +175,10 @@ Interactive docs: **`/swagger-ui.html`** (OpenAPI JSON at `/api-docs`). Endpoint
 
 PIN policy is configurable under `identity.security`: `pin-change-cooldown` (default **24h**), `pin-reset-cooldown` (default **7 days**), `max-pin-attempts` (default **5**), `pin-lock-duration` (default **15m**), `pin-change-challenge-ttl` (default **5m**).
 
+**PIN strength** is enforced by `PinPolicy` across every set/update/change/reset path: a PIN must be exactly six digits and must not be all-repeated (`000000`), strictly sequential (`123456` / `654321`), or one of a curated list of common PINs. Strength failures surface a distinct `weak_pin` error code (vs `invalid_pin` for a wrong PIN at login). The same rules are mirrored client-side (gua-idp-web, gua-ios) for instant feedback, but the server remains authoritative.
+
+**Username policy** (`UsernamePolicy`, shared by `/signup/check-username`, `/signup/complete`, and the interactive `/login/profile` step): 3–30 chars of lowercase letters, digits, dot, underscore or dash; not reserved; and — matching MAS's registration policy — not all-numeric (so a bare phone number can't become a handle).
+
 ### Privileged account operations
 
 Each privileged operation requires a fresh **reauth token** proving phone possession, in addition to the bearer token.
@@ -206,7 +210,7 @@ The service is a self-contained OIDC provider. It issues the access tokens that 
 | `GET /.well-known/jwks.json` | Publishes the **RSA public** signing key so relying parties can verify RS256 tokens. |
 | `GET /oauth2/authorize` | Authorization-code entry point. Validates `client_id`, `redirect_uri`, `response_type=code`, `scope`, and optional `state`/`nonce`/PKCE `code_challenge`, then starts a login session and **redirects to the interactive login UI**. (A legacy non-interactive mode still accepts `phone_number`+`otp_code` directly and issues a code after validating the OTP.) |
 | `POST /oauth2/token` | Exchanges an authorization code (and PKCE `code_verifier`) for a signed access token + ID token. |
-| `GET /userinfo` | Returns the authenticated subject (`sub`), `phone_number`, and optional `name` / `preferred_username`. |
+| `GET /userinfo` | Returns the authenticated subject (`sub`), `phone_number`, `phone_number_masked` (display-only, e.g. `••••4567`), and optional `name` / `preferred_username`. |
 
 ### Interactive login flow
 
