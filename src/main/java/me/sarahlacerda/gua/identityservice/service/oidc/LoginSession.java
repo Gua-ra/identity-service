@@ -48,6 +48,8 @@ public class LoginSession {
     // --- Progressive authentication state ---
     private Phase phase = Phase.PHONE;
     private String phoneNumber;
+    /** Phone (E.164) pre-filled from the OIDC login_hint, shown on the phone step. */
+    private String phoneHint;
     private String locale;
     /** Resolved opaque subject (the OIDC {@code sub}); set once the user is known. */
     private String userId;
