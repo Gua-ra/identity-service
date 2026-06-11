@@ -31,7 +31,6 @@ import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditL
 @RequiredArgsConstructor
 public class UserSecurityService {
 
-    private static final String PIN_PATTERN = "\\d{6}";
     private static final String CHANGE_CHALLENGE_KEY_PREFIX = "pin:change:";
 
     private final IdentityUserRepository repository;
@@ -42,6 +41,7 @@ public class UserSecurityService {
     private final OtpService otpService;
     private final SecurityAuditLogger auditLogger;
     private final StringRedisTemplate redisTemplate;
+    private final PinPolicy pinPolicy;
 
     @Transactional
     public IdentityUser ensureUser(String userId) {
@@ -249,9 +249,7 @@ public class UserSecurityService {
     }
 
     private void validatePinFormat(String pin) {
-        if (!StringUtils.hasText(pin) || !pin.matches(PIN_PATTERN)) {
-            throw new InvalidPinException("PIN must be a 6-digit numeric value");
-        }
+        pinPolicy.validate(pin);
     }
 
     private int registerFailedAttempt(IdentityUser user, Instant now, String userId) {

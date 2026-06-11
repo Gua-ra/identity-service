@@ -188,6 +188,15 @@ class IdentityOrchestrationServiceTest {
     }
 
     @Test
+    void completeSignupRejectsAllNumericUsername() {
+        assertThatThrownBy(() -> service.completeSignup("token", "555", "Display", null, null))
+                .isInstanceOf(InvalidUsernameException.class);
+
+        verify(signupTokenService, never()).consume(any());
+        verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(), eq(true));
+    }
+
+    @Test
     void completeSignupRejectsTakenUsernameWithoutConsumingToken() {
         when(signupTokenService.peek("token")).thenReturn("+12025550123");
         when(phoneNumberHasher.digest("+12025550123")).thenReturn("digest");

@@ -72,7 +72,7 @@ class PinAttemptsConcurrencyTest {
     @Test
     void concurrentWrongPinAttemptsAreSerializedAndLockoutKicksIn() throws Exception {
         String userId = "@" + UUID.randomUUID() + ":example.com";
-        userSecurityService.setInitialPin(userId, "123456");
+        userSecurityService.setInitialPin(userId, "284917");
 
         int threads = 10;
         ExecutorService executor = Executors.newFixedThreadPool(threads);

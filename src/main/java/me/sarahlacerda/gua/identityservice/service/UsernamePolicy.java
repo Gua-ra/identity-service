@@ -19,6 +19,7 @@ import me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException;
 public class UsernamePolicy {
 
     private static final Pattern USERNAME_PATTERN = Pattern.compile("^[a-z0-9._-]{3,30}$");
+    private static final Pattern ALL_NUMERIC_PATTERN = Pattern.compile("^[0-9]+$");
     private static final Set<String> RESERVED_USERNAMES = Set.of(
             "admin", "administrator", "root", "system", "gua", "guaa", "support", "help",
             "moderator", "matrix", "synapse", "server", "official", "staff");
@@ -37,6 +38,13 @@ public class UsernamePolicy {
         if (!USERNAME_PATTERN.matcher(normalized).matches()) {
             throw new InvalidUsernameException(
                     "Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash");
+        }
+        // MAS rejects all-numeric usernames (register.rego "username-all-numeric"):
+        // the localpart must contain at least one non-numeric character. Enforce the
+        // same rule here so we fail fast with a friendly message instead of letting
+        // the upstream MAS policy check reject the provisioning request.
+        if (ALL_NUMERIC_PATTERN.matcher(normalized).matches()) {
+            throw new InvalidUsernameException("Username must contain at least one non-numeric character");
         }
         if (RESERVED_USERNAMES.contains(normalized)) {
             throw new InvalidUsernameException("That username is reserved");
