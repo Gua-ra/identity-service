@@ -132,7 +132,7 @@ oidc:
 
 idp:
   login:
-    ui-url: ${IDP_LOGIN_UI_URL:/login}
+    ui-url: ${IDP_LOGIN_UI_URL:/signin}
     session-ttl: ${IDP_LOGIN_SESSION_TTL:PT10M}
     cookie-name: ${IDP_LOGIN_COOKIE_NAME:gua_login}
     cookie-secure: ${IDP_LOGIN_COOKIE_SECURE:true}
