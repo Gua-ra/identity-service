@@ -62,13 +62,18 @@ public class OidcUserInfoController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
         OidcAuthenticatedPrincipal user = principal.get();
-        return ResponseEntity.ok(new UserInfoResponse(user.userId(), user.phoneNumber(), user.displayName()));
+        return ResponseEntity.ok(new UserInfoResponse(
+            user.userId(),
+            user.phoneNumber(),
+            user.displayName(),
+            user.preferredUsername()));
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record UserInfoResponse(
         String sub,
         @JsonProperty("phone_number") String phoneNumber,
-        String name
+        String name,
+        @JsonProperty("preferred_username") String preferredUsername
     ) {}
 }

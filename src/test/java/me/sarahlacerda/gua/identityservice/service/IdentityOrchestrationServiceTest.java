@@ -55,6 +55,8 @@ class IdentityOrchestrationServiceTest {
     @Mock
     private DeviceNotificationService deviceNotificationService;
 
+    private final UsernamePolicy usernamePolicy = new UsernamePolicy();
+
     private IdentityOrchestrationService service;
 
     @BeforeEach
@@ -69,7 +71,8 @@ class IdentityOrchestrationServiceTest {
                 phoneNumberHasher,
                 userSecurityService,
                 trustedDeviceService,
-                deviceNotificationService);
+                deviceNotificationService,
+                usernamePolicy);
     }
 
     @Test

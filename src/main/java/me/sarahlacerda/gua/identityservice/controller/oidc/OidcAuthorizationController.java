@@ -2,6 +2,7 @@ package me.sarahlacerda.gua.identityservice.controller.oidc;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashSet;
 import java.util.Optional;
@@ -12,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -28,7 +30,10 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
+import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.exception.OidcInvalidRequestException;
+import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
+import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationCode;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationRequest;
@@ -49,16 +54,20 @@ public class OidcAuthorizationController {
     private final OidcAuthorizationService authorizationService;
     private final OidcTokenService tokenService;
     private final OidcClientService clientService;
+    private final LoginSessionService loginSessionService;
+    private final LoginFlowProperties loginProperties;
 
     @GetMapping("/oauth2/authorize")
     @Operation(
         summary = "Initiate the OAuth 2.0 authorization code flow",
-        description = "Validates an OTP challenge for the supplied phone number and returns an authorization code via redirect. "
-            + "Supports PKCE (RFC 7636) via code_challenge / code_challenge_method=S256."
+        description = "Entry point used by Matrix Authentication Service. Validates the OIDC request, starts a "
+            + "browser login session, and redirects to the interactive login UI (phone -> OTP -> PIN/profile) "
+            + "which issues the authorization code once the user is authenticated. Supports PKCE (RFC 7636) via "
+            + "code_challenge / code_challenge_method=S256."
     )
     @ApiResponses({
-        @ApiResponse(responseCode = "302", description = "OTP verified; redirecting with an authorization code"),
-        @ApiResponse(responseCode = "400", description = "Unsupported response type, unknown client, or OTP validation failure", content = @Content)
+        @ApiResponse(responseCode = "302", description = "Redirecting to the login UI, or back to the client with an authorization code"),
+        @ApiResponse(responseCode = "400", description = "Unsupported response type, unknown client, or invalid request", content = @Content)
     })
     public ResponseEntity<Void> authorize(
         @Parameter(description = "Must be set to `code` for the authorization code flow.", required = true)
@@ -69,18 +78,20 @@ public class OidcAuthorizationController {
         @RequestParam("redirect_uri") String redirectUri,
         @Parameter(description = "Requested scopes separated by spaces. Defaults to `openid` if omitted.")
         @RequestParam(value = "scope", required = false, defaultValue = "openid") String scope,
-        @Parameter(description = "E.164 formatted phone number that received the OTP challenge.", required = true, example = "+12025550123")
-        @RequestParam("phone_number") String phoneNumber,
-        @Parameter(description = "One-time password previously issued to the phone number.", required = true)
-        @RequestParam("otp_code") String otpCode,
-        @Parameter(description = "Optional display name to persist for the Matrix account.")
-        @RequestParam(value = "display_name", required = false) String displayName,
         @Parameter(description = "Opaque state returned to the client on success for CSRF mitigation.")
         @RequestParam(value = "state", required = false) String state,
+        @Parameter(description = "String value used to associate the client session with the ID token (OIDC nonce).")
+        @RequestParam(value = "nonce", required = false) String nonce,
         @Parameter(description = "PKCE code challenge (base64url, 43-128 chars). Required for public clients.")
         @RequestParam(value = "code_challenge", required = false) String codeChallenge,
         @Parameter(description = "PKCE code_challenge_method. Only S256 is supported.")
-        @RequestParam(value = "code_challenge_method", required = false) String codeChallengeMethod
+        @RequestParam(value = "code_challenge_method", required = false) String codeChallengeMethod,
+        @Parameter(description = "Deprecated: direct phone number for the non-interactive flow. Omit to use the interactive login UI.")
+        @RequestParam(value = "phone_number", required = false) String phoneNumber,
+        @Parameter(description = "Deprecated: OTP for the non-interactive flow. Omit to use the interactive login UI.")
+        @RequestParam(value = "otp_code", required = false) String otpCode,
+        @Parameter(description = "Optional display name (non-interactive flow only).")
+        @RequestParam(value = "display_name", required = false) String displayName
     ) {
         if (!"code".equals(responseType)) {
             throw new OidcInvalidRequestException("unsupported_response_type", "Only response_type=code is supported");
@@ -92,24 +103,48 @@ public class OidcAuthorizationController {
         clientService.validateScope(client, scopes);
         clientService.validateChallenge(client, codeChallenge, codeChallengeMethod);
 
-        OidcAuthorizationRequest request = new OidcAuthorizationRequest(
-            clientId,
-            redirectUri,
-            scopes,
-            phoneNumber,
-            otpCode,
-            displayName,
-            codeChallenge,
-            codeChallengeMethod
-        );
-        OidcAuthorizationCode authorizationCode = authorizationService.issueAuthorizationCode(request);
-
-        UriComponentsBuilder redirect = UriComponentsBuilder.fromUriString(redirectUri)
-            .queryParam("code", authorizationCode.code());
-        if (state != null) {
-            redirect.queryParam("state", state);
+        // Legacy non-interactive flow: credentials supplied directly as query params.
+        // Retained for backward compatibility; new clients omit them and use the
+        // interactive login UI below.
+        if (phoneNumber != null && otpCode != null) {
+            OidcAuthorizationRequest request = new OidcAuthorizationRequest(
+                clientId, redirectUri, scopes, phoneNumber, otpCode, displayName, codeChallenge, codeChallengeMethod);
+            OidcAuthorizationCode authorizationCode = authorizationService.issueAuthorizationCode(request);
+            UriComponentsBuilder redirect = UriComponentsBuilder.fromUriString(redirectUri)
+                .queryParam("code", authorizationCode.code());
+            if (state != null) {
+                redirect.queryParam("state", state);
+            }
+            return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(redirect.toUriString())).build();
         }
-        return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(redirect.toUriString())).build();
+
+        // Interactive flow: park the validated request in a login session and hand off
+        // to the browser UI, which walks phone -> OTP -> PIN/profile before the
+        // authorization code is issued at /login/**.
+        LoginSession session = new LoginSession();
+        session.setClientId(clientId);
+        session.setRedirectUri(redirectUri);
+        session.setScope(new ArrayList<>(scopes));
+        session.setState(state);
+        session.setNonce(nonce);
+        session.setCodeChallenge(codeChallenge);
+        session.setCodeChallengeMethod(codeChallengeMethod);
+        session.setPhase(LoginSession.Phase.PHONE);
+        session.setCsrfToken(loginSessionService.newToken());
+        String sessionId = loginSessionService.create(session);
+
+        ResponseCookie cookie = ResponseCookie.from(loginProperties.getCookieName(), sessionId)
+            .httpOnly(true)
+            .secure(loginProperties.isCookieSecure())
+            .sameSite("Lax")
+            .path("/")
+            .maxAge(loginProperties.getSessionTtl())
+            .build();
+
+        return ResponseEntity.status(HttpStatus.FOUND)
+            .header(HttpHeaders.SET_COOKIE, cookie.toString())
+            .location(URI.create(loginProperties.getUiUrl()))
+            .build();
     }
 
     @PostMapping(value = "/oauth2/token", consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)

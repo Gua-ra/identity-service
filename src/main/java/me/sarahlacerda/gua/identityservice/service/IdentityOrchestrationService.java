@@ -1,17 +1,13 @@
 package me.sarahlacerda.gua.identityservice.service;
 
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
-import java.util.Set;
-import java.util.regex.Pattern;
 
 import jakarta.annotation.Nullable;
 import lombok.RequiredArgsConstructor;
 import me.sarahlacerda.gua.identityservice.client.matrix.MatrixAdminClient;
 import me.sarahlacerda.gua.identityservice.domain.MatrixSession;
 import me.sarahlacerda.gua.identityservice.domain.VerifyOtpResult;
-import me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneAlreadyLinkedException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -28,11 +24,6 @@ import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService
 @RequiredArgsConstructor
 public class IdentityOrchestrationService {
 
-    private static final Pattern USERNAME_PATTERN = Pattern.compile("^[a-z0-9._-]{3,30}$");
-    private static final Set<String> RESERVED_USERNAMES = Set.of(
-            "admin", "administrator", "root", "system", "gua", "guaa", "support", "help",
-            "moderator", "matrix", "synapse", "server", "official", "staff");
-
     private final OtpService otpService;
     private final MatrixProvisioningService matrixProvisioningService;
     private final MatrixAdminClient matrixAdminClient;
@@ -43,6 +34,7 @@ public class IdentityOrchestrationService {
     private final UserSecurityService userSecurityService;
     private final TrustedDeviceService trustedDeviceService;
     private final DeviceNotificationService deviceNotificationService;
+    private final UsernamePolicy usernamePolicy;
 
     public void sendOtp(String e164PhoneNumber, String requesterIp, String language) {
         otpService.sendOtp(e164PhoneNumber, requesterIp, language);
@@ -238,18 +230,7 @@ public class IdentityOrchestrationService {
     }
 
     private String validateUsername(String rawUsername) {
-        if (!StringUtils.hasText(rawUsername)) {
-            throw new InvalidUsernameException("Username is required");
-        }
-        String normalized = rawUsername.trim().toLowerCase(Locale.ROOT);
-        if (!USERNAME_PATTERN.matcher(normalized).matches()) {
-            throw new InvalidUsernameException(
-                    "Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash");
-        }
-        if (RESERVED_USERNAMES.contains(normalized)) {
-            throw new InvalidUsernameException("That username is reserved");
-        }
-        return normalized;
+        return usernamePolicy.normalizeAndValidate(rawUsername);
     }
 
     /**

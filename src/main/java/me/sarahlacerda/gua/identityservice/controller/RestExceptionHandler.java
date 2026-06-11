@@ -21,6 +21,7 @@ import me.sarahlacerda.gua.identityservice.exception.InvalidPinException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinOperationException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidSignupTokenException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException;
+import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.exception.OidcClientAuthenticationException;
 import me.sarahlacerda.gua.identityservice.exception.OidcInvalidRequestException;
 import me.sarahlacerda.gua.identityservice.exception.OtpRateLimitedException;
@@ -164,6 +165,12 @@ public class RestExceptionHandler {
     public ResponseEntity<ErrorResponse> handleOidcInvalidRequest(OidcInvalidRequestException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(new ErrorResponse(ex.getOauthErrorCode(), ex.getMessage()));
+    }
+
+    @ExceptionHandler(LoginFlowException.class)
+    public ResponseEntity<ErrorResponse> handleLoginFlow(LoginFlowException ex) {
+        return ResponseEntity.status(ex.getStatus())
+                .body(new ErrorResponse(ex.getCode(), ex.getMessage()));
     }
 
     @ExceptionHandler(OidcClientAuthenticationException.class)
