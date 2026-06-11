@@ -260,6 +260,7 @@ public class LoginFlowController {
                 session.getPhase().name(),
                 session.getClientId(),
                 maskPhone(session.getPhoneNumber()),
+                session.getPhoneHint(),
                 session.getCsrfToken(),
                 session.isNewUser(),
                 redirectUrl);
@@ -298,6 +299,7 @@ public class LoginFlowController {
             String phase,
             String clientId,
             String maskedPhone,
+            String phoneHint,
             String csrfToken,
             boolean newUser,
             String redirectUrl) {}

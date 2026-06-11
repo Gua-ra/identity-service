@@ -86,6 +86,8 @@ public class OidcAuthorizationController {
         @RequestParam(value = "code_challenge", required = false) String codeChallenge,
         @Parameter(description = "PKCE code_challenge_method. Only S256 is supported.")
         @RequestParam(value = "code_challenge_method", required = false) String codeChallengeMethod,
+        @Parameter(description = "Optional login hint (E.164 phone) forwarded by MAS to pre-fill the login UI.")
+        @RequestParam(value = "login_hint", required = false) String loginHint,
         @Parameter(description = "Deprecated: direct phone number for the non-interactive flow. Omit to use the interactive login UI.")
         @RequestParam(value = "phone_number", required = false) String phoneNumber,
         @Parameter(description = "Deprecated: OTP for the non-interactive flow. Omit to use the interactive login UI.")
@@ -130,6 +132,7 @@ public class OidcAuthorizationController {
         session.setCodeChallenge(codeChallenge);
         session.setCodeChallengeMethod(codeChallengeMethod);
         session.setPhase(LoginSession.Phase.PHONE);
+        session.setPhoneHint(normalizeLoginHint(loginHint));
         session.setCsrfToken(loginSessionService.newToken());
         String sessionId = loginSessionService.create(session);
 
@@ -232,6 +235,27 @@ public class OidcAuthorizationController {
             }
         }
         return scopes.isEmpty() ? Set.of() : scopes;
+    }
+
+    /**
+     * Normalizes an OIDC {@code login_hint} into a bare E.164 phone number. Matrix
+     * clients may prefix the hint (e.g. {@code "phone:+5511..."} or
+     * {@code "mxid:..."}); we keep only a phone-like value and ignore anything else.
+     */
+    private static String normalizeLoginHint(String loginHint) {
+        if (loginHint == null || loginHint.isBlank()) {
+            return null;
+        }
+        String value = loginHint.trim();
+        int colon = value.indexOf(':');
+        if (colon >= 0) {
+            String prefix = value.substring(0, colon).toLowerCase(java.util.Locale.ROOT);
+            // Only unwrap a phone-style hint; an mxid hint is not a phone number.
+            if (prefix.equals("phone") || prefix.equals("tel") || prefix.equals("msisdn")) {
+                value = value.substring(colon + 1).trim();
+            }
+        }
+        return value.startsWith("+") ? value : null;
     }
 
     private record ClientCredentials(String clientId, String clientSecret) {}
