@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.controller.oidc.OidcAuthorizationController;
 import me.sarahlacerda.gua.identityservice.exception.OidcClientAuthenticationException;
 import me.sarahlacerda.gua.identityservice.exception.OidcInvalidRequestException;
@@ -38,6 +39,7 @@ import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationRequest
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcClientService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcClientService.RegisteredClient;
+import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenResponse;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
 import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
@@ -59,6 +61,12 @@ class OidcAuthorizationControllerTest {
 
     @MockitoBean
     private OidcClientService clientService;
+
+    @MockitoBean
+    private LoginSessionService loginSessionService;
+
+    @MockitoBean
+    private LoginFlowProperties loginFlowProperties;
 
     @MockitoBean
     private EndpointRateLimiter endpointRateLimiter;

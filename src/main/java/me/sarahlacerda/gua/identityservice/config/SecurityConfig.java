@@ -28,11 +28,13 @@ public class SecurityConfig {
             "/signin/verify-pin",
             "/security/pin/reset",
             "/security/pin/reset/complete",
-            "/oauth2/token");
+            "/oauth2/token",
+            "/login/**");
 
     private static final List<String> OPEN_GET_ENDPOINTS = List.of(
             "/.well-known/**",
             "/oauth2/**",
+            "/login/**",
             "/swagger-ui/**",
             "/swagger-ui.html",
             "/api-docs/**",

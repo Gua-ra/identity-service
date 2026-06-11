@@ -56,14 +56,26 @@ public class OidcAuthorizationService {
             userId,
             request.phoneNumber(),
             resolvedDisplayName,
+            null,
             request.scope(),
-            request.clientId()
+            request.clientId(),
+            null
         );
 
+        return issueCode(authorization, request.redirectUri(), request.codeChallenge());
+    }
+
+    /**
+     * Generates a one-time authorization code for an already-authenticated
+     * authorization and stores it in Redis until it is exchanged at the token
+     * endpoint. Used by the interactive browser login flow, which resolves the
+     * user across several steps (phone, OTP, PIN/profile) before calling this.
+     */
+    public OidcAuthorizationCode issueCode(OidcAuthorization authorization, String redirectUri, String codeChallenge) {
         String code = generateCode();
-        persist(code, authorization, request.redirectUri(), request.codeChallenge());
-        return new OidcAuthorizationCode(code, authorization, request.redirectUri(),
-            Optional.ofNullable(request.codeChallenge()));
+        persist(code, authorization, redirectUri, codeChallenge);
+        return new OidcAuthorizationCode(code, authorization, redirectUri,
+            Optional.ofNullable(codeChallenge));
     }
 
     public Optional<OidcAuthorizationCode> consumeAuthorizationCode(String code) {
@@ -79,8 +91,10 @@ public class OidcAuthorizationService {
                 stored.userId(),
                 stored.phoneNumber(),
                 stored.displayName(),
+                stored.preferredUsername(),
                 Set.copyOf(stored.scope()),
-                stored.clientId()
+                stored.clientId(),
+                stored.nonce()
             );
             return Optional.of(new OidcAuthorizationCode(code, authorization, stored.redirectUri(),
                 Optional.ofNullable(stored.codeChallenge())));
@@ -94,8 +108,10 @@ public class OidcAuthorizationService {
             authorization.userId(),
             authorization.phoneNumber(),
             authorization.displayName(),
+            authorization.preferredUsername(),
             authorization.scope(),
             authorization.clientId(),
+            authorization.nonce(),
             redirectUri,
             codeChallenge
         );
@@ -131,8 +147,10 @@ public class OidcAuthorizationService {
         String userId,
         String phoneNumber,
         String displayName,
+        String preferredUsername,
         Set<String> scope,
         String clientId,
+        String nonce,
         String redirectUri,
         String codeChallenge
     ) {}

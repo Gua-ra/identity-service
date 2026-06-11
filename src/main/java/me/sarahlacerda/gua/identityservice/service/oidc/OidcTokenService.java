@@ -37,8 +37,8 @@ public class OidcTokenService {
     private final TokenRevocationService tokenRevocationService;
 
     public OidcTokenResponse issueTokens(OidcAuthorization authorization) {
-        SignedJWT accessToken = buildJwt(authorization, properties.getAccessTokenTtl().toSeconds());
-        SignedJWT idToken = buildJwt(authorization, properties.getIdTokenTtl().toSeconds());
+        SignedJWT accessToken = buildJwt(authorization, properties.getAccessTokenTtl().toSeconds(), false);
+        SignedJWT idToken = buildJwt(authorization, properties.getIdTokenTtl().toSeconds(), true);
 
         return new OidcTokenResponse(
                 serialize(accessToken),
@@ -83,6 +83,7 @@ public class OidcTokenService {
                     claims.getSubject(),
                     claims.getStringClaim("phone_number"),
                     displayName,
+                    claims.getStringClaim("preferred_username"),
                     scopes));
         } catch (ParseException | JOSEException ex) {
             return Optional.empty();
@@ -105,7 +106,7 @@ public class OidcTokenService {
         return audience.stream().anyMatch(knownClientIds::contains);
     }
 
-    private SignedJWT buildJwt(OidcAuthorization authorization, long ttlSeconds) {
+    private SignedJWT buildJwt(OidcAuthorization authorization, long ttlSeconds, boolean includeNonce) {
         Instant now = Instant.now();
         Instant expiresAt = now.plusSeconds(ttlSeconds);
 
@@ -121,6 +122,14 @@ public class OidcTokenService {
 
         if (authorization.displayName() != null) {
             builder.claim("name", authorization.displayName());
+        }
+        if (authorization.preferredUsername() != null) {
+            builder.claim("preferred_username", authorization.preferredUsername());
+        }
+        // The nonce binds an ID token to the client's authorization request (OIDC core
+        // 3.1.3.7). It belongs only in the ID token, never the access token.
+        if (includeNonce && authorization.nonce() != null) {
+            builder.claim("nonce", authorization.nonce());
         }
 
         JWTClaimsSet claims = builder.build();
