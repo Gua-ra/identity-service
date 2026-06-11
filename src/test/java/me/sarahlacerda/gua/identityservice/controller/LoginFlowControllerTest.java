@@ -206,13 +206,11 @@ class LoginFlowControllerTest {
     }
 
     @Test
-    void submitProfileReservesUsernameAndCompletes() throws Exception {
+    void submitProfileReservesUsernameAndAdvancesToPinSetup() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PROFILE_REQUIRED)));
         when(usernamePolicy.normalizeAndValidate("Alice")).thenReturn("alice");
         when(matrixProvisioningService.buildUserId("alice")).thenReturn("@alice:gua.local");
         when(matrixAdminClient.userExists("@alice:gua.local")).thenReturn(false);
-        when(authorizationService.issueCode(any(), eq(CALLBACK), any()))
-            .thenReturn(issuedCode());
 
         mockMvc.perform(post("/login/profile")
                 .cookie(cookie())
@@ -220,9 +218,45 @@ class LoginFlowControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"username\":\"Alice\",\"displayName\":\"Alice A\"}"))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.phase").value("COMPLETED"));
+            .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
 
         verify(directoryService).upsertByDigest(any(), eq("@alice:gua.local"), eq("Alice A"));
+    }
+
+    @Test
+    void submitPinSetupWithPinSetsItAndCompletes() throws Exception {
+        LoginSession session = session(Phase.PIN_SETUP);
+        session.setUserId("@alice:gua.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        mockMvc.perform(post("/login/pin-setup")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pin\":\"123456\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.phase").value("COMPLETED"));
+
+        verify(userSecurityService).setInitialPin("@alice:gua.local", "123456");
+    }
+
+    @Test
+    void submitPinSetupSkipCompletesWithoutPin() throws Exception {
+        LoginSession session = session(Phase.PIN_SETUP);
+        session.setUserId("@alice:gua.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        mockMvc.perform(post("/login/pin-setup")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"skip\":true}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.phase").value("COMPLETED"));
+
+        verify(userSecurityService, org.mockito.Mockito.never()).setInitialPin(any(), any());
     }
 
     @Test

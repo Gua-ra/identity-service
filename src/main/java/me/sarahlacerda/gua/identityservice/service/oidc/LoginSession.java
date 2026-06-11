@@ -32,6 +32,8 @@ public class LoginSession {
         PIN_REQUIRED,
         /** New user; awaiting username + display name. */
         PROFILE_REQUIRED,
+        /** New user; offered to set an account PIN (two-step verification). */
+        PIN_SETUP,
         /** Authenticated; an authorization code has been issued. */
         COMPLETED
     }

@@ -191,6 +191,26 @@ public class LoginFlowController {
         session.setUserId(userId);
         session.setDisplayName(displayName);
         session.setPreferredUsername(localpart);
+        // New accounts are offered two-step verification (PIN) before finishing.
+        session.setNewUser(true);
+        session.setPhase(Phase.PIN_SETUP);
+        loginSessionService.save(sessionId, session);
+        return ResponseEntity.ok(state(session, null));
+    }
+
+    @PostMapping("/pin-setup")
+    @Operation(summary = "Set up (or skip) an account PIN", description = "Optional two-step verification step offered to brand-new accounts. Sends a PIN to enable it, or skip:true to finish without one. Completes login either way.")
+    public ResponseEntity<LoginStateResponse> submitPinSetup(
+            @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
+            @RequestHeader(value = CSRF_HEADER, required = false) String csrf,
+            @RequestBody @Valid PinSetupRequest request) {
+        LoginSession session = requireSession(sessionId);
+        requireCsrf(session, csrf);
+        requirePhase(session, Phase.PIN_SETUP);
+
+        if (!request.skip() && StringUtils.hasText(request.pin())) {
+            userSecurityService.setInitialPin(session.getUserId(), request.pin().trim());
+        }
         return complete(sessionId, session);
     }
 
@@ -304,6 +324,9 @@ public class LoginFlowController {
     public record OtpRequest(@NotBlank String code) {}
 
     public record PinRequest(@NotBlank String pin) {}
+
+    /** PIN setup is optional: provide {@code pin} to enable it, or {@code skip:true} to finish without one. */
+    public record PinSetupRequest(String pin, boolean skip) {}
 
     public record ProfileRequest(@NotBlank String username, String displayName) {}
 
