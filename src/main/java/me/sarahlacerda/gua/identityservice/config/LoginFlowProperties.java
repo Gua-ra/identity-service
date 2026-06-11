@@ -24,11 +24,12 @@ public class LoginFlowProperties {
 
     /**
      * Where the browser is redirected to render the interactive login UI. A
-     * same-origin path (default {@code /login}) keeps the login-session cookie
-     * first-party; an absolute URL is also accepted.
+     * same-origin path (default {@code /signin}) keeps the login-session cookie
+     * first-party; an absolute URL is also accepted. Must not collide with the
+     * {@code /login/*} API prefix.
      */
     @NotBlank
-    private String uiUrl = "/login";
+    private String uiUrl = "/signin";
 
     /** How long an in-progress login session lives before it must be restarted. */
     @NotNull
