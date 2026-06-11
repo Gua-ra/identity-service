@@ -302,3 +302,68 @@ Standard Commons Logging discovery in action with spring-jcl: please remove comm
 2026-06-11T18:56:51.469-04:00  INFO 98802 --- [  restartedMain] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port 8080 (http) with context path '/'
 2026-06-11T18:56:51.503-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.IdentityServiceApplication       : Started IdentityServiceApplication in 9.703 seconds (process running for 29761.957)
 2026-06-11T18:56:51.512-04:00  INFO 98802 --- [  restartedMain] .ConditionEvaluationDeltaLoggingListener : Condition evaluation unchanged
+2026-06-11T19:36:36.817-04:00  INFO 98802 --- [   File Watcher] rtingClassPathChangeChangedEventListener : Restarting due to 31 class path changes (2 additions, 0 deletions, 29 modifications)
+2026-06-11T19:36:37.185-04:00  INFO 98802 --- [      Thread-51] o.s.b.w.e.tomcat.GracefulShutdown        : Commencing graceful shutdown. Waiting for active requests to complete
+2026-06-11T19:36:37.242-04:00  INFO 98802 --- [tomcat-shutdown] o.s.b.w.e.tomcat.GracefulShutdown        : Graceful shutdown complete
+2026-06-11T19:36:37.531-04:00  INFO 98802 --- [      Thread-51] j.LocalContainerEntityManagerFactoryBean : Closing JPA EntityManagerFactory for persistence unit 'default'
+2026-06-11T19:36:37.608-04:00  INFO 98802 --- [      Thread-51] com.zaxxer.hikari.HikariDataSource       : HikariPool-4 - Shutdown initiated...
+2026-06-11T19:36:37.624-04:00  INFO 98802 --- [      Thread-51] com.zaxxer.hikari.HikariDataSource       : HikariPool-4 - Shutdown completed.
+Standard Commons Logging discovery in action with spring-jcl: please remove commons-logging.jar from classpath in order to avoid potential conflicts
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v3.5.6)
+
+2026-06-11T19:36:38.135-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.IdentityServiceApplication       : Starting IdentityServiceApplication using Java 21.0.8 with PID 98802 (/Users/sarah/IdeaProjects/identity-service/build/classes/java/main started by sarah in /Users/sarah/IdeaProjects/identity-service)
+2026-06-11T19:36:38.135-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.IdentityServiceApplication       : No active profile set, falling back to 1 default profile: "default"
+2026-06-11T19:36:39.284-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Multiple Spring Data modules found, entering strict repository configuration mode
+2026-06-11T19:36:39.285-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data JPA repositories in DEFAULT mode.
+2026-06-11T19:36:39.335-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 46 ms. Found 3 JPA repository interfaces.
+2026-06-11T19:36:39.341-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Multiple Spring Data modules found, entering strict repository configuration mode
+2026-06-11T19:36:39.341-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data Redis repositories in DEFAULT mode.
+2026-06-11T19:36:39.361-04:00  INFO 98802 --- [  restartedMain] .RepositoryConfigurationExtensionSupport : Spring Data Redis - Could not safely identify store assignment for repository candidate interface me.sarahlacerda.gua.identityservice.repository.DirectoryEntryRepository; If you want this repository to be a Redis repository, consider annotating your entities with one of these annotations: org.springframework.data.redis.core.RedisHash (preferred), or consider extending one of the following types with your repository: org.springframework.data.keyvalue.repository.KeyValueRepository
+2026-06-11T19:36:39.361-04:00  INFO 98802 --- [  restartedMain] .RepositoryConfigurationExtensionSupport : Spring Data Redis - Could not safely identify store assignment for repository candidate interface me.sarahlacerda.gua.identityservice.repository.IdentityUserRepository; If you want this repository to be a Redis repository, consider annotating your entities with one of these annotations: org.springframework.data.redis.core.RedisHash (preferred), or consider extending one of the following types with your repository: org.springframework.data.keyvalue.repository.KeyValueRepository
+2026-06-11T19:36:39.361-04:00  INFO 98802 --- [  restartedMain] .RepositoryConfigurationExtensionSupport : Spring Data Redis - Could not safely identify store assignment for repository candidate interface me.sarahlacerda.gua.identityservice.repository.TrustedDeviceRepository; If you want this repository to be a Redis repository, consider annotating your entities with one of these annotations: org.springframework.data.redis.core.RedisHash (preferred), or consider extending one of the following types with your repository: org.springframework.data.keyvalue.repository.KeyValueRepository
+2026-06-11T19:36:39.362-04:00  INFO 98802 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 16 ms. Found 0 Redis repository interfaces.
+2026-06-11T19:36:40.047-04:00  INFO 98802 --- [  restartedMain] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port 8080 (http)
+2026-06-11T19:36:40.049-04:00  INFO 98802 --- [  restartedMain] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-06-11T19:36:40.049-04:00  INFO 98802 --- [  restartedMain] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/10.1.46]
+2026-06-11T19:36:40.065-04:00  INFO 98802 --- [  restartedMain] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-06-11T19:36:40.065-04:00  INFO 98802 --- [  restartedMain] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1928 ms
+Standard Commons Logging discovery in action with spring-jcl: please remove commons-logging.jar from classpath in order to avoid potential conflicts
+2026-06-11T19:36:40.202-04:00  WARN 98802 --- [  restartedMain] m.s.g.i.config.OidcSigningKeyConfig      : No oidc.signing.private-key configured — generating an ephemeral RSA key for THIS process only. Configure OIDC_RSA_PRIVATE_KEY for production.
+2026-06-11T19:36:41.383-04:00  INFO 98802 --- [  restartedMain] com.zaxxer.hikari.HikariDataSource       : HikariPool-5 - Starting...
+2026-06-11T19:36:41.470-04:00  INFO 98802 --- [  restartedMain] com.zaxxer.hikari.pool.HikariPool        : HikariPool-5 - Added connection org.postgresql.jdbc.PgConnection@6f7b9f5a
+2026-06-11T19:36:41.470-04:00  INFO 98802 --- [  restartedMain] com.zaxxer.hikari.HikariDataSource       : HikariPool-5 - Start completed.
+2026-06-11T19:36:41.479-04:00  INFO 98802 --- [  restartedMain] org.flywaydb.core.FlywayExecutor         : Database: jdbc:postgresql://localhost:5432/identity (PostgreSQL 16.10)
+2026-06-11T19:36:41.555-04:00  INFO 98802 --- [  restartedMain] o.f.core.internal.command.DbValidate     : Successfully validated 4 migrations (execution time 00:00.017s)
+2026-06-11T19:36:41.598-04:00  INFO 98802 --- [  restartedMain] o.f.core.internal.command.DbMigrate      : Current version of schema "public": 3
+2026-06-11T19:36:41.610-04:00  INFO 98802 --- [  restartedMain] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "4 - add phone masked"
+2026-06-11T19:36:41.684-04:00  INFO 98802 --- [  restartedMain] o.f.core.internal.command.DbMigrate      : Successfully applied 1 migration to schema "public", now at version v4 (execution time 00:00.050s)
+2026-06-11T19:36:41.731-04:00  INFO 98802 --- [  restartedMain] o.hibernate.jpa.internal.util.LogHelper  : HHH000204: Processing PersistenceUnitInfo [name: default]
+2026-06-11T19:36:41.734-04:00  INFO 98802 --- [  restartedMain] o.h.c.internal.RegionFactoryInitiator    : HHH000026: Second-level cache disabled
+2026-06-11T19:36:41.745-04:00  INFO 98802 --- [  restartedMain] o.s.o.j.p.SpringPersistenceUnitInfo      : No LoadTimeWeaver setup: ignoring JPA class transformer
+2026-06-11T19:36:41.754-04:00  WARN 98802 --- [  restartedMain] org.hibernate.orm.deprecation            : HHH90000025: PostgreSQLDialect does not need to be specified explicitly using 'hibernate.dialect' (remove the property setting and it will be selected by default)
+2026-06-11T19:36:41.756-04:00  INFO 98802 --- [  restartedMain] org.hibernate.orm.connections.pooling    : HHH10001005: Database info:
+	Database JDBC URL [Connecting through datasource 'HikariDataSource (HikariPool-5)']
+	Database driver: undefined/unknown
+	Database version: 16.10
+	Autocommit mode: undefined/unknown
+	Isolation level: undefined/unknown
+	Minimum pool size: undefined/unknown
+	Maximum pool size: undefined/unknown
+2026-06-11T19:36:41.817-04:00  INFO 98802 --- [  restartedMain] o.h.e.t.j.p.i.JtaPlatformInitiator       : HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform integration)
+2026-06-11T19:36:41.818-04:00  INFO 98802 --- [  restartedMain] j.LocalContainerEntityManagerFactoryBean : Initialized JPA EntityManagerFactory for persistence unit 'default'
+2026-06-11T19:36:42.103-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.service.oidc.OidcClientService   : Registered 2 OIDC clients
+2026-06-11T19:36:42.198-04:00  WARN 98802 --- [  restartedMain] JpaBaseConfiguration$JpaWebConfiguration : spring.jpa.open-in-view is enabled by default. Therefore, database queries may be performed during view rendering. Explicitly configure spring.jpa.open-in-view to disable this warning
+2026-06-11T19:36:42.430-04:00  INFO 98802 --- [  restartedMain] o.s.b.a.e.web.EndpointLinksResolver      : Exposing 2 endpoints beneath base path '/actuator'
+2026-06-11T19:36:43.017-04:00  INFO 98802 --- [  restartedMain] o.s.b.a.h2.H2ConsoleAutoConfiguration    : H2 console available at '/h2-console'. Database available at 'jdbc:postgresql://localhost:5432/identity'
+2026-06-11T19:36:43.073-04:00  INFO 98802 --- [  restartedMain] o.s.b.d.a.OptionalLiveReloadServer       : LiveReload server is running on port 35729
+2026-06-11T19:36:43.103-04:00  INFO 98802 --- [  restartedMain] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port 8080 (http) with context path '/'
+2026-06-11T19:36:43.110-04:00  INFO 98802 --- [  restartedMain] m.s.g.i.IdentityServiceApplication       : Started IdentityServiceApplication in 5.011 seconds (process running for 32153.518)
+2026-06-11T19:36:43.111-04:00  INFO 98802 --- [  restartedMain] .ConditionEvaluationDeltaLoggingListener : Condition evaluation unchanged

@@ -31,6 +31,13 @@ public class DirectoryEntry {
     @Column(name = "phone_digest", nullable = false, unique = true, length = 64)
     private String phoneDigest;
 
+    /**
+     * Display-only masked phone (e.g. "••••4567"). Not reversible to the full
+     * number; the raw phone is never stored.
+     */
+    @Column(name = "phone_masked", length = 32)
+    private String phoneMasked;
+
     @Column(name = "user_id", nullable = false)
     private String userId;
 
@@ -44,8 +51,9 @@ public class DirectoryEntry {
     private Instant updatedAt;
 
     @Builder
-    public DirectoryEntry(String phoneDigest, String userId, String displayName) {
+    public DirectoryEntry(String phoneDigest, String phoneMasked, String userId, String displayName) {
         this.phoneDigest = phoneDigest;
+        this.phoneMasked = phoneMasked;
         this.userId = userId;
         this.displayName = displayName;
     }

@@ -39,6 +39,7 @@ import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.MatrixProvisioningService;
 import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
+import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.UsernamePolicy;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.Phase;
@@ -75,6 +76,7 @@ public class LoginFlowController {
     private final OtpService otpService;
     private final DirectoryService directoryService;
     private final PhoneNumberHasher phoneNumberHasher;
+    private final PhoneNumberMasker phoneNumberMasker;
     private final UserSecurityService userSecurityService;
     private final MatrixProvisioningService matrixProvisioningService;
     private final MatrixAdminClient matrixAdminClient;
@@ -182,8 +184,9 @@ public class LoginFlowController {
         String userId = matrixProvisioningService.buildUserId(localpart);
         String displayName = StringUtils.hasText(request.displayName()) ? request.displayName().trim() : localpart;
         String digest = phoneNumberHasher.digest(session.getPhoneNumber());
+        String maskedPhone = phoneNumberMasker.mask(session.getPhoneNumber());
         try {
-            directoryService.upsertByDigest(digest, userId, displayName);
+            directoryService.upsertByDigest(digest, maskedPhone, userId, displayName);
         } catch (DataIntegrityViolationException ex) {
             throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
         }

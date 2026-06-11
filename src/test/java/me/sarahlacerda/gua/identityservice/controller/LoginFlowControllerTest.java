@@ -33,6 +33,7 @@ import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.MatrixProvisioningService;
 import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
+import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.UsernamePolicy;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.Phase;
@@ -65,6 +66,8 @@ class LoginFlowControllerTest {
     private DirectoryService directoryService;
     @MockitoBean
     private PhoneNumberHasher phoneNumberHasher;
+    @MockitoBean
+    private PhoneNumberMasker phoneNumberMasker;
     @MockitoBean
     private UserSecurityService userSecurityService;
     @MockitoBean
@@ -220,7 +223,7 @@ class LoginFlowControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
 
-        verify(directoryService).upsertByDigest(any(), eq("@alice:gua.local"), eq("Alice A"));
+        verify(directoryService).upsertByDigest(any(), any(), eq("@alice:gua.local"), eq("Alice A"));
     }
 
     @Test

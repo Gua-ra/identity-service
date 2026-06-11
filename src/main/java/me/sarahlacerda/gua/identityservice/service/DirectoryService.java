@@ -28,18 +28,32 @@ public class DirectoryService {
      */
     @Transactional
     public DirectoryEntry upsertByDigest(String phoneDigest, String userId, String displayName) {
+        return upsertByDigest(phoneDigest, null, userId, displayName);
+    }
+
+    /**
+     * Upsert a directory entry, also persisting a display-only masked phone.
+     * A {@code null} {@code phoneMasked} or {@code displayName} preserves the
+     * existing value (no overwrite).
+     */
+    @Transactional
+    public DirectoryEntry upsertByDigest(String phoneDigest, String phoneMasked, String userId, String displayName) {
         DirectoryEntry entry = repository.findByPhoneDigest(phoneDigest)
-            .map(existing -> updateExisting(existing, userId, displayName))
+            .map(existing -> updateExisting(existing, phoneMasked, userId, displayName))
             .orElseGet(() -> DirectoryEntry.builder()
                 .phoneDigest(phoneDigest)
+                .phoneMasked(phoneMasked)
                 .userId(userId)
                 .displayName(displayName)
                 .build());
         return repository.save(entry);
     }
 
-    private DirectoryEntry updateExisting(DirectoryEntry entry, String userId, String displayName) {
+    private DirectoryEntry updateExisting(DirectoryEntry entry, String phoneMasked, String userId, String displayName) {
         entry.setUserId(userId);
+        if (phoneMasked != null) {
+            entry.setPhoneMasked(phoneMasked);
+        }
         if (displayName != null) {
             entry.setDisplayName(displayName);
         } else if (entry.getDisplayName() != null) {
@@ -68,5 +82,17 @@ public class DirectoryService {
     @Transactional(readOnly = true)
     public List<DirectoryEntry> findByUserId(String userId) {
         return repository.findByUserId(userId);
+    }
+
+    /**
+     * Returns the display-only masked phone (e.g. "••••4567") linked to the user,
+     * or empty when none is recorded. Never exposes the full number.
+     */
+    @Transactional(readOnly = true)
+    public Optional<String> findMaskedPhoneByUserId(String userId) {
+        return repository.findByUserId(userId).stream()
+            .map(DirectoryEntry::getPhoneMasked)
+            .filter(masked -> masked != null && !masked.isBlank())
+            .findFirst();
     }
 }

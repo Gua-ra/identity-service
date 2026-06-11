@@ -21,6 +21,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import me.sarahlacerda.gua.identityservice.config.OidcProperties;
 import me.sarahlacerda.gua.identityservice.config.OidcSigningKeyConfig;
+import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenResponse;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
@@ -44,6 +45,9 @@ class OidcUserInfoControllerTest {
     @MockitoBean
     private EndpointRateLimiter endpointRateLimiter;
 
+    @MockitoBean
+    private DirectoryService directoryService;
+
     private OidcTokenResponse tokens;
 
     @BeforeEach
@@ -54,6 +58,8 @@ class OidcUserInfoControllerTest {
                 "Alice",
                 Set.of("openid", "profile"),
                 "mas"));
+        org.mockito.Mockito.when(directoryService.findMaskedPhoneByUserId("user-123"))
+                .thenReturn(java.util.Optional.of("\u2022\u2022\u2022\u20224567"));
     }
 
     @Test
@@ -62,6 +68,7 @@ class OidcUserInfoControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sub").value("user-123"))
                 .andExpect(jsonPath("$.phone_number").value("+15551234567"))
+                .andExpect(jsonPath("$.phone_number_masked").value("\u2022\u2022\u2022\u20224567"))
                 .andExpect(jsonPath("$.name").value("Alice"));
     }
 
