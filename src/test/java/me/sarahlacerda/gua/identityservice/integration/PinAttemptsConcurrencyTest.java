@@ -34,13 +34,13 @@ class PinAttemptsConcurrencyTest {
 
     @Container
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>(DockerImageName.parse("postgres:16-alpine"))
-        .withDatabaseName("identity")
-        .withUsername("identity")
-        .withPassword("identity");
+            .withDatabaseName("identity")
+            .withUsername("identity")
+            .withPassword("identity");
 
     @Container
     static GenericContainer<?> redis = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
-        .withExposedPorts(6379);
+            .withExposedPorts(6379);
 
     @DynamicPropertySource
     static void registerProperties(DynamicPropertyRegistry registry) {
@@ -94,7 +94,9 @@ class PinAttemptsConcurrencyTest {
                     locked.incrementAndGet();
                 } catch (Throwable t) {
                     other.incrementAndGet();
-                    synchronized (unexpected) { unexpected.add(t); }
+                    synchronized (unexpected) {
+                        unexpected.add(t);
+                    }
                 } finally {
                     done.countDown();
                 }
@@ -107,16 +109,17 @@ class PinAttemptsConcurrencyTest {
 
         assertThat(unexpected).as("no unexpected exceptions").isEmpty();
         assertThat(invalid.get() + locked.get()).isEqualTo(threads);
-        // With maxPinAttempts=5, first 5 wrong attempts increment failure_count then trip lock on the 5th.
+        // With maxPinAttempts=5, first 5 wrong attempts increment failure_count then
+        // trip lock on the 5th.
         // Subsequent attempts must observe the locked state.
         assertThat(invalid.get()).isGreaterThanOrEqualTo(5);
         assertThat(locked.get()).as("subsequent attempts after lockout must be rejected with PinLockedException")
-            .isGreaterThanOrEqualTo(1);
+                .isGreaterThanOrEqualTo(1);
 
         IdentityUser after = userRepository.findByUserId(userId).orElseThrow();
         assertThat(after.getPinLockedUntil())
-            .as("user must be locked after concurrent wrong PIN attempts")
-            .isNotNull()
-            .isAfter(Instant.now());
+                .as("user must be locked after concurrent wrong PIN attempts")
+                .isNotNull()
+                .isAfter(Instant.now());
     }
 }

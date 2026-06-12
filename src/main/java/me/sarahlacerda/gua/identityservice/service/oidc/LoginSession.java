@@ -10,10 +10,13 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * Server-side state for one in-progress interactive OIDC login. Created when MAS
+ * Server-side state for one in-progress interactive OIDC login. Created when
+ * MAS
  * redirects the browser to {@code GET /oauth2/authorize}, advanced as the user
- * moves through the phone / OTP / PIN / profile steps in {@code gua-idp-web}, and
- * consumed when the authorization code is issued. Persisted as JSON in Redis and
+ * moves through the phone / OTP / PIN / profile steps in {@code gua-idp-web},
+ * and
+ * consumed when the authorization code is issued. Persisted as JSON in Redis
+ * and
  * referenced by an opaque cookie, so no server affinity is required.
  */
 @Getter
@@ -50,10 +53,14 @@ public class LoginSession {
     // --- Progressive authentication state ---
     private Phase phase = Phase.PHONE;
     private String phoneNumber;
-    /** Phone (E.164) pre-filled from the OIDC login_hint, shown on the phone step. */
+    /**
+     * Phone (E.164) pre-filled from the OIDC login_hint, shown on the phone step.
+     */
     private String phoneHint;
     private String locale;
-    /** Resolved opaque subject (the OIDC {@code sub}); set once the user is known. */
+    /**
+     * Resolved opaque subject (the OIDC {@code sub}); set once the user is known.
+     */
     private String userId;
     private boolean newUser;
     /** Resolved display name (existing entry, or chosen at the profile step). */
@@ -61,6 +68,9 @@ public class LoginSession {
     /** Chosen username/localpart for new users; null for returning users. */
     private String preferredUsername;
 
-    /** Double-submit CSRF token bound to this session and required on state-changing calls. */
+    /**
+     * Double-submit CSRF token bound to this session and required on state-changing
+     * calls.
+     */
     private String csrfToken;
 }

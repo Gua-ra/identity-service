@@ -32,6 +32,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import me.sarahlacerda.gua.identityservice.client.matrix.MatrixAdminClient;
 import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
+import me.sarahlacerda.gua.identityservice.domain.Homeserver;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneAlreadyLinkedException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
@@ -40,6 +41,8 @@ import me.sarahlacerda.gua.identityservice.service.MatrixProvisioningService;
 import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
+import me.sarahlacerda.gua.identityservice.service.routing.AccountPlacementContext;
+import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRouter;
 import me.sarahlacerda.gua.identityservice.service.UsernamePolicy;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.Phase;
@@ -58,7 +61,8 @@ import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
  * authorization code is issued and the UI is handed the redirect URL back to
  * the requesting client (MAS).
  *
- * <p>State-changing calls are protected by a double-submit CSRF token issued in
+ * <p>
+ * State-changing calls are protected by a double-submit CSRF token issued in
  * {@code GET /login/context} and a {@code SameSite=Lax} session cookie.
  */
 @RestController
@@ -77,6 +81,7 @@ public class LoginFlowController {
     private final DirectoryService directoryService;
     private final PhoneNumberHasher phoneNumberHasher;
     private final PhoneNumberMasker phoneNumberMasker;
+    private final HomeserverRouter homeserverRouter;
     private final UserSecurityService userSecurityService;
     private final MatrixProvisioningService matrixProvisioningService;
     private final MatrixAdminClient matrixAdminClient;
@@ -174,19 +179,30 @@ public class LoginFlowController {
         requirePhase(session, Phase.PROFILE_REQUIRED);
 
         String localpart = usernamePolicy.normalizeAndValidate(request.username());
-        if (matrixAdminClient.userExists(matrixProvisioningService.buildUserId(localpart))) {
+        // Global-username uniqueness across the Gua federation is authoritative here
+        // (the per-homeserver userExists check below only sees one homeserver).
+        if (directoryService.isUsernameTaken(localpart)) {
+            throw new UsernameTakenException("Username already taken");
+        }
+
+        // Routing layer decides which homeserver this new account lives on.
+        Homeserver homeserver = homeserverRouter
+                .selectForNewAccount(AccountPlacementContext.forPhone(session.getPhoneNumber()));
+        if (matrixAdminClient.userExists(matrixProvisioningService.buildUserId(localpart, homeserver))) {
             throw new UsernameTakenException("Username already taken");
         }
 
         // The Matrix localpart is the chosen handle. Build the stable subject (the
         // OIDC sub / directory userId) from the same localpart so sub, the directory
         // entry, and the preferred_username claim MAS imports all agree.
-        String userId = matrixProvisioningService.buildUserId(localpart);
+        String userId = matrixProvisioningService.buildUserId(localpart, homeserver);
         String displayName = StringUtils.hasText(request.displayName()) ? request.displayName().trim() : localpart;
         String digest = phoneNumberHasher.digest(session.getPhoneNumber());
         String maskedPhone = phoneNumberMasker.mask(session.getPhoneNumber());
         try {
             directoryService.upsertByDigest(digest, maskedPhone, userId, displayName);
+            // Record the routing decision + reserve the global username alias.
+            directoryService.assignRouting(digest, homeserver.id(), localpart);
         } catch (DataIntegrityViolationException ex) {
             throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
         }
@@ -292,7 +308,10 @@ public class LoginFlowController {
                 redirectUrl);
     }
 
-    /** Extracts the localpart from a Matrix user id, e.g. {@code @alice:dev.local -> alice}. */
+    /**
+     * Extracts the localpart from a Matrix user id, e.g.
+     * {@code @alice:dev.local -> alice}.
+     */
     private static String localpartOf(String matrixUserId) {
         if (matrixUserId == null || matrixUserId.isBlank()) {
             return null;
@@ -322,16 +341,24 @@ public class LoginFlowController {
 
     // --- Request / response payloads ---
 
-    public record PhoneRequest(@NotBlank String phoneNumber, String locale) {}
+    public record PhoneRequest(@NotBlank String phoneNumber, String locale) {
+    }
 
-    public record OtpRequest(@NotBlank String code) {}
+    public record OtpRequest(@NotBlank String code) {
+    }
 
-    public record PinRequest(@NotBlank String pin) {}
+    public record PinRequest(@NotBlank String pin) {
+    }
 
-    /** PIN setup is optional: provide {@code pin} to enable it, or {@code skip:true} to finish without one. */
-    public record PinSetupRequest(String pin, boolean skip) {}
+    /**
+     * PIN setup is optional: provide {@code pin} to enable it, or {@code skip:true}
+     * to finish without one.
+     */
+    public record PinSetupRequest(String pin, boolean skip) {
+    }
 
-    public record ProfileRequest(@NotBlank String username, String displayName) {}
+    public record ProfileRequest(@NotBlank String username, String displayName) {
+    }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record LoginStateResponse(
@@ -341,5 +368,6 @@ public class LoginFlowController {
             String phoneHint,
             String csrfToken,
             boolean newUser,
-            String redirectUrl) {}
+            String redirectUrl) {
+    }
 }

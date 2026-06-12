@@ -15,7 +15,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 
 /**
- * Redis-backed store for {@link LoginSession}s. Sessions are keyed by an opaque,
+ * Redis-backed store for {@link LoginSession}s. Sessions are keyed by an
+ * opaque,
  * high-entropy identifier delivered to the browser as an HttpOnly cookie, and
  * expire after {@link LoginFlowProperties#getSessionTtl()}.
  */
@@ -52,13 +53,16 @@ public class LoginSessionService {
         }
     }
 
-    /** Writes the session, (re)setting its TTL so an active login does not expire mid-flow. */
+    /**
+     * Writes the session, (re)setting its TTL so an active login does not expire
+     * mid-flow.
+     */
     public void save(String id, LoginSession session) {
         try {
             redisTemplate.opsForValue().set(
-                keyFor(id),
-                objectMapper.writeValueAsString(session),
-                properties.getSessionTtl());
+                    keyFor(id),
+                    objectMapper.writeValueAsString(session),
+                    properties.getSessionTtl());
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("Failed to serialize login session", ex);
         }

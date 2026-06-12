@@ -26,6 +26,7 @@ public class IdentityServiceProperties {
 
     private final OtpProperties otp = new OtpProperties();
     private final MatrixProperties matrix = new MatrixProperties();
+    private final RoutingProperties routing = new RoutingProperties();
     private final DirectoryProperties directory = new DirectoryProperties();
     private final SecurityProperties security = new SecurityProperties();
     private final SmsProperties sms = new SmsProperties();
@@ -77,6 +78,53 @@ public class IdentityServiceProperties {
     public static class DirectoryProperties {
         @NotBlank
         private String pepper;
+    }
+
+    /**
+     * Routing / homeserver-registry configuration. When {@code homeservers} is
+     * empty, the registry synthesises a single homeserver from the legacy
+     * {@code identity.matrix.*} properties, so existing single-homeserver
+     * deployments keep working with no config change.
+     */
+    @Getter
+    @Setter
+    public static class RoutingProperties {
+        /** Placement strategy for new accounts: "single", "weighted", or "region". */
+        @NotBlank
+        private String strategy = "single";
+
+        /** Homeserver id new accounts default to when a rule does not match. */
+        private String defaultHomeserverId;
+
+        @Valid
+        private List<HomeserverConfig> homeservers = new ArrayList<>();
+    }
+
+    @Getter
+    @Setter
+    public static class HomeserverConfig {
+        @NotBlank
+        private String id;
+
+        @NotBlank
+        private String domain;
+
+        @NotBlank
+        private String adminApiBaseUrl;
+
+        @NotBlank
+        private String clientApiBaseUrl;
+
+        @NotBlank
+        private String adminAccessToken;
+
+        /** Optional placement hint, e.g. "br", "eu". */
+        private String region;
+
+        @Min(0)
+        private int weight = 1;
+
+        private boolean enabled = true;
     }
 
     @Getter

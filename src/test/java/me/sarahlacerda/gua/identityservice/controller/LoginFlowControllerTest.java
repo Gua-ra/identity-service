@@ -35,6 +35,7 @@ import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.UsernamePolicy;
+import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRouter;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.Phase;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
@@ -79,11 +80,16 @@ class LoginFlowControllerTest {
     @MockitoBean
     private OidcAuthorizationService authorizationService;
     @MockitoBean
+    private HomeserverRouter homeserverRouter;
+    @MockitoBean
     private EndpointRateLimiter endpointRateLimiter;
 
     @BeforeEach
     void setUp() {
         when(properties.getCookieName()).thenReturn("gua_login");
+        when(homeserverRouter.selectForNewAccount(any()))
+                .thenReturn(new me.sarahlacerda.gua.identityservice.domain.Homeserver(
+                        "default", "dev.local", null, null, null, null, 1, true));
     }
 
     private LoginSession session(Phase phase) {
@@ -105,7 +111,7 @@ class LoginFlowControllerTest {
 
     private OidcAuthorizationCode issuedCode() {
         return new OidcAuthorizationCode("auth-code",
-            new OidcAuthorization("u1", PHONE, "Alice", Set.of("openid"), "mas"), CALLBACK);
+                new OidcAuthorization("u1", PHONE, "Alice", Set.of("openid"), "mas"), CALLBACK);
     }
 
     @Test
@@ -113,8 +119,8 @@ class LoginFlowControllerTest {
         when(loginSessionService.find(any())).thenReturn(Optional.empty());
 
         mockMvc.perform(get("/login/context").cookie(cookie()))
-            .andExpect(status().isGone())
-            .andExpect(jsonPath("$.code").value("login_session_expired"));
+                .andExpect(status().isGone())
+                .andExpect(jsonPath("$.code").value("login_session_expired"));
     }
 
     @Test
@@ -126,9 +132,9 @@ class LoginFlowControllerTest {
                 .header("X-CSRF-Token", CSRF)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"phoneNumber\":\"" + PHONE + "\",\"locale\":\"pt-BR\"}"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.phase").value("OTP_SENT"))
-            .andExpect(jsonPath("$.maskedPhone").value("\u2022\u2022\u2022\u20224567"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("OTP_SENT"))
+                .andExpect(jsonPath("$.maskedPhone").value("\u2022\u2022\u2022\u20224567"));
 
         verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
     }
@@ -141,16 +147,16 @@ class LoginFlowControllerTest {
         when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
         when(userSecurityService.hasPin("u1")).thenReturn(false);
         when(authorizationService.issueCode(any(), eq(CALLBACK), any()))
-            .thenReturn(issuedCode());
+                .thenReturn(issuedCode());
 
         mockMvc.perform(post("/login/otp")
                 .cookie(cookie())
                 .header("X-CSRF-Token", CSRF)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"code\":\"123456\"}"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.phase").value("COMPLETED"))
-            .andExpect(jsonPath("$.redirectUrl").value(CALLBACK + "?code=auth-code&state=xyz"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.redirectUrl").value(CALLBACK + "?code=auth-code&state=xyz"));
 
         verify(otpService).verifyOtp(PHONE, "123456");
     }
@@ -168,8 +174,8 @@ class LoginFlowControllerTest {
                 .header("X-CSRF-Token", CSRF)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"code\":\"123456\"}"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.phase").value("PIN_REQUIRED"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_REQUIRED"));
     }
 
     @Test
@@ -183,9 +189,9 @@ class LoginFlowControllerTest {
                 .header("X-CSRF-Token", CSRF)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"code\":\"123456\"}"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.phase").value("PROFILE_REQUIRED"))
-            .andExpect(jsonPath("$.newUser").value(true));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PROFILE_REQUIRED"))
+                .andExpect(jsonPath("$.newUser").value(true));
     }
 
     @Test
@@ -195,15 +201,15 @@ class LoginFlowControllerTest {
         session.setDisplayName("Alice");
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
         when(authorizationService.issueCode(any(), eq(CALLBACK), any()))
-            .thenReturn(issuedCode());
+                .thenReturn(issuedCode());
 
         mockMvc.perform(post("/login/pin")
                 .cookie(cookie())
                 .header("X-CSRF-Token", CSRF)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"pin\":\"123456\"}"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.phase").value("COMPLETED"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
 
         verify(userSecurityService).validatePinOrThrow("u1", "123456");
     }
@@ -212,7 +218,8 @@ class LoginFlowControllerTest {
     void submitProfileReservesUsernameAndAdvancesToPinSetup() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PROFILE_REQUIRED)));
         when(usernamePolicy.normalizeAndValidate("Alice")).thenReturn("alice");
-        when(matrixProvisioningService.buildUserId("alice")).thenReturn("@alice:gua.local");
+        when(directoryService.isUsernameTaken("alice")).thenReturn(false);
+        when(matrixProvisioningService.buildUserId(eq("alice"), any())).thenReturn("@alice:gua.local");
         when(matrixAdminClient.userExists("@alice:gua.local")).thenReturn(false);
 
         mockMvc.perform(post("/login/profile")
@@ -220,8 +227,8 @@ class LoginFlowControllerTest {
                 .header("X-CSRF-Token", CSRF)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"username\":\"Alice\",\"displayName\":\"Alice A\"}"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
 
         verify(directoryService).upsertByDigest(any(), any(), eq("@alice:gua.local"), eq("Alice A"));
     }
@@ -238,8 +245,8 @@ class LoginFlowControllerTest {
                 .header("X-CSRF-Token", CSRF)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"pin\":\"123456\"}"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.phase").value("COMPLETED"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
 
         verify(userSecurityService).setInitialPin("@alice:gua.local", "123456");
     }
@@ -256,8 +263,8 @@ class LoginFlowControllerTest {
                 .header("X-CSRF-Token", CSRF)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"skip\":true}"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.phase").value("COMPLETED"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
 
         verify(userSecurityService, org.mockito.Mockito.never()).setInitialPin(any(), any());
     }
@@ -270,8 +277,8 @@ class LoginFlowControllerTest {
                 .cookie(cookie())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"code\":\"123456\"}"))
-            .andExpect(status().isForbidden())
-            .andExpect(jsonPath("$.code").value("csrf_failed"));
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("csrf_failed"));
     }
 
     @Test
@@ -283,7 +290,7 @@ class LoginFlowControllerTest {
                 .header("X-CSRF-Token", CSRF)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"pin\":\"123456\"}"))
-            .andExpect(status().isConflict())
-            .andExpect(jsonPath("$.code").value("unexpected_step"));
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("unexpected_step"));
     }
 }

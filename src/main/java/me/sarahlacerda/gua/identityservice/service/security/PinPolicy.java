@@ -10,9 +10,11 @@ import me.sarahlacerda.gua.identityservice.exception.InvalidPinException;
 import me.sarahlacerda.gua.identityservice.exception.WeakPinException;
 
 /**
- * Single source of truth for account-PIN (two-step verification) strength rules.
+ * Single source of truth for account-PIN (two-step verification) strength
+ * rules.
  *
- * <p>A PIN must be exactly six digits and must not be trivially guessable. The
+ * <p>
+ * A PIN must be exactly six digits and must not be trivially guessable. The
  * rules follow NIST SP 800-63B guidance, which requires rejecting values that
  * are sequential, repetitive, or known to be commonly chosen. The same checks
  * are mirrored (best-effort, for instant feedback) in the clients, but this
@@ -42,7 +44,8 @@ public class PinPolicy {
     /**
      * Validates a candidate PIN's format and strength.
      *
-     * @throws InvalidPinException when the PIN is missing, not six digits, or too weak
+     * @throws InvalidPinException when the PIN is missing, not six digits, or too
+     *                             weak
      */
     public void validate(String pin) {
         if (!StringUtils.hasText(pin) || !SIX_DIGITS.matcher(pin).matches()) {
