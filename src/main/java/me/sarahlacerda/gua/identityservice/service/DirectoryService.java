@@ -23,7 +23,8 @@ public class DirectoryService {
     private final DirectoryEntryRepository repository;
 
     /**
-     * Upsert a directory entry. A {@code null} {@code displayName} preserves the existing value
+     * Upsert a directory entry. A {@code null} {@code displayName} preserves the
+     * existing value
      * (no overwrite); pass an empty string to clear it explicitly.
      */
     @Transactional
@@ -39,13 +40,13 @@ public class DirectoryService {
     @Transactional
     public DirectoryEntry upsertByDigest(String phoneDigest, String phoneMasked, String userId, String displayName) {
         DirectoryEntry entry = repository.findByPhoneDigest(phoneDigest)
-            .map(existing -> updateExisting(existing, phoneMasked, userId, displayName))
-            .orElseGet(() -> DirectoryEntry.builder()
-                .phoneDigest(phoneDigest)
-                .phoneMasked(phoneMasked)
-                .userId(userId)
-                .displayName(displayName)
-                .build());
+                .map(existing -> updateExisting(existing, phoneMasked, userId, displayName))
+                .orElseGet(() -> DirectoryEntry.builder()
+                        .phoneDigest(phoneDigest)
+                        .phoneMasked(phoneMasked)
+                        .userId(userId)
+                        .displayName(displayName)
+                        .build());
         return repository.save(entry);
     }
 
@@ -70,8 +71,8 @@ public class DirectoryService {
     @Transactional(readOnly = true)
     public List<DirectoryMatch> lookupMatches(Collection<String> digests) {
         return repository.findByPhoneDigestIn(digests).stream()
-            .map(entry -> new DirectoryMatch(entry.getPhoneDigest(), entry.getUserId(), entry.getDisplayName()))
-            .toList();
+                .map(entry -> new DirectoryMatch(entry.getPhoneDigest(), entry.getUserId(), entry.getDisplayName()))
+                .toList();
     }
 
     @Transactional
@@ -91,8 +92,46 @@ public class DirectoryService {
     @Transactional(readOnly = true)
     public Optional<String> findMaskedPhoneByUserId(String userId) {
         return repository.findByUserId(userId).stream()
-            .map(DirectoryEntry::getPhoneMasked)
-            .filter(masked -> masked != null && !masked.isBlank())
-            .findFirst();
+                .map(DirectoryEntry::getPhoneMasked)
+                .filter(masked -> masked != null && !masked.isBlank())
+                .findFirst();
+    }
+
+    // --- Routing-at-scale (Gua federation) -------------------------------------
+
+    /**
+     * Records the routing decision for an account: which homeserver it lives on and
+     * the globally-unique username alias. Looked up by phone digest (the account's
+     * stable directory key). A {@code null} value leaves the existing column
+     * untouched so this is safe to call on re-link.
+     */
+    @Transactional
+    public DirectoryEntry assignRouting(String phoneDigest, String homeserverId, String username) {
+        DirectoryEntry entry = repository.findByPhoneDigest(phoneDigest)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Cannot assign routing: no directory entry for the given phone digest"));
+        if (homeserverId != null) {
+            entry.setHomeserverId(homeserverId);
+        }
+        if (username != null) {
+            entry.setUsername(username);
+        }
+        return repository.save(entry);
+    }
+
+    /** True when the (case-insensitive) global username is already taken. */
+    @Transactional(readOnly = true)
+    public boolean isUsernameTaken(String username) {
+        return repository.existsByUsernameIgnoreCase(username);
+    }
+
+    /**
+     * Resolves a global username to its directory entry (Matrix user id +
+     * homeserver). This is the routing lookup that lets the federation find where a
+     * given identity lives.
+     */
+    @Transactional(readOnly = true)
+    public Optional<DirectoryEntry> resolveByUsername(String username) {
+        return repository.findByUsernameIgnoreCase(username);
     }
 }

@@ -19,6 +19,7 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.domain.MatrixLoginResponse;
 import me.sarahlacerda.gua.identityservice.domain.MatrixSession;
 import me.sarahlacerda.gua.identityservice.client.matrix.MatrixAdminClient;
+import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRegistry;
 
 class MatrixProvisioningServiceTest {
 
@@ -29,8 +30,11 @@ class MatrixProvisioningServiceTest {
     @BeforeEach
     void setUp() {
         properties = new IdentityServiceProperties();
+        properties.getMatrix().setHomeserverDomain("dev.local");
         matrixAdminClient = Mockito.mock(MatrixAdminClient.class);
-        service = new MatrixProvisioningService(properties, matrixAdminClient);
+        HomeserverRegistry homeserverRegistry = new HomeserverRegistry(properties);
+        homeserverRegistry.init();
+        service = new MatrixProvisioningService(properties, matrixAdminClient, homeserverRegistry);
     }
 
     @Test

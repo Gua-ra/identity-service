@@ -21,6 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import me.sarahlacerda.gua.identityservice.controller.dto.DirectoryLookupRequest;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
+import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRegistry;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import org.junit.jupiter.api.extension.ExtendWith;
 
@@ -31,6 +32,9 @@ class DirectoryControllerTest {
     private DirectoryService directoryService;
 
     @Mock
+    private HomeserverRegistry homeserverRegistry;
+
+    @Mock
     private AuthenticatedUserAccessor authenticatedUserAccessor;
 
     private MockMvc mockMvc;
@@ -39,7 +43,7 @@ class DirectoryControllerTest {
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
-        DirectoryController controller = new DirectoryController(directoryService, authenticatedUserAccessor);
+        DirectoryController controller = new DirectoryController(directoryService, homeserverRegistry, authenticatedUserAccessor);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
             .setMessageConverters(new MappingJackson2HttpMessageConverter())
             .build();

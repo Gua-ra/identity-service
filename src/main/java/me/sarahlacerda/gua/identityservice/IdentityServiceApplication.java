@@ -10,7 +10,7 @@ import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.config.OidcProperties;
 
 @SpringBootApplication(exclude = UserDetailsServiceAutoConfiguration.class)
-@EnableConfigurationProperties({IdentityServiceProperties.class, OidcProperties.class, LoginFlowProperties.class})
+@EnableConfigurationProperties({ IdentityServiceProperties.class, OidcProperties.class, LoginFlowProperties.class })
 public class IdentityServiceApplication {
 
     public static void main(String[] args) {

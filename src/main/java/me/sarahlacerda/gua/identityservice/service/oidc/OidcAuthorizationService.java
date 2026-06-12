@@ -46,23 +46,23 @@ public class OidcAuthorizationService {
         Optional<DirectoryEntry> existingEntry = directoryService.findByDigest(digest);
 
         String userId = existingEntry
-            .map(DirectoryEntry::getUserId)
-            .orElseGet(matrixProvisioningService::generateOpaqueUserId);
+                .map(DirectoryEntry::getUserId)
+                .orElseGet(matrixProvisioningService::generateOpaqueUserId);
 
         String resolvedDisplayName = resolveDisplayName(request.displayName(), existingEntry);
 
-        directoryService.upsertByDigest(digest, phoneNumberMasker.mask(request.phoneNumber()), userId, resolvedDisplayName);
+        directoryService.upsertByDigest(digest, phoneNumberMasker.mask(request.phoneNumber()), userId,
+                resolvedDisplayName);
         userSecurityService.recordSuccessfulLogin(userId);
 
         OidcAuthorization authorization = new OidcAuthorization(
-            userId,
-            request.phoneNumber(),
-            resolvedDisplayName,
-            null,
-            request.scope(),
-            request.clientId(),
-            null
-        );
+                userId,
+                request.phoneNumber(),
+                resolvedDisplayName,
+                null,
+                request.scope(),
+                request.clientId(),
+                null);
 
         return issueCode(authorization, request.redirectUri(), request.codeChallenge());
     }
@@ -77,7 +77,7 @@ public class OidcAuthorizationService {
         String code = generateCode();
         persist(code, authorization, redirectUri, codeChallenge);
         return new OidcAuthorizationCode(code, authorization, redirectUri,
-            Optional.ofNullable(codeChallenge));
+                Optional.ofNullable(codeChallenge));
     }
 
     public Optional<OidcAuthorizationCode> consumeAuthorizationCode(String code) {
@@ -90,16 +90,15 @@ public class OidcAuthorizationService {
         try {
             AuthorizationCodePayload stored = objectMapper.readValue(payload, AuthorizationCodePayload.class);
             OidcAuthorization authorization = new OidcAuthorization(
-                stored.userId(),
-                stored.phoneNumber(),
-                stored.displayName(),
-                stored.preferredUsername(),
-                Set.copyOf(stored.scope()),
-                stored.clientId(),
-                stored.nonce()
-            );
+                    stored.userId(),
+                    stored.phoneNumber(),
+                    stored.displayName(),
+                    stored.preferredUsername(),
+                    Set.copyOf(stored.scope()),
+                    stored.clientId(),
+                    stored.nonce());
             return Optional.of(new OidcAuthorizationCode(code, authorization, stored.redirectUri(),
-                Optional.ofNullable(stored.codeChallenge())));
+                    Optional.ofNullable(stored.codeChallenge())));
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("Failed to deserialize authorization code", ex);
         }
@@ -107,22 +106,20 @@ public class OidcAuthorizationService {
 
     private void persist(String code, OidcAuthorization authorization, String redirectUri, String codeChallenge) {
         AuthorizationCodePayload payload = new AuthorizationCodePayload(
-            authorization.userId(),
-            authorization.phoneNumber(),
-            authorization.displayName(),
-            authorization.preferredUsername(),
-            authorization.scope(),
-            authorization.clientId(),
-            authorization.nonce(),
-            redirectUri,
-            codeChallenge
-        );
+                authorization.userId(),
+                authorization.phoneNumber(),
+                authorization.displayName(),
+                authorization.preferredUsername(),
+                authorization.scope(),
+                authorization.clientId(),
+                authorization.nonce(),
+                redirectUri,
+                codeChallenge);
         try {
             redisTemplate.opsForValue().set(
-                keyFor(code),
-                objectMapper.writeValueAsString(payload),
-                properties.getAuthorizationCodeTtl()
-            );
+                    keyFor(code),
+                    objectMapper.writeValueAsString(payload),
+                    properties.getAuthorizationCodeTtl());
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("Failed to serialize authorization code", ex);
         }
@@ -146,14 +143,14 @@ public class OidcAuthorizationService {
     }
 
     private record AuthorizationCodePayload(
-        String userId,
-        String phoneNumber,
-        String displayName,
-        String preferredUsername,
-        Set<String> scope,
-        String clientId,
-        String nonce,
-        String redirectUri,
-        String codeChallenge
-    ) {}
+            String userId,
+            String phoneNumber,
+            String displayName,
+            String preferredUsername,
+            Set<String> scope,
+            String clientId,
+            String nonce,
+            String redirectUri,
+            String codeChallenge) {
+    }
 }

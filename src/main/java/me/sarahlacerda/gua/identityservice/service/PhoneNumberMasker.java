@@ -4,11 +4,14 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
- * Produces a privacy-preserving, display-only mask of an E.164 phone number that
+ * Produces a privacy-preserving, display-only mask of an E.164 phone number
+ * that
  * reveals only the last four digits (e.g. {@code +15551234567 -> ••••4567}).
  *
- * <p>The mask is intentionally NOT reversible to the full number; it exists so
- * users can recognise which phone is linked to their account without the service
+ * <p>
+ * The mask is intentionally NOT reversible to the full number; it exists so
+ * users can recognise which phone is linked to their account without the
+ * service
  * having to store the raw value.
  */
 @Component

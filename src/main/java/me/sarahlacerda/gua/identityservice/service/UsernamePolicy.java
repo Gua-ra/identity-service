@@ -11,7 +11,8 @@ import me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException;
 
 /**
  * Single source of truth for Gua username (Matrix localpart) rules: 3-30
- * characters of lowercase letters, digits, dot, underscore, or dash, excluding a
+ * characters of lowercase letters, digits, dot, underscore, or dash, excluding
+ * a
  * reserved set. Shared by the legacy signup flow and the interactive OIDC login
  * flow so both validate handles identically.
  */
@@ -28,7 +29,8 @@ public class UsernamePolicy {
      * Normalizes (trim + lowercase) and validates a requested username.
      *
      * @return the normalized localpart
-     * @throws InvalidUsernameException when the username is missing, malformed, or reserved
+     * @throws InvalidUsernameException when the username is missing, malformed, or
+     *                                  reserved
      */
     public String normalizeAndValidate(String rawUsername) {
         if (!StringUtils.hasText(rawUsername)) {

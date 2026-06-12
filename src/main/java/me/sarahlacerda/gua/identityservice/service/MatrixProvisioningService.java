@@ -8,9 +8,11 @@ import java.util.UUID;
 
 import lombok.RequiredArgsConstructor;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
+import me.sarahlacerda.gua.identityservice.domain.Homeserver;
 import me.sarahlacerda.gua.identityservice.domain.MatrixLoginResponse;
 import me.sarahlacerda.gua.identityservice.domain.MatrixSession;
 import me.sarahlacerda.gua.identityservice.client.matrix.MatrixAdminClient;
+import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRegistry;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -19,9 +21,25 @@ public class MatrixProvisioningService {
 
     private final IdentityServiceProperties properties;
     private final MatrixAdminClient matrixAdminClient;
+    private final HomeserverRegistry homeserverRegistry;
     private final SecureRandom secureRandom = new SecureRandom();
 
+    /**
+     * Generates an opaque, prefixed localpart for a brand-new account on the given
+     * homeserver. The localpart is intentionally NOT the user's chosen handle:
+     * under Gua's routing model the human-readable username lives in the directory
+     * (as a global alias), decoupled from the MXID.
+     */
+    public String generateOpaqueUserId(Homeserver homeserver) {
+        return homeserver.userId(generateOpaqueLocalpart());
+    }
+
+    /** Back-compatible overload: places on the default homeserver. */
     public String generateOpaqueUserId() {
+        return generateOpaqueUserId(homeserverRegistry.getDefault());
+    }
+
+    private String generateOpaqueLocalpart() {
         String prefix = properties.getMatrix().getUserLocalpartPrefix();
         if (prefix == null) {
             prefix = "";
@@ -31,12 +49,17 @@ public class MatrixProvisioningService {
             prefix = "u";
         }
         String random = UUID.randomUUID().toString().replace("-", "");
-        String localPart = prefix + random;
-        return buildUserId(localPart);
+        return prefix + random;
     }
 
+    /** Builds the full MXID for a localpart on a specific homeserver. */
+    public String buildUserId(String localpart, Homeserver homeserver) {
+        return homeserver.userId(localpart);
+    }
+
+    /** Back-compatible overload: builds the MXID on the default homeserver. */
     public String buildUserId(String localpart) {
-        return "@" + localpart + ":" + properties.getMatrix().getHomeserverDomain();
+        return buildUserId(localpart, homeserverRegistry.getDefault());
     }
 
     public MatrixSession ensureSessionForUser(String userId, String phone, String displayName,
