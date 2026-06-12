@@ -57,7 +57,7 @@ services:
       - "8008:8008"
 
   mas:
-    image: ghcr.io/gua-ra/gua-auth-service:v1.18.0-gua.1
+    image: ghcr.io/gua-ra/gua-auth-service:v1.18.0-gua.2
     container_name: mas
     depends_on:
       - mas-db
