@@ -61,6 +61,19 @@ For login, MAS redirects the browser to `GET /oauth2/authorize`; the identity se
 
 ---
 
+## 🧭 Routing & global usernames (federation at scale)
+
+The identity service is the **routing authority** for a **Gua-controlled federation** — a set of homeservers Gua operates (à la [Tchap](https://github.com/tchapgouv), the French government's closed Matrix federation). It is *not* the open Matrix network: global-username uniqueness is a guarantee only within Gua's own homeservers.
+
+- **Homeserver registry** (`identity.routing.homeservers`) lists the homeservers accounts can live on (`id`, `domain`, admin URL, region, weight, enabled). When unset, a single homeserver is synthesised from the legacy `identity.matrix.*` properties, so single-homeserver deployments need no config change.
+- **Routing layer** (`HomeserverRouter`) decides which homeserver a **new** account lives on, by rule (`single` / `region` / `weighted`). Placement is decided **once at signup** and recorded in the directory. Relocating an account between homeservers is a protocol-level limitation of Matrix (immutable MXIDs) and is intentionally out of scope.
+- **Global usernames** are unique across the federation (case-insensitive), enforced by the directory (`directory_entries.username` + unique index). The username is a stable **alias** recorded alongside the account's `homeserver_id`, so the federation can resolve *where an identity lives*. `GET /directory/resolve?username=` returns the MXID + homeserver for a username.
+- The UI treats the full Matrix ID `@id:server` as an implementation detail — users see only their username; the directory maps it to the authoritative MXID + homeserver.
+
+> Roadmap: the **opaque-MXID** model (fully decoupling the human handle from the MXID, the strongest hedge for any future account portability) is staged as a follow-up because it changes the MAS `preferred_username` → Synapse provisioning chain. Today the chosen handle is both the MXID localpart and the recorded global username.
+
+---
+
 ## 🔀 MAS fork — `Gua-ra/gua-auth-service`
 
 The identity stack uses **[`Gua-ra/gua-auth-service`](https://github.com/Gua-ra/gua-auth-service)**, a minimal fork of [`element-hq/matrix-authentication-service`](https://github.com/element-hq/matrix-authentication-service) (MAS).
@@ -195,6 +208,7 @@ Each privileged operation requires a fresh **reauth token** proving phone posses
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
 | `POST /directory/lookup` | Bearer | Resolve contacts by salted phone hash. |
+| `GET /directory/resolve?username=` | Bearer | Resolve a global username to its Matrix user id + homeserver (federation routing lookup). |
 
 ---
 
