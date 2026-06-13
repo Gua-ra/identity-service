@@ -3,6 +3,7 @@ package me.sarahlacerda.gua.identityservice.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -32,359 +33,381 @@ import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 @ExtendWith(MockitoExtension.class)
 class IdentityOrchestrationServiceTest {
 
-    private static final String CLIENT_BASE_URL = "https://matrix";
+        private static final String CLIENT_BASE_URL = "https://matrix";
 
-    @Mock
-    private OtpService otpService;
-    @Mock
-    private MatrixProvisioningService matrixProvisioningService;
-    @Mock
-    private MatrixAdminClient matrixAdminClient;
-    @Mock
-    private SignupTokenService signupTokenService;
-    @Mock
-    private PinChallengeService pinChallengeService;
-    @Mock
-    private DirectoryService directoryService;
-    @Mock
-    private PhoneNumberHasher phoneNumberHasher;
-    @Mock
-    private UserSecurityService userSecurityService;
-    @Mock
-    private TrustedDeviceService trustedDeviceService;
-    @Mock
-    private DeviceNotificationService deviceNotificationService;
+        @Mock
+        private OtpService otpService;
+        @Mock
+        private MatrixProvisioningService matrixProvisioningService;
+        @Mock
+        private MatrixAdminClient matrixAdminClient;
+        @Mock
+        private SignupTokenService signupTokenService;
+        @Mock
+        private PinChallengeService pinChallengeService;
+        @Mock
+        private DirectoryService directoryService;
+        @Mock
+        private PhoneNumberHasher phoneNumberHasher;
+        @Mock
+        private UserSecurityService userSecurityService;
+        @Mock
+        private TrustedDeviceService trustedDeviceService;
+        @Mock
+        private DeviceNotificationService deviceNotificationService;
 
-    private IdentityOrchestrationService service;
+        private final UsernamePolicy usernamePolicy = new UsernamePolicy();
 
-    @BeforeEach
-    void setUp() {
-        service = new IdentityOrchestrationService(
-                otpService,
-                matrixProvisioningService,
-                matrixAdminClient,
-                signupTokenService,
-                pinChallengeService,
-                directoryService,
-                phoneNumberHasher,
-                userSecurityService,
-                trustedDeviceService,
-                deviceNotificationService);
-    }
+        private IdentityOrchestrationService service;
 
-    @Test
-    void verifyOtpAndSignInIssuesSignupTokenForNewPhone() {
-        String phone = "+12025550123";
-        String digest = "digest";
-        DeviceMetadata metadata = DeviceMetadata.builder()
-                .deviceName("iPhone")
-                .platform("iOS")
-                .appVersion("1.0.0")
-                .ipAddress("127.0.0.1")
-                .build();
+        @BeforeEach
+        void setUp() {
+                service = new IdentityOrchestrationService(
+                                otpService,
+                                matrixProvisioningService,
+                                matrixAdminClient,
+                                signupTokenService,
+                                pinChallengeService,
+                                directoryService,
+                                phoneNumberHasher,
+                                new PhoneNumberMasker(),
+                                userSecurityService,
+                                trustedDeviceService,
+                                deviceNotificationService,
+                                usernamePolicy);
+        }
 
-        when(phoneNumberHasher.digest(phone)).thenReturn(digest);
-        when(directoryService.findByDigest(digest)).thenReturn(Optional.empty());
-        when(signupTokenService.issue(phone)).thenReturn("signup-abc");
+        @Test
+        void verifyOtpAndSignInIssuesSignupTokenForNewPhone() {
+                String phone = "+12025550123";
+                String digest = "digest";
+                DeviceMetadata metadata = DeviceMetadata.builder()
+                                .deviceName("iPhone")
+                                .platform("iOS")
+                                .appVersion("1.0.0")
+                                .ipAddress("127.0.0.1")
+                                .build();
 
-        VerifyOtpResult result = service.verifyOtpAndSignIn(phone, "123456", null, metadata);
+                when(phoneNumberHasher.digest(phone)).thenReturn(digest);
+                when(directoryService.findByDigest(digest)).thenReturn(Optional.empty());
+                when(signupTokenService.issue(phone)).thenReturn("signup-abc");
 
-        verify(otpService).verifyOtp(phone, "123456");
-        verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(), eq(true));
-        verify(directoryService, never()).upsertByDigest(any(), any(), any());
-        assertThat(result.isNewUser()).isTrue();
-        assertThat(result.signupToken()).isEqualTo("signup-abc");
-        assertThat(result.session()).isNull();
-    }
+                VerifyOtpResult result = service.verifyOtpAndSignIn(phone, "123456", null, metadata);
 
-    @Test
-    void verifyOtpAndSignInValidatesPinForExistingUser() {
-        String phone = "+12025550199";
-        String digest = "existing-digest";
-        DirectoryEntry existingEntry = DirectoryEntry.builder()
-                .phoneDigest(digest)
-                .userId("@existing:gua.global")
-                .displayName("Existing User")
-                .build();
-        DeviceMetadata metadata = DeviceMetadata.builder()
-                .deviceName("Pixel")
-                .platform("Android")
-                .appVersion("2.1.0")
-                .ipAddress("10.0.0.5")
-                .build();
-        MatrixSession session = new MatrixSession("existing-token", existingEntry.getUserId(), "device-9",
-                CLIENT_BASE_URL);
+                verify(otpService).verifyOtp(phone, "123456");
+                verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(), eq(true));
+                verify(directoryService, never()).upsertByDigest(any(), anyString(), any(), any());
+                assertThat(result.isNewUser()).isTrue();
+                assertThat(result.signupToken()).isEqualTo("signup-abc");
+                assertThat(result.session()).isNull();
+        }
 
-        when(phoneNumberHasher.digest(phone)).thenReturn(digest);
-        when(directoryService.findByDigest(digest)).thenReturn(Optional.of(existingEntry));
-        when(userSecurityService.hasPin(existingEntry.getUserId())).thenReturn(true);
-        when(matrixProvisioningService.ensureSessionForUser(existingEntry.getUserId(), phone, "Existing User", true))
-                .thenReturn(session);
-        when(trustedDeviceService.registerDevice(existingEntry.getUserId(), "device-9", metadata)).thenReturn(false);
+        @Test
+        void verifyOtpAndSignInValidatesPinForExistingUser() {
+                String phone = "+12025550199";
+                String digest = "existing-digest";
+                DirectoryEntry existingEntry = DirectoryEntry.builder()
+                                .phoneDigest(digest)
+                                .userId("@existing:gua.global")
+                                .displayName("Existing User")
+                                .build();
+                DeviceMetadata metadata = DeviceMetadata.builder()
+                                .deviceName("Pixel")
+                                .platform("Android")
+                                .appVersion("2.1.0")
+                                .ipAddress("10.0.0.5")
+                                .build();
+                MatrixSession session = new MatrixSession("existing-token", existingEntry.getUserId(), "device-9",
+                                CLIENT_BASE_URL);
 
-        VerifyOtpResult result = service.verifyOtpAndSignIn(phone, "000000", "111111", metadata);
+                when(phoneNumberHasher.digest(phone)).thenReturn(digest);
+                when(directoryService.findByDigest(digest)).thenReturn(Optional.of(existingEntry));
+                when(userSecurityService.hasPin(existingEntry.getUserId())).thenReturn(true);
+                when(matrixProvisioningService.ensureSessionForUser(existingEntry.getUserId(), phone, "Existing User",
+                                true))
+                                .thenReturn(session);
+                when(trustedDeviceService.registerDevice(existingEntry.getUserId(), "device-9", metadata))
+                                .thenReturn(false);
 
-        verify(signupTokenService, never()).issue(any());
-        verify(matrixProvisioningService, never()).generateOpaqueUserId();
-        verify(userSecurityService).validatePinOrThrow(existingEntry.getUserId(), "111111");
-        verify(userSecurityService, never()).setInitialPin(any(), any());
-        verify(directoryService).upsertByDigest(digest, existingEntry.getUserId(), "Existing User");
-        verify(userSecurityService).recordSuccessfulLogin(existingEntry.getUserId());
-        verify(deviceNotificationService, never()).notifyNewDevice(any(), any(), any());
-        assertThat(result.isNewUser()).isFalse();
-        assertThat(result.session()).isEqualTo(session);
-    }
+                VerifyOtpResult result = service.verifyOtpAndSignIn(phone, "000000", "111111", metadata);
 
-    @Test
-    void completeSignupProvisionsMatrixWithChosenUsernameAndDisplayName() {
-        String phone = "+12025550123";
-        String digest = "new-digest";
-        String userId = "@alice:gua.global";
-        MatrixSession session = new MatrixSession("token", userId, "device-1", CLIENT_BASE_URL);
-        DeviceMetadata metadata = DeviceMetadata.builder()
-                .deviceName("iPhone")
-                .platform("iOS")
-                .appVersion("1.0.0")
-                .ipAddress("127.0.0.1")
-                .build();
+                verify(signupTokenService, never()).issue(any());
+                verify(matrixProvisioningService, never()).generateOpaqueUserId();
+                verify(userSecurityService).validatePinOrThrow(existingEntry.getUserId(), "111111");
+                verify(userSecurityService, never()).setInitialPin(any(), any());
+                verify(directoryService).upsertByDigest(eq(digest), anyString(), eq(existingEntry.getUserId()),
+                                eq("Existing User"));
+                verify(userSecurityService).recordSuccessfulLogin(existingEntry.getUserId());
+                verify(deviceNotificationService, never()).notifyNewDevice(any(), any(), any());
+                assertThat(result.isNewUser()).isFalse();
+                assertThat(result.session()).isEqualTo(session);
+        }
 
-        when(signupTokenService.peek("signup-abc")).thenReturn(phone);
-        when(signupTokenService.consume("signup-abc")).thenReturn(phone);
-        when(phoneNumberHasher.digest(phone)).thenReturn(digest);
-        when(directoryService.findByDigest(digest)).thenReturn(Optional.empty());
-        when(matrixProvisioningService.buildUserId("alice")).thenReturn(userId);
-        when(matrixAdminClient.userExists(userId)).thenReturn(false);
-        when(matrixProvisioningService.ensureSessionForUser(userId, phone, "Alice L.", true)).thenReturn(session);
-        when(trustedDeviceService.registerDevice(userId, "device-1", metadata)).thenReturn(true);
+        @Test
+        void completeSignupProvisionsMatrixWithChosenUsernameAndDisplayName() {
+                String phone = "+12025550123";
+                String digest = "new-digest";
+                String userId = "@alice:gua.global";
+                MatrixSession session = new MatrixSession("token", userId, "device-1", CLIENT_BASE_URL);
+                DeviceMetadata metadata = DeviceMetadata.builder()
+                                .deviceName("iPhone")
+                                .platform("iOS")
+                                .appVersion("1.0.0")
+                                .ipAddress("127.0.0.1")
+                                .build();
 
-        MatrixSession result = service.completeSignup("signup-abc", "Alice", "Alice L.", "654321", metadata);
+                when(signupTokenService.peek("signup-abc")).thenReturn(phone);
+                when(signupTokenService.consume("signup-abc")).thenReturn(phone);
+                when(phoneNumberHasher.digest(phone)).thenReturn(digest);
+                when(directoryService.findByDigest(digest)).thenReturn(Optional.empty());
+                when(matrixProvisioningService.buildUserId("alice")).thenReturn(userId);
+                when(matrixAdminClient.userExists(userId)).thenReturn(false);
+                when(matrixProvisioningService.ensureSessionForUser(userId, phone, "Alice L.", true))
+                                .thenReturn(session);
+                when(trustedDeviceService.registerDevice(userId, "device-1", metadata)).thenReturn(true);
 
-        verify(signupTokenService).consume("signup-abc");
-        verify(userSecurityService).setInitialPin(userId, "654321");
-        verify(directoryService).upsertByDigest(digest, userId, "Alice L.");
-        verify(userSecurityService).recordSuccessfulLogin(userId);
-        verify(deviceNotificationService).notifyNewDevice(userId, "device-1", metadata);
-        assertThat(result).isEqualTo(session);
-    }
+                MatrixSession result = service.completeSignup("signup-abc", "Alice", "Alice L.", "654321", metadata);
 
-    @Test
-    void completeSignupRejectsInvalidUsername() {
-        assertThatThrownBy(() -> service.completeSignup("token", "ab", "Display", null, null))
-                .isInstanceOf(InvalidUsernameException.class);
+                verify(signupTokenService).consume("signup-abc");
+                verify(userSecurityService).setInitialPin(userId, "654321");
+                verify(directoryService).upsertByDigest(eq(digest), anyString(), eq(userId), eq("Alice L."));
+                verify(userSecurityService).recordSuccessfulLogin(userId);
+                verify(deviceNotificationService).notifyNewDevice(userId, "device-1", metadata);
+                assertThat(result).isEqualTo(session);
+        }
 
-        verify(signupTokenService, never()).consume(any());
-        verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(), eq(true));
-    }
+        @Test
+        void completeSignupRejectsInvalidUsername() {
+                assertThatThrownBy(() -> service.completeSignup("token", "ab", "Display", null, null))
+                                .isInstanceOf(InvalidUsernameException.class);
 
-    @Test
-    void completeSignupRejectsReservedUsername() {
-        assertThatThrownBy(() -> service.completeSignup("token", "admin", "Display", null, null))
-                .isInstanceOf(InvalidUsernameException.class);
+                verify(signupTokenService, never()).consume(any());
+                verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(), eq(true));
+        }
 
-        verify(signupTokenService, never()).consume(any());
-    }
+        @Test
+        void completeSignupRejectsReservedUsername() {
+                assertThatThrownBy(() -> service.completeSignup("token", "admin", "Display", null, null))
+                                .isInstanceOf(InvalidUsernameException.class);
 
-    @Test
-    void completeSignupRejectsTakenUsernameWithoutConsumingToken() {
-        when(signupTokenService.peek("token")).thenReturn("+12025550123");
-        when(phoneNumberHasher.digest("+12025550123")).thenReturn("digest");
-        when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
-        when(matrixProvisioningService.buildUserId("alice")).thenReturn("@alice:gua.global");
-        when(matrixAdminClient.userExists("@alice:gua.global")).thenReturn(true);
+                verify(signupTokenService, never()).consume(any());
+        }
 
-        assertThatThrownBy(() -> service.completeSignup("token", "alice", "Alice", null, null))
-                .isInstanceOf(UsernameTakenException.class);
+        @Test
+        void completeSignupRejectsAllNumericUsername() {
+                assertThatThrownBy(() -> service.completeSignup("token", "555", "Display", null, null))
+                                .isInstanceOf(InvalidUsernameException.class);
 
-        verify(signupTokenService, never()).consume(any());
-        verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(), eq(true));
-    }
+                verify(signupTokenService, never()).consume(any());
+                verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(), eq(true));
+        }
 
-    @Test
-    void completeSignupRejectsWhenPhoneAlreadyLinkedConcurrently() {
-        when(signupTokenService.peek("token")).thenReturn("+12025550123");
-        when(phoneNumberHasher.digest("+12025550123")).thenReturn("digest");
-        when(directoryService.findByDigest("digest"))
-                .thenReturn(Optional
-                        .of(DirectoryEntry.builder().phoneDigest("digest").userId("@other:gua.global").build()));
+        @Test
+        void completeSignupRejectsTakenUsernameWithoutConsumingToken() {
+                when(signupTokenService.peek("token")).thenReturn("+12025550123");
+                when(phoneNumberHasher.digest("+12025550123")).thenReturn("digest");
+                when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
+                when(matrixProvisioningService.buildUserId("alice")).thenReturn("@alice:gua.global");
+                when(matrixAdminClient.userExists("@alice:gua.global")).thenReturn(true);
 
-        assertThatThrownBy(() -> service.completeSignup("token", "alice", "Alice", null, null))
-                .isInstanceOf(PhoneAlreadyLinkedException.class);
+                assertThatThrownBy(() -> service.completeSignup("token", "alice", "Alice", null, null))
+                                .isInstanceOf(UsernameTakenException.class);
 
-        verify(signupTokenService, never()).consume(any());
-    }
+                verify(signupTokenService, never()).consume(any());
+                verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(), eq(true));
+        }
 
-    @Test
-    void changePhoneNumberRebindsDirectoryEntries() {
-        String userId = "@user:gua.global";
-        String newPhone = "+13035550123";
-        String newDigest = "new-digest";
-        DirectoryEntry entryOne = DirectoryEntry.builder()
-                .phoneDigest("old-1")
-                .userId(userId)
-                .displayName("Display Name")
-                .build();
-        DirectoryEntry entryTwo = DirectoryEntry.builder()
-                .phoneDigest("old-2")
-                .userId(userId)
-                .displayName(null)
-                .build();
+        @Test
+        void completeSignupRejectsWhenPhoneAlreadyLinkedConcurrently() {
+                when(signupTokenService.peek("token")).thenReturn("+12025550123");
+                when(phoneNumberHasher.digest("+12025550123")).thenReturn("digest");
+                when(directoryService.findByDigest("digest"))
+                                .thenReturn(Optional
+                                                .of(DirectoryEntry.builder().phoneDigest("digest")
+                                                                .userId("@other:gua.global").build()));
 
-        when(phoneNumberHasher.digest(newPhone)).thenReturn(newDigest);
-        when(directoryService.findByDigest(newDigest)).thenReturn(Optional.empty());
-        when(directoryService.findByUserId(userId)).thenReturn(List.of(entryOne, entryTwo));
+                assertThatThrownBy(() -> service.completeSignup("token", "alice", "Alice", null, null))
+                                .isInstanceOf(PhoneAlreadyLinkedException.class);
 
-        service.changePhoneNumber(userId, newPhone, "999999", "123456");
+                verify(signupTokenService, never()).consume(any());
+        }
 
-        verify(otpService).verifyOtp(newPhone, "999999");
-        verify(userSecurityService).validatePinOrThrow(userId, "123456");
-        verify(matrixProvisioningService).ensureExclusivePhoneBinding(userId, newPhone);
-        verify(directoryService).deleteByDigest("old-1");
-        verify(directoryService).deleteByDigest("old-2");
-        verify(directoryService).upsertByDigest(newDigest, userId, "Display Name");
-    }
+        @Test
+        void changePhoneNumberRebindsDirectoryEntries() {
+                String userId = "@user:gua.global";
+                String newPhone = "+13035550123";
+                String newDigest = "new-digest";
+                DirectoryEntry entryOne = DirectoryEntry.builder()
+                                .phoneDigest("old-1")
+                                .userId(userId)
+                                .displayName("Display Name")
+                                .build();
+                DirectoryEntry entryTwo = DirectoryEntry.builder()
+                                .phoneDigest("old-2")
+                                .userId(userId)
+                                .displayName(null)
+                                .build();
 
-    @Test
-    void changePhoneNumberRejectsWhenDigestOwnedByAnotherUser() {
-        String userId = "@user:gua.global";
-        String newPhone = "+13035550123";
-        String newDigest = "taken-digest";
-        DirectoryEntry other = DirectoryEntry.builder()
-                .phoneDigest(newDigest)
-                .userId("@other:gua.global")
-                .build();
+                when(phoneNumberHasher.digest(newPhone)).thenReturn(newDigest);
+                when(directoryService.findByDigest(newDigest)).thenReturn(Optional.empty());
+                when(directoryService.findByUserId(userId)).thenReturn(List.of(entryOne, entryTwo));
 
-        when(phoneNumberHasher.digest(newPhone)).thenReturn(newDigest);
-        when(directoryService.findByDigest(newDigest)).thenReturn(Optional.of(other));
+                service.changePhoneNumber(userId, newPhone, "999999", "123456");
 
-        assertThatThrownBy(() -> service.changePhoneNumber(userId, newPhone, "888888", "123456"))
-                .isInstanceOf(PhoneAlreadyLinkedException.class);
+                verify(otpService).verifyOtp(newPhone, "999999");
+                verify(userSecurityService).validatePinOrThrow(userId, "123456");
+                verify(matrixProvisioningService).ensureExclusivePhoneBinding(userId, newPhone);
+                verify(directoryService).deleteByDigest("old-1");
+                verify(directoryService).deleteByDigest("old-2");
+                verify(directoryService).upsertByDigest(eq(newDigest), anyString(), eq(userId), eq("Display Name"));
+        }
 
-        verify(matrixProvisioningService, never()).ensureExclusivePhoneBinding(any(), any());
-        verify(directoryService, never()).findByUserId(any());
-    }
+        @Test
+        void changePhoneNumberRejectsWhenDigestOwnedByAnotherUser() {
+                String userId = "@user:gua.global";
+                String newPhone = "+13035550123";
+                String newDigest = "taken-digest";
+                DirectoryEntry other = DirectoryEntry.builder()
+                                .phoneDigest(newDigest)
+                                .userId("@other:gua.global")
+                                .build();
 
-    @Test
-    void verifyOtpAndSignInSkipsDeviceRegistrationWhenMetadataMissing() {
-        String phone = "+14045550123";
-        String digest = "digest";
-        DirectoryEntry existingEntry = DirectoryEntry.builder()
-                .phoneDigest(digest)
-                .userId("@existing:gua.global")
-                .displayName("Existing User")
-                .build();
-        MatrixSession session = new MatrixSession("token", existingEntry.getUserId(), "device-1", CLIENT_BASE_URL);
+                when(phoneNumberHasher.digest(newPhone)).thenReturn(newDigest);
+                when(directoryService.findByDigest(newDigest)).thenReturn(Optional.of(other));
 
-        when(phoneNumberHasher.digest(phone)).thenReturn(digest);
-        when(directoryService.findByDigest(digest)).thenReturn(Optional.of(existingEntry));
-        when(userSecurityService.hasPin(existingEntry.getUserId())).thenReturn(false);
-        when(matrixProvisioningService.ensureSessionForUser(existingEntry.getUserId(), phone, "Existing User", true))
-                .thenReturn(session);
+                assertThatThrownBy(() -> service.changePhoneNumber(userId, newPhone, "888888", "123456"))
+                                .isInstanceOf(PhoneAlreadyLinkedException.class);
 
-        service.verifyOtpAndSignIn(phone, "123456", null, null);
+                verify(matrixProvisioningService, never()).ensureExclusivePhoneBinding(any(), any());
+                verify(directoryService, never()).findByUserId(any());
+        }
 
-        verify(trustedDeviceService, never()).registerDevice(any(), any(), any());
-        verify(deviceNotificationService, never()).notifyNewDevice(any(), any(), any());
-    }
+        @Test
+        void verifyOtpAndSignInSkipsDeviceRegistrationWhenMetadataMissing() {
+                String phone = "+14045550123";
+                String digest = "digest";
+                DirectoryEntry existingEntry = DirectoryEntry.builder()
+                                .phoneDigest(digest)
+                                .userId("@existing:gua.global")
+                                .displayName("Existing User")
+                                .build();
+                MatrixSession session = new MatrixSession("token", existingEntry.getUserId(), "device-1",
+                                CLIENT_BASE_URL);
 
-    @Test
-    void changePhoneNumberAllowsWhenDigestBelongsToSameUser() {
-        String userId = "@user:gua.global";
-        String newPhone = "+15055550123";
-        String newDigest = "existing-digest";
-        DirectoryEntry sameUserEntry = DirectoryEntry.builder()
-                .phoneDigest(newDigest)
-                .userId(userId)
-                .displayName("Display").build();
-        DirectoryEntry otherEntry = DirectoryEntry.builder()
-                .phoneDigest("other")
-                .userId(userId)
-                .displayName("Display").build();
+                when(phoneNumberHasher.digest(phone)).thenReturn(digest);
+                when(directoryService.findByDigest(digest)).thenReturn(Optional.of(existingEntry));
+                when(userSecurityService.hasPin(existingEntry.getUserId())).thenReturn(false);
+                when(matrixProvisioningService.ensureSessionForUser(existingEntry.getUserId(), phone, "Existing User",
+                                true))
+                                .thenReturn(session);
 
-        when(phoneNumberHasher.digest(newPhone)).thenReturn(newDigest);
-        when(directoryService.findByDigest(newDigest)).thenReturn(Optional.of(sameUserEntry));
-        when(directoryService.findByUserId(userId)).thenReturn(List.of(sameUserEntry, otherEntry));
+                service.verifyOtpAndSignIn(phone, "123456", null, null);
 
-        service.changePhoneNumber(userId, newPhone, "111111", "222222");
+                verify(trustedDeviceService, never()).registerDevice(any(), any(), any());
+                verify(deviceNotificationService, never()).notifyNewDevice(any(), any(), any());
+        }
 
-        verify(matrixProvisioningService).ensureExclusivePhoneBinding(userId, newPhone);
-        verify(directoryService).deleteByDigest("other");
-        verify(directoryService).upsertByDigest(newDigest, userId, "Display");
-    }
+        @Test
+        void changePhoneNumberAllowsWhenDigestBelongsToSameUser() {
+                String userId = "@user:gua.global";
+                String newPhone = "+15055550123";
+                String newDigest = "existing-digest";
+                DirectoryEntry sameUserEntry = DirectoryEntry.builder()
+                                .phoneDigest(newDigest)
+                                .userId(userId)
+                                .displayName("Display").build();
+                DirectoryEntry otherEntry = DirectoryEntry.builder()
+                                .phoneDigest("other")
+                                .userId(userId)
+                                .displayName("Display").build();
 
-    @Test
-    void verifyOtpAndSignInIssuesPinChallengeWhenUserHasPinAndNoPinProvided() {
-        String phone = "+12025550100";
-        String digest = "pin-digest";
-        DirectoryEntry existingEntry = DirectoryEntry.builder()
-                .phoneDigest(digest)
-                .userId("@alice:gua.global")
-                .displayName("Alice")
-                .build();
+                when(phoneNumberHasher.digest(newPhone)).thenReturn(newDigest);
+                when(directoryService.findByDigest(newDigest)).thenReturn(Optional.of(sameUserEntry));
+                when(directoryService.findByUserId(userId)).thenReturn(List.of(sameUserEntry, otherEntry));
 
-        when(phoneNumberHasher.digest(phone)).thenReturn(digest);
-        when(directoryService.findByDigest(digest)).thenReturn(Optional.of(existingEntry));
-        when(userSecurityService.hasPin(existingEntry.getUserId())).thenReturn(true);
-        when(pinChallengeService.issue(existingEntry.getUserId(), phone)).thenReturn("chal-xyz");
+                service.changePhoneNumber(userId, newPhone, "111111", "222222");
 
-        VerifyOtpResult result = service.verifyOtpAndSignIn(phone, "123456", null, null);
+                verify(matrixProvisioningService).ensureExclusivePhoneBinding(userId, newPhone);
+                verify(directoryService).deleteByDigest("other");
+                verify(directoryService).upsertByDigest(eq(newDigest), anyString(), eq(userId), eq("Display"));
+        }
 
-        verify(otpService).verifyOtp(phone, "123456");
-        verify(userSecurityService, never()).validatePinOrThrow(any(), any());
-        verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(), any(Boolean.class));
-        assertThat(result.isPinRequired()).isTrue();
-        assertThat(result.pinChallengeToken()).isEqualTo("chal-xyz");
-        assertThat(result.session()).isNull();
-    }
+        @Test
+        void verifyOtpAndSignInIssuesPinChallengeWhenUserHasPinAndNoPinProvided() {
+                String phone = "+12025550100";
+                String digest = "pin-digest";
+                DirectoryEntry existingEntry = DirectoryEntry.builder()
+                                .phoneDigest(digest)
+                                .userId("@alice:gua.global")
+                                .displayName("Alice")
+                                .build();
 
-    @Test
-    void verifySignInPinValidatesPinAndIssuesSession() {
-        String phone = "+12025550100";
-        String digest = "pin-digest";
-        DirectoryEntry entry = DirectoryEntry.builder()
-                .phoneDigest(digest)
-                .userId("@alice:gua.global")
-                .displayName("Alice")
-                .build();
-        MatrixSession session = new MatrixSession("token-1", entry.getUserId(), "device-x", CLIENT_BASE_URL);
-        DeviceMetadata metadata = DeviceMetadata.builder()
-                .deviceName("iPhone")
-                .platform("iOS")
-                .appVersion("1.0.0")
-                .ipAddress("10.0.0.1")
-                .build();
+                when(phoneNumberHasher.digest(phone)).thenReturn(digest);
+                when(directoryService.findByDigest(digest)).thenReturn(Optional.of(existingEntry));
+                when(userSecurityService.hasPin(existingEntry.getUserId())).thenReturn(true);
+                when(pinChallengeService.issue(existingEntry.getUserId(), phone)).thenReturn("chal-xyz");
 
-        when(pinChallengeService.peek("chal-xyz"))
-                .thenReturn(new PinChallengeService.Challenge(entry.getUserId(), phone));
-        when(phoneNumberHasher.digest(phone)).thenReturn(digest);
-        when(directoryService.findByDigest(digest)).thenReturn(Optional.of(entry));
-        when(matrixProvisioningService.ensureSessionForUser(entry.getUserId(), phone, "Alice", true))
-                .thenReturn(session);
+                VerifyOtpResult result = service.verifyOtpAndSignIn(phone, "123456", null, null);
 
-        MatrixSession result = service.verifySignInPin("chal-xyz", "654321", metadata);
+                verify(otpService).verifyOtp(phone, "123456");
+                verify(userSecurityService, never()).validatePinOrThrow(any(), any());
+                verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(),
+                                any(Boolean.class));
+                assertThat(result.isPinRequired()).isTrue();
+                assertThat(result.pinChallengeToken()).isEqualTo("chal-xyz");
+                assertThat(result.session()).isNull();
+        }
 
-        verify(userSecurityService).validatePinOrThrow(entry.getUserId(), "654321");
-        verify(pinChallengeService).consume("chal-xyz");
-        verify(directoryService).upsertByDigest(digest, entry.getUserId(), "Alice");
-        verify(userSecurityService).recordSuccessfulLogin(entry.getUserId());
-        assertThat(result).isEqualTo(session);
-    }
+        @Test
+        void verifySignInPinValidatesPinAndIssuesSession() {
+                String phone = "+12025550100";
+                String digest = "pin-digest";
+                DirectoryEntry entry = DirectoryEntry.builder()
+                                .phoneDigest(digest)
+                                .userId("@alice:gua.global")
+                                .displayName("Alice")
+                                .build();
+                MatrixSession session = new MatrixSession("token-1", entry.getUserId(), "device-x", CLIENT_BASE_URL);
+                DeviceMetadata metadata = DeviceMetadata.builder()
+                                .deviceName("iPhone")
+                                .platform("iOS")
+                                .appVersion("1.0.0")
+                                .ipAddress("10.0.0.1")
+                                .build();
 
-    @Test
-    void verifySignInPinRejectsWhenDirectoryNoLongerLinksPhoneToChallengeUser() {
-        DirectoryEntry otherEntry = DirectoryEntry.builder()
-                .phoneDigest("d")
-                .userId("@somebody-else:gua.global")
-                .build();
+                when(pinChallengeService.peek("chal-xyz"))
+                                .thenReturn(new PinChallengeService.Challenge(entry.getUserId(), phone));
+                when(phoneNumberHasher.digest(phone)).thenReturn(digest);
+                when(directoryService.findByDigest(digest)).thenReturn(Optional.of(entry));
+                when(matrixProvisioningService.ensureSessionForUser(entry.getUserId(), phone, "Alice", true))
+                                .thenReturn(session);
 
-        when(pinChallengeService.peek("chal-xyz"))
-                .thenReturn(new PinChallengeService.Challenge("@alice:gua.global", "+12025550100"));
-        when(phoneNumberHasher.digest("+12025550100")).thenReturn("d");
-        when(directoryService.findByDigest("d")).thenReturn(Optional.of(otherEntry));
+                MatrixSession result = service.verifySignInPin("chal-xyz", "654321", metadata);
 
-        assertThatThrownBy(() -> service.verifySignInPin("chal-xyz", "654321", null))
-                .isInstanceOf(PhoneAlreadyLinkedException.class);
+                verify(userSecurityService).validatePinOrThrow(entry.getUserId(), "654321");
+                verify(pinChallengeService).consume("chal-xyz");
+                verify(directoryService).upsertByDigest(eq(digest), anyString(), eq(entry.getUserId()), eq("Alice"));
+                verify(userSecurityService).recordSuccessfulLogin(entry.getUserId());
+                assertThat(result).isEqualTo(session);
+        }
 
-        verify(pinChallengeService, never()).consume(any());
-        verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(), any(Boolean.class));
-    }
+        @Test
+        void verifySignInPinRejectsWhenDirectoryNoLongerLinksPhoneToChallengeUser() {
+                DirectoryEntry otherEntry = DirectoryEntry.builder()
+                                .phoneDigest("d")
+                                .userId("@somebody-else:gua.global")
+                                .build();
+
+                when(pinChallengeService.peek("chal-xyz"))
+                                .thenReturn(new PinChallengeService.Challenge("@alice:gua.global", "+12025550100"));
+                when(phoneNumberHasher.digest("+12025550100")).thenReturn("d");
+                when(directoryService.findByDigest("d")).thenReturn(Optional.of(otherEntry));
+
+                assertThatThrownBy(() -> service.verifySignInPin("chal-xyz", "654321", null))
+                                .isInstanceOf(PhoneAlreadyLinkedException.class);
+
+                verify(pinChallengeService, never()).consume(any());
+                verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(),
+                                any(Boolean.class));
+        }
 }

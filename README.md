@@ -13,10 +13,10 @@ The **Gua Identity Service** is a Spring Boot–based microservice that handles 
 
 - 📱 **Phone sign-up & sign-in** — request OTP → verify OTP → either provision a new Matrix user, resume an existing session, or fall through to a PIN challenge for users with two-step verification enabled.
 - 🔐 **OTP management** — Redis-backed codes with TTL, per-phone and per-IP hourly caps, localized SMS templates (en / pt-BR), optional Twilio delivery.
-- 🔢 **Account PIN (two-step verification)** — set, OTP-protected change with a 24h cooldown, recovery reset, 5-attempt lockout with a 15-minute lock, and audit logging.
+- 🔢 **Account PIN (two-step verification)** — set, OTP-protected change with a 24h cooldown, recovery reset, 5-attempt lockout with a 15-minute lock, and audit logging. A NIST-aligned strength policy rejects non-6-digit, all-repeated, sequential, and common PINs.
 - 🛡️ **Privileged account operations** — fresh phone-OTP reauthentication gates account deactivation and identity-credential reset (modeled on Matrix UIA `m.login.msisdn`).
-- 🔑 **OpenID Connect provider** — RS256 authorization-code + PKCE flow, discovery/JWKS endpoints, and seeded clients for MAS (confidential) and the Gua apps (public, PKCE-required).
-- 📇 **Directory lookup** — privacy-preserving phone-hash search using a server-side pepper.
+- 🔑 **OpenID Connect provider** — RS256 authorization-code + PKCE flow with an **interactive browser login** (phone → OTP → PIN/profile) that MAS redirects into, discovery/JWKS endpoints, and seeded clients for MAS (confidential) and the Gua apps (public, PKCE-required).
+- 📇 **Directory lookup** — privacy-preserving phone-hash search using a server-side pepper. The raw phone number is never stored; only an irreversible HMAC digest plus a display-only masked form (e.g. `••••4567`).
 - 🚦 **Built-in rate limiting** — per-endpoint Resilience4j limiters so the service is safe to run without an upstream WAF.
 - 🗄️ **Persistent identities** — PostgreSQL with Flyway migrations.
 - 📚 **OpenAPI/Swagger UI** at `/swagger-ui.html`.
@@ -57,8 +57,55 @@ flowchart LR
 
 The identity service is **both** an OIDC provider (MAS delegates phone-OTP login to it) **and** the issuer/validator of the bearer tokens its own client-facing REST API requires. Tokens are primarily verified locally against the published JWKS (RS256 signature, issuer, audience, and expiry). As a fallback, a token that is not one of this service's own JWTs is verified against Synapse's `/whoami` endpoint, which lets a native client reuse its Matrix SDK session token to call a subset of endpoints.
 
+For login, MAS redirects the browser to `GET /oauth2/authorize`; the identity service parks the request in a short-lived, Redis-backed login session and hands off to the **`gua-idp-web`** single-page UI, which walks the user through phone → OTP → PIN (returning) or profile (new user) via the `/login/*` API before an authorization code is issued back to MAS.
+
 ---
-## 🚧 Local development stack
+
+## 🧭 Routing & global usernames (federation at scale)
+
+The identity service is the **routing authority** for a **Gua-controlled federation** — a set of homeservers Gua operates (à la [Tchap](https://github.com/tchapgouv), the French government's closed Matrix federation). It is *not* the open Matrix network: global-username uniqueness is a guarantee only within Gua's own homeservers.
+
+- **Homeserver registry** (`identity.routing.homeservers`) lists the homeservers accounts can live on (`id`, `domain`, admin URL, region, weight, enabled). When unset, a single homeserver is synthesised from the legacy `identity.matrix.*` properties, so single-homeserver deployments need no config change.
+- **Routing layer** (`HomeserverRouter`) decides which homeserver a **new** account lives on, by rule (`single` / `region` / `weighted`). Placement is decided **once at signup** and recorded in the directory. Relocating an account between homeservers is a protocol-level limitation of Matrix (immutable MXIDs) and is intentionally out of scope.
+- **Global usernames** are unique across the federation (case-insensitive), enforced by the directory (`directory_entries.username` + unique index). The username is a stable **alias** recorded alongside the account's `homeserver_id`, so the federation can resolve *where an identity lives*. `GET /directory/resolve?username=` returns the MXID + homeserver for a username.
+- The UI treats the full Matrix ID `@id:server` as an implementation detail — users see only their username; the directory maps it to the authoritative MXID + homeserver.
+
+> Roadmap: the **opaque-MXID** model (fully decoupling the human handle from the MXID, the strongest hedge for any future account portability) is staged as a follow-up because it changes the MAS `preferred_username` → Synapse provisioning chain. Today the chosen handle is both the MXID localpart and the recorded global username.
+
+---
+
+## 🔀 MAS fork — `Gua-ra/gua-auth-service`
+
+The identity stack uses **[`Gua-ra/gua-auth-service`](https://github.com/Gua-ra/gua-auth-service)**, a minimal fork of [`element-hq/matrix-authentication-service`](https://github.com/element-hq/matrix-authentication-service) (MAS).
+
+### Why a fork?
+
+The upstream consent screen ("Continue to {client}?") exposes the homeserver name (`dev.local` / `gua.app`) to users, conflicts with Gua's centralised model where the backend chooses the homeserver, and adds an unnecessary extra step when users only interact with first-party clients they implicitly trust.
+
+The fork adds a single `[gua]` config section that lists client IDs whose consent screen is **skipped**; the OPA policy is still enforced. All Gua-specific code lives in files that **have no upstream equivalent** (`crates/config/src/sections/gua.rs`, `crates/handlers/src/gua/mod.rs`, `gua/README.md`), minimising merge conflicts on upstream updates.
+
+### Docker image
+
+```
+ghcr.io/gua-ra/gua-auth-service:v1.18.0-gua.1
+```
+
+Tag convention: `v<upstream-mas-version>-gua.<patch>` (mirrors [Tchap's approach](https://github.com/tchapgouv/matrix-authentication-service)).
+
+### Enabling skip-consent in `mas.conf.yaml`
+
+```yaml
+gua:
+  skip_consent_client_ids:
+    - 01JXTEST000000000000BCDE01   # gua-ios client ID
+```
+
+### Upgrading the fork
+
+See `gua/README.md` in the fork repository for the upgrade runbook.
+
+---
+
 
 Spin up Redis, Postgres, and a disposable Synapse homeserver with a single command:
 
@@ -72,7 +119,7 @@ Running the script normally (`bash scripts/start-dev-test-stack.sh`) will still 
 
 What the script does:
 
-1. Starts all dependencies using `docker-compose.test.yml` (PostgreSQL, Redis, a disposable Synapse homeserver, and a MAS container).
+1. Starts all dependencies using `docker-compose.test.yml` (PostgreSQL, Redis, a disposable Synapse homeserver, and a **MAS container** running the `Gua-ra/gua-auth-service` fork image).
 2. Waits for Synapse to become healthy.
 3. Creates (or reuses) an admin Matrix user and captures its access token.
 4. Generates a directory pepper (stored at `docker/.identity-pepper`) for consistent hashing.
@@ -141,6 +188,10 @@ Interactive docs: **`/swagger-ui.html`** (OpenAPI JSON at `/api-docs`). Endpoint
 
 PIN policy is configurable under `identity.security`: `pin-change-cooldown` (default **24h**), `pin-reset-cooldown` (default **7 days**), `max-pin-attempts` (default **5**), `pin-lock-duration` (default **15m**), `pin-change-challenge-ttl` (default **5m**).
 
+**PIN strength** is enforced by `PinPolicy` across every set/update/change/reset path: a PIN must be exactly six digits and must not be all-repeated (`000000`), strictly sequential (`123456` / `654321`), or one of a curated list of common PINs. Strength failures surface a distinct `weak_pin` error code (vs `invalid_pin` for a wrong PIN at login). The same rules are mirrored client-side (gua-idp-web, gua-ios) for instant feedback, but the server remains authoritative.
+
+**Username policy** (`UsernamePolicy`, shared by `/signup/check-username`, `/signup/complete`, and the interactive `/login/profile` step): 3–30 chars of lowercase letters, digits, dot, underscore or dash; not reserved; and — matching MAS's registration policy — not all-numeric (so a bare phone number can't become a handle).
+
 ### Privileged account operations
 
 Each privileged operation requires a fresh **reauth token** proving phone possession, in addition to the bearer token.
@@ -157,6 +208,7 @@ Each privileged operation requires a fresh **reauth token** proving phone posses
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
 | `POST /directory/lookup` | Bearer | Resolve contacts by salted phone hash. |
+| `GET /directory/resolve?username=` | Bearer | Resolve a global username to its Matrix user id + homeserver (federation routing lookup). |
 
 ---
 
@@ -170,9 +222,28 @@ The service is a self-contained OIDC provider. It issues the access tokens that 
 | --- | --- |
 | `GET /.well-known/openid-configuration` | Discovery metadata (issuer, authorize/token/userinfo/JWKS URLs, supported response/grant types, `S256` PKCE, `RS256`). |
 | `GET /.well-known/jwks.json` | Publishes the **RSA public** signing key so relying parties can verify RS256 tokens. |
-| `GET /oauth2/authorize` | Authorization-code flow. Accepts `client_id`, `redirect_uri`, `response_type=code`, `scope`, `phone_number`, `otp_code`, optional `display_name`/`state`/PKCE `code_challenge`; issues a code after validating the OTP. |
+| `GET /oauth2/authorize` | Authorization-code entry point. Validates `client_id`, `redirect_uri`, `response_type=code`, `scope`, and optional `state`/`nonce`/PKCE `code_challenge`, then starts a login session and **redirects to the interactive login UI**. (A legacy non-interactive mode still accepts `phone_number`+`otp_code` directly and issues a code after validating the OTP.) |
 | `POST /oauth2/token` | Exchanges an authorization code (and PKCE `code_verifier`) for a signed access token + ID token. |
-| `GET /userinfo` | Returns the authenticated subject (`sub`), `phone_number`, and optional `name`. |
+| `GET /userinfo` | Returns the authenticated subject (`sub`), `phone_number`, `phone_number_masked` (display-only, e.g. `••••4567`), and optional `name` / `preferred_username`. |
+
+### Interactive login flow
+
+For browser-based login (the path used by MAS and the Gua apps), the identity service renders no HTML itself — it exposes a JSON API consumed by the **`gua-idp-web`** single-page app, served same-origin so the login-session cookie stays first-party.
+
+1. MAS redirects the browser to `GET /oauth2/authorize`. The validated OIDC request (client, redirect URI, scopes, `state`, `nonce`, PKCE challenge) is stored in a Redis-backed login session and referenced by an opaque, HttpOnly, `SameSite=Lax` cookie. The browser is redirected to `idp.login.ui-url` (default `/signin`, served by `gua-idp-web`; kept distinct from the `/login/*` API).
+2. The UI drives the `/login/*` API, echoing a per-session CSRF token (issued by `GET /login/context`) in the `X-CSRF-Token` header on every state-changing call.
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /login/context` | Current step, masked phone, and CSRF token. |
+| `POST /login/phone` | Submit the phone number; dispatches an OTP. |
+| `POST /login/otp` | Verify the OTP; routes to the PIN step (returning two-step user), the profile step (new user), or completes login. |
+| `POST /login/pin` | Verify the account PIN (returning two-step user). |
+| `POST /login/profile` | Choose username + display name (new user). |
+
+On success an authorization code is issued, the login session is consumed (and its cookie cleared), and the response carries `redirectUrl` for the UI to navigate back to the client, which exchanges the code at `/oauth2/token`. For new users the chosen handle is emitted as the `preferred_username` claim so MAS uses it as the Matrix localpart on first provisioning; the OIDC `sub` is an opaque, stable identifier.
+
+Login-flow configuration (`idp.login.*`): `ui-url` (`IDP_LOGIN_UI_URL`, default `/signin`), `session-ttl` (`IDP_LOGIN_SESSION_TTL`, default `PT10M`), `cookie-name` (`IDP_LOGIN_COOKIE_NAME`, default `gua_login`), and `cookie-secure` (`IDP_LOGIN_COOKIE_SECURE`, default `true`; set `false` only for plain-HTTP local development).
 
 ### Signing & configuration
 

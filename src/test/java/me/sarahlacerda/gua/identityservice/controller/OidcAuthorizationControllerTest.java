@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.controller.oidc.OidcAuthorizationController;
 import me.sarahlacerda.gua.identityservice.exception.OidcClientAuthenticationException;
 import me.sarahlacerda.gua.identityservice.exception.OidcInvalidRequestException;
@@ -38,6 +39,7 @@ import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationRequest
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcClientService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcClientService.RegisteredClient;
+import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenResponse;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
 import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
@@ -61,6 +63,12 @@ class OidcAuthorizationControllerTest {
     private OidcClientService clientService;
 
     @MockitoBean
+    private LoginSessionService loginSessionService;
+
+    @MockitoBean
+    private LoginFlowProperties loginFlowProperties;
+
+    @MockitoBean
     private EndpointRateLimiter endpointRateLimiter;
 
     private RegisteredClient confidentialClient;
@@ -69,9 +77,9 @@ class OidcAuthorizationControllerTest {
     @BeforeEach
     void setUp() {
         confidentialClient = new RegisteredClient("mas", "$2a$10$abc", false,
-            List.of(CALLBACK), Set.of("openid", "profile", "phone"), false);
+                List.of(CALLBACK), Set.of("openid", "profile", "phone"), false);
         publicClient = new RegisteredClient("gua-ios", null, true,
-            List.of("me.sarahlacerda.gua://oidc"), Set.of("openid", "profile", "phone"), true);
+                List.of("me.sarahlacerda.gua://oidc"), Set.of("openid", "profile", "phone"), true);
         when(clientService.requireClient("mas")).thenReturn(confidentialClient);
         when(clientService.requireClient("gua-ios")).thenReturn(publicClient);
     }
@@ -79,11 +87,9 @@ class OidcAuthorizationControllerTest {
     @Test
     void authorizeIssuesCodeAndRedirects() throws Exception {
         OidcAuthorization authorization = new OidcAuthorization(
-            "user-123", "+15551234567", "Alice", Set.of("openid", "profile"), "mas"
-        );
+                "user-123", "+15551234567", "Alice", Set.of("openid", "profile"), "mas");
         when(authorizationService.issueAuthorizationCode(any())).thenReturn(
-            new OidcAuthorizationCode("auth-code", authorization, CALLBACK)
-        );
+                new OidcAuthorizationCode("auth-code", authorization, CALLBACK));
 
         mockMvc.perform(get("/oauth2/authorize")
                 .param("response_type", "code")
@@ -94,8 +100,8 @@ class OidcAuthorizationControllerTest {
                 .param("otp_code", "123456")
                 .param("display_name", "Alice")
                 .param("state", "abc"))
-            .andExpect(status().isFound())
-            .andExpect(header().string("Location", CALLBACK + "?code=auth-code&state=abc"));
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", CALLBACK + "?code=auth-code&state=abc"));
 
         verify(clientService).requireClient("mas");
         verify(clientService).validateRedirectUri(confidentialClient, CALLBACK);
@@ -111,13 +117,11 @@ class OidcAuthorizationControllerTest {
     void authorizeWithPkcePropagatesChallenge() throws Exception {
         String challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
         when(authorizationService.issueAuthorizationCode(any())).thenReturn(
-            new OidcAuthorizationCode(
-                "code-pkce",
-                new OidcAuthorization("user-x", "+15550009999", null, Set.of("openid"), "gua-ios"),
-                "me.sarahlacerda.gua://oidc",
-                Optional.of(challenge)
-            )
-        );
+                new OidcAuthorizationCode(
+                        "code-pkce",
+                        new OidcAuthorization("user-x", "+15550009999", null, Set.of("openid"), "gua-ios"),
+                        "me.sarahlacerda.gua://oidc",
+                        Optional.of(challenge)));
 
         mockMvc.perform(get("/oauth2/authorize")
                 .param("response_type", "code")
@@ -127,7 +131,7 @@ class OidcAuthorizationControllerTest {
                 .param("otp_code", "654321")
                 .param("code_challenge", challenge)
                 .param("code_challenge_method", "S256"))
-            .andExpect(status().isFound());
+                .andExpect(status().isFound());
 
         verify(clientService).validateChallenge(publicClient, challenge, "S256");
         ArgumentCaptor<OidcAuthorizationRequest> captor = ArgumentCaptor.forClass(OidcAuthorizationRequest.class);
@@ -143,7 +147,7 @@ class OidcAuthorizationControllerTest {
                 .param("redirect_uri", CALLBACK)
                 .param("phone_number", "+15551234567")
                 .param("otp_code", "123456"))
-            .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest());
 
         verifyNoInteractions(authorizationService);
     }
@@ -151,7 +155,7 @@ class OidcAuthorizationControllerTest {
     @Test
     void authorizeRejectsUnknownClient() throws Exception {
         when(clientService.requireClient("ghost"))
-            .thenThrow(new OidcInvalidRequestException("invalid_client", "Unknown client_id"));
+                .thenThrow(new OidcInvalidRequestException("invalid_client", "Unknown client_id"));
 
         mockMvc.perform(get("/oauth2/authorize")
                 .param("response_type", "code")
@@ -159,8 +163,8 @@ class OidcAuthorizationControllerTest {
                 .param("redirect_uri", CALLBACK)
                 .param("phone_number", "+15551234567")
                 .param("otp_code", "123456"))
-            .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.code").value("invalid_client"));
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("invalid_client"));
 
         verifyNoInteractions(authorizationService);
     }
@@ -168,13 +172,11 @@ class OidcAuthorizationControllerTest {
     @Test
     void tokenExchangesAuthorizationCodeWithClientSecret() throws Exception {
         OidcAuthorization authorization = new OidcAuthorization(
-            "user-123", "+15551234567", "Alice", Set.of("openid"), "mas"
-        );
+                "user-123", "+15551234567", "Alice", Set.of("openid"), "mas");
         when(authorizationService.consumeAuthorizationCode("auth-code"))
-            .thenReturn(Optional.of(new OidcAuthorizationCode("auth-code", authorization, CALLBACK)));
+                .thenReturn(Optional.of(new OidcAuthorizationCode("auth-code", authorization, CALLBACK)));
         when(tokenService.issueTokens(authorization)).thenReturn(
-            new OidcTokenResponse("access-token", 600, "openid", "Bearer", "id-token")
-        );
+                new OidcTokenResponse("access-token", 600, "openid", "Bearer", "id-token"));
 
         mockMvc.perform(post("/oauth2/token")
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
@@ -183,11 +185,11 @@ class OidcAuthorizationControllerTest {
                 .param("redirect_uri", CALLBACK)
                 .param("client_id", "mas")
                 .param("client_secret", "shh"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.access_token").value("access-token"))
-            .andExpect(jsonPath("$.expires_in").value(600))
-            .andExpect(jsonPath("$.token_type").value("Bearer"))
-            .andExpect(jsonPath("$.id_token").value("id-token"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.access_token").value("access-token"))
+                .andExpect(jsonPath("$.expires_in").value(600))
+                .andExpect(jsonPath("$.token_type").value("Bearer"))
+                .andExpect(jsonPath("$.id_token").value("id-token"));
 
         verify(clientService).authenticateClient(confidentialClient, "shh");
         verify(clientService).verifyPkce(Optional.empty(), null);
@@ -198,13 +200,11 @@ class OidcAuthorizationControllerTest {
     @Test
     void tokenAcceptsHttpBasicClientAuthentication() throws Exception {
         OidcAuthorization authorization = new OidcAuthorization(
-            "user-123", "+15551234567", null, Set.of("openid"), "mas"
-        );
+                "user-123", "+15551234567", null, Set.of("openid"), "mas");
         when(authorizationService.consumeAuthorizationCode("auth-code"))
-            .thenReturn(Optional.of(new OidcAuthorizationCode("auth-code", authorization, CALLBACK)));
+                .thenReturn(Optional.of(new OidcAuthorizationCode("auth-code", authorization, CALLBACK)));
         when(tokenService.issueTokens(authorization)).thenReturn(
-            new OidcTokenResponse("at", 600, "openid", "Bearer", "it")
-        );
+                new OidcTokenResponse("at", 600, "openid", "Bearer", "it"));
 
         String basic = java.util.Base64.getEncoder().encodeToString("mas:shh".getBytes());
         mockMvc.perform(post("/oauth2/token")
@@ -213,7 +213,7 @@ class OidcAuthorizationControllerTest {
                 .param("grant_type", "authorization_code")
                 .param("code", "auth-code")
                 .param("redirect_uri", CALLBACK))
-            .andExpect(status().isOk());
+                .andExpect(status().isOk());
 
         verify(clientService).requireClient("mas");
         verify(clientService).authenticateClient(confidentialClient, "shh");
@@ -222,7 +222,7 @@ class OidcAuthorizationControllerTest {
     @Test
     void tokenRejectsInvalidClientSecret() throws Exception {
         doThrow(new OidcClientAuthenticationException("Invalid client_secret"))
-            .when(clientService).authenticateClient(any(), anyString());
+                .when(clientService).authenticateClient(any(), anyString());
 
         mockMvc.perform(post("/oauth2/token")
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
@@ -231,8 +231,8 @@ class OidcAuthorizationControllerTest {
                 .param("redirect_uri", CALLBACK)
                 .param("client_id", "mas")
                 .param("client_secret", "wrong"))
-            .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.code").value("invalid_client"));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("invalid_client"));
 
         verifyNoInteractions(authorizationService);
         verifyNoInteractions(tokenService);
@@ -242,13 +242,12 @@ class OidcAuthorizationControllerTest {
     void tokenRejectsPkceMismatch() throws Exception {
         String challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
         OidcAuthorization authorization = new OidcAuthorization(
-            "user-x", "+15550009999", null, Set.of("openid"), "gua-ios"
-        );
+                "user-x", "+15550009999", null, Set.of("openid"), "gua-ios");
         when(authorizationService.consumeAuthorizationCode("auth-code"))
-            .thenReturn(Optional.of(new OidcAuthorizationCode("auth-code", authorization,
-                "me.sarahlacerda.gua://oidc", Optional.of(challenge))));
+                .thenReturn(Optional.of(new OidcAuthorizationCode("auth-code", authorization,
+                        "me.sarahlacerda.gua://oidc", Optional.of(challenge))));
         doThrow(new OidcInvalidRequestException("invalid_grant", "code_verifier does not match"))
-            .when(clientService).verifyPkce(Optional.of(challenge), "wrong-verifier");
+                .when(clientService).verifyPkce(Optional.of(challenge), "wrong-verifier");
 
         mockMvc.perform(post("/oauth2/token")
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
@@ -257,8 +256,8 @@ class OidcAuthorizationControllerTest {
                 .param("redirect_uri", "me.sarahlacerda.gua://oidc")
                 .param("client_id", "gua-ios")
                 .param("code_verifier", "wrong-verifier"))
-            .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.code").value("invalid_grant"));
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("invalid_grant"));
 
         verify(tokenService, never()).issueTokens(any());
     }
@@ -271,8 +270,8 @@ class OidcAuthorizationControllerTest {
                 .param("code", "auth-code")
                 .param("redirect_uri", CALLBACK)
                 .param("client_id", "mas"))
-            .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.code").value("unsupported_grant_type"));
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("unsupported_grant_type"));
 
         verifyNoInteractions(authorizationService);
         verifyNoInteractions(tokenService);
@@ -281,10 +280,9 @@ class OidcAuthorizationControllerTest {
     @Test
     void tokenRejectsWhenRedirectUriDoesNotMatch() throws Exception {
         OidcAuthorization authorization = new OidcAuthorization(
-            "user-123", "+15551234567", null, Set.of("openid"), "mas"
-        );
+                "user-123", "+15551234567", null, Set.of("openid"), "mas");
         when(authorizationService.consumeAuthorizationCode("auth-code"))
-            .thenReturn(Optional.of(new OidcAuthorizationCode("auth-code", authorization, "https://other/cb")));
+                .thenReturn(Optional.of(new OidcAuthorizationCode("auth-code", authorization, "https://other/cb")));
 
         mockMvc.perform(post("/oauth2/token")
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
@@ -293,8 +291,8 @@ class OidcAuthorizationControllerTest {
                 .param("redirect_uri", CALLBACK)
                 .param("client_id", "mas")
                 .param("client_secret", "shh"))
-            .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.code").value("invalid_grant"));
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("invalid_grant"));
 
         verify(tokenService, never()).issueTokens(any());
     }

@@ -15,5 +15,10 @@ public interface DirectoryEntryRepository extends JpaRepository<DirectoryEntry, 
 
     List<DirectoryEntry> findByUserId(String userId);
 
+    /** Case-insensitive lookup of the global username (matches the unique index). */
+    Optional<DirectoryEntry> findByUsernameIgnoreCase(String username);
+
+    boolean existsByUsernameIgnoreCase(String username);
+
     void deleteByPhoneDigest(String phoneDigest);
 }
