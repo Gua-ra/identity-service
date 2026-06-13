@@ -78,20 +78,17 @@ class DirectoryServiceTest {
     }
 
     @Test
-    void lookupMatchesMapsEntities() {
+    void findDiscoverableByDigestsDelegatesToRepository() {
         DirectoryEntry entry = DirectoryEntry.builder()
             .phoneDigest("digest")
             .userId("@user:gua.global")
             .displayName("Name")
             .build();
 
-        when(repository.findByPhoneDigestIn(List.of("digest"))).thenReturn(List.of(entry));
+        when(repository.findByPhoneDigestInAndDiscoverableTrue(List.of("digest"))).thenReturn(List.of(entry));
 
-        assertThat(directoryService.lookupMatches(List.of("digest"))).singleElement().satisfies(match -> {
-            assertThat(match.digest()).isEqualTo("digest");
-            assertThat(match.userId()).isEqualTo("@user:gua.global");
-            assertThat(match.displayName()).isEqualTo("Name");
-        });
+        assertThat(directoryService.findDiscoverableByDigests(List.of("digest")))
+            .containsExactly(entry);
     }
 
     @Test
