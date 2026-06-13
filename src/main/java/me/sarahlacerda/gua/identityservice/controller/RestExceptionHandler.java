@@ -85,6 +85,13 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("username_taken", ex.getMessage()));
         }
 
+        @ExceptionHandler(me.sarahlacerda.gua.identityservice.exception.LookupBatchTooLargeException.class)
+        public ResponseEntity<ErrorResponse> handleLookupBatchTooLarge(
+                        me.sarahlacerda.gua.identityservice.exception.LookupBatchTooLargeException ex) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .body(new ErrorResponse("lookup_batch_too_large", ex.getMessage()));
+        }
+
         @ExceptionHandler(WeakPinException.class)
         public ResponseEntity<ErrorResponse> handleWeakPin(WeakPinException ex) {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)

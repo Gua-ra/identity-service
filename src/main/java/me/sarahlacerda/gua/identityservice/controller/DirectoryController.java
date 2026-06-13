@@ -25,6 +25,7 @@ import me.sarahlacerda.gua.identityservice.controller.dto.DirectoryLookupRequest
 import me.sarahlacerda.gua.identityservice.controller.dto.DirectoryLookupResponse;
 import me.sarahlacerda.gua.identityservice.controller.dto.UsernameResolutionResponse;
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
+import me.sarahlacerda.gua.identityservice.service.ContactDiscoveryService;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRegistry;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
@@ -37,33 +38,37 @@ import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 public class DirectoryController {
 
     private final DirectoryService directoryService;
+    private final ContactDiscoveryService contactDiscoveryService;
     private final HomeserverRegistry homeserverRegistry;
     private final AuthenticatedUserAccessor authenticatedUserAccessor;
 
     @PostMapping("/lookup")
     @Operation(
-        summary = "Resolve contact digests",
-        description = "Accepts a list of HMAC digests of phone numbers generated on the client and returns the contacts that are already using Gua. Used for contact discovery",
+        summary = "Match address-book phones to Gua accounts",
+        description = "Accepts E.164 phone numbers over TLS, digests them in memory with the server-side "
+                + "peppered HMAC and returns the contacts that are on Gua and discoverable. Raw numbers are "
+                + "never stored or logged.",
         security = @SecurityRequirement(name = "oidcAccessToken")
     )
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Matches returned", content = @Content(schema = @Schema(implementation = DirectoryLookupResponse.class))),
-        @ApiResponse(responseCode = "400", description = "Validation failed", content = @Content),
+        @ApiResponse(responseCode = "400", description = "Validation failed or batch too large", content = @Content),
         @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content),
         @ApiResponse(responseCode = "429", description = "Too many lookup attempts", content = @Content)
     })
     public ResponseEntity<DirectoryLookupResponse> lookup(
         @io.swagger.v3.oas.annotations.parameters.RequestBody(
-            description = "User identifier and collection of hashed phone digests to resolve",
+            description = "Address-book phone numbers (E.164) to match",
             required = true,
             content = @Content(schema = @Schema(implementation = DirectoryLookupRequest.class))
         )
         @RequestBody @Valid DirectoryLookupRequest request
     ) {
-        authenticatedUserAccessor.requireUserIdMatches(request.getUserId());
-        List<DirectoryLookupResponse.DirectoryMatchView> matches = directoryService.lookupMatches(request.getDigests())
+        authenticatedUserAccessor.requireCurrentUserId();
+        List<DirectoryLookupResponse.ContactMatchView> matches = contactDiscoveryService.match(request.getPhones())
             .stream()
-            .map(match -> new DirectoryLookupResponse.DirectoryMatchView(match.digest(), match.userId(), match.displayName()))
+            .map(match -> new DirectoryLookupResponse.ContactMatchView(
+                match.phoneNumber(), match.userId(), match.username(), match.displayName()))
             .toList();
         return ResponseEntity.ok(new DirectoryLookupResponse(matches));
     }

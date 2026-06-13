@@ -13,6 +13,9 @@ public interface DirectoryEntryRepository extends JpaRepository<DirectoryEntry, 
 
     List<DirectoryEntry> findByPhoneDigestIn(Iterable<String> phoneDigests);
 
+    /** Contact discovery: only accounts that opted to stay discoverable. */
+    List<DirectoryEntry> findByPhoneDigestInAndDiscoverableTrue(Iterable<String> phoneDigests);
+
     List<DirectoryEntry> findByUserId(String userId);
 
     /** Case-insensitive lookup of the global username (matches the unique index). */
