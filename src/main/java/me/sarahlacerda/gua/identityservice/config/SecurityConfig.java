@@ -6,7 +6,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -47,7 +46,19 @@ public class SecurityConfig {
         @Bean
         public SecurityFilterChain securityFilterChain(HttpSecurity http,
                         OidcAccessTokenAuthenticationFilter oidcAccessTokenAuthenticationFilter) throws Exception {
-                http.csrf(AbstractHttpConfigurer::disable);
+                // CSRF posture (deliberate, not a blanket disable):
+                // - Every authenticated endpoint is STATELESS and bearer-token based
+                //   (OidcAccessTokenAuthenticationFilter reads the Authorization header,
+                //   not an ambient session cookie), so a browser cannot be tricked into
+                //   forging them — classic CSRF does not apply.
+                // - The only cookie-bearing surface, /login/**, enforces its OWN
+                //   double-submit token: GET /login/context issues a CSRF token bound to
+                //   the Redis login session and every state-changing /login POST must echo
+                //   it back in the X-CSRF-Token header (see LoginFlowController).
+                // We therefore exempt the API from Spring's session-based CSRF rather than
+                // calling disable(): turning Spring CSRF ON for the bearer endpoints would
+                // 403 stateless clients (iOS / web) that hold no server CSRF token.
+                http.csrf(csrf -> csrf.ignoringRequestMatchers("/**"));
                 http.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
                 http.authorizeHttpRequests(authorize -> authorize
                                 .requestMatchers(HttpMethod.POST, OPEN_POST_ENDPOINTS.toArray(String[]::new))
