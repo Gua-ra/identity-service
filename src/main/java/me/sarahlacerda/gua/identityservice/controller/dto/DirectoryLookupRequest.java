@@ -2,21 +2,19 @@ package me.sarahlacerda.gua.identityservice.controller.dto;
 
 import java.util.List;
 
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import lombok.Data;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
 @Data
-@Schema(description = "Payload containing hashed phone digests to resolve")
+@Schema(description = "Address-book phone numbers to match against Gua accounts")
 public class DirectoryLookupRequest {
 
-    @NotBlank
-    @Schema(description = "Matrix user identifier whose address book is being queried", example = "@user:gua.global")
-    private String userId;
-
     @NotEmpty
-    @Schema(description = "Collection of HMAC-SHA256 digests produced by the client", example = "[\"1f3c...\", \"ab42...\"]")
-    private List<@NotBlank String> digests;
+    @Schema(
+        description = "Phone numbers in E.164 format. Sent over TLS only; the server digests them "
+                + "in memory and never stores or logs the raw numbers. Invalid entries are skipped.",
+        example = "[\"+5511999998888\", \"+14165550123\"]")
+    private List<String> phones;
 }

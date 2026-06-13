@@ -58,6 +58,13 @@ public class DirectoryEntry {
     @Column(name = "display_name")
     private String displayName;
 
+    /**
+     * Contact-discovery opt-out. When {@code false} the account is excluded from
+     * address-book matching ({@code /directory/lookup}); messaging is unaffected.
+     */
+    @Column(name = "discoverable", nullable = false)
+    private boolean discoverable = true;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
