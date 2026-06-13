@@ -78,6 +78,9 @@ public class IdentityServiceProperties {
     public static class DirectoryProperties {
         @NotBlank
         private String pepper;
+
+        /** Max phone numbers accepted per /directory/lookup request. */
+        private int maxLookupBatch = 1000;
     }
 
     /**

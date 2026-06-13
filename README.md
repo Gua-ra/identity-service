@@ -207,8 +207,25 @@ Each privileged operation requires a fresh **reauth token** proving phone posses
 
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
-| `POST /directory/lookup` | Bearer | Resolve contacts by salted phone hash. |
+| `POST /directory/lookup` | Bearer | Contact discovery: match address-book phone numbers (E.164) to Gua accounts. |
 | `GET /directory/resolve?username=` | Bearer | Resolve a global username to its Matrix user id + homeserver (federation routing lookup). |
+
+#### Contact discovery privacy model
+
+`POST /directory/lookup` takes `{"phones": ["+5511999998888", …]}` and returns the subset that
+are on Gua (`phone`, `userId`, `username`, `displayName`). The privacy contract:
+
+- **Nothing new at rest.** Submitted numbers are digested **in memory** with the same server-side
+  peppered HMAC-SHA256 used by the directory; raw numbers are never persisted and never logged.
+  The directory itself continues to store only `phone_digest` + a display-only mask.
+- **No client-side hashing, on purpose.** The phone keyspace is small enough that any digest a
+  client could compute (with a necessarily public key) is reversible by dictionary — while shipping
+  the secret pepper to clients would let anyone holding a DB dump reverse the at-rest digests.
+  Honest defense is TLS + server-side pepper, not hashing theater.
+- **Enumeration defenses.** Bearer auth required, per-request cap (`identity.directory.max-lookup-batch`,
+  default 1000, error `lookup_batch_too_large`), endpoint rate limit (below), and a per-account
+  `discoverable` opt-out (V6): accounts with `discoverable = false` never appear in results.
+- Invalid/duplicate address-book entries are skipped silently — one bad contact must not fail a sync.
 
 ---
 

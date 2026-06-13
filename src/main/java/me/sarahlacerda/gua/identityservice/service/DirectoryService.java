@@ -5,7 +5,6 @@ import java.util.List;
 import java.util.Optional;
 
 import lombok.AllArgsConstructor;
-import me.sarahlacerda.gua.identityservice.domain.DirectoryMatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -68,11 +67,13 @@ public class DirectoryService {
         return repository.findByPhoneDigest(phoneDigest);
     }
 
+    /**
+     * Contact discovery: resolves phone digests to directory entries, excluding
+     * accounts that opted out of discovery ({@code discoverable = false}).
+     */
     @Transactional(readOnly = true)
-    public List<DirectoryMatch> lookupMatches(Collection<String> digests) {
-        return repository.findByPhoneDigestIn(digests).stream()
-                .map(entry -> new DirectoryMatch(entry.getPhoneDigest(), entry.getUserId(), entry.getDisplayName()))
-                .toList();
+    public List<DirectoryEntry> findDiscoverableByDigests(Collection<String> digests) {
+        return repository.findByPhoneDigestInAndDiscoverableTrue(digests);
     }
 
     @Transactional

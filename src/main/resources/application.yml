@@ -16,6 +16,7 @@ identity:
     user-localpart-prefix: ${IDENTITY_MATRIX_LOCALPART_PREFIX}
   directory:
     pepper: ${IDENTITY_DIRECTORY_PEPPER}
+    max-lookup-batch: ${IDENTITY_DIRECTORY_MAX_LOOKUP_BATCH:1000}
   security:
     pin-reset-cooldown: ${IDENTITY_SECURITY_PIN_RESET_COOLDOWN:PT168H}
     max-pin-attempts: ${IDENTITY_SECURITY_MAX_PIN_ATTEMPTS:5}

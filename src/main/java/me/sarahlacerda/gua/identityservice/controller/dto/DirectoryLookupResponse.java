@@ -9,16 +9,17 @@ import io.swagger.v3.oas.annotations.media.Schema;
 
 @Data
 @AllArgsConstructor
-@Schema(description = "Response containing the contacts that matched the submitted digests")
+@Schema(description = "Contacts from the submitted phone numbers that are on Gua and discoverable")
 public class DirectoryLookupResponse {
 
     @Schema(description = "Contacts that already have a Gua account")
-    private List<DirectoryMatchView> matches;
+    private List<ContactMatchView> matches;
 
     @Schema(description = "Single contact match entry")
-    public record DirectoryMatchView(
-        @Schema(description = "Digest that produced the match", example = "1f3c...") String digest,
+    public record ContactMatchView(
+        @Schema(description = "The submitted phone number that matched", example = "+5511999998888") String phone,
         @Schema(description = "Matrix user identifier for the contact", example = "@friend:gua.global") String userId,
+        @Schema(description = "Global Gua username, when assigned", example = "friend") String username,
         @Schema(description = "Contact display name, if shared", example = "Friend") String displayName
     ) { }
 }
