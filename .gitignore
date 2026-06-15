@@ -36,6 +36,9 @@ out/
 ### VS Code ###
 .vscode/
 
+# Runtime output
+logs/
+
 # Local development artifacts
 docker/synapse/data/
 .env.identity-service
