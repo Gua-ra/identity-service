@@ -7,9 +7,10 @@ FROM eclipse-temurin:21-jdk AS builder
 WORKDIR /workspace
 
 # Copy Gradle wrapper and build files first for better layer caching
-COPY gradlew gradlew*
+COPY gradlew ./
 COPY gradle gradle
-COPY build.gradle settings.gradle .
+COPY build.gradle settings.gradle ./
+RUN chmod +x gradlew
 
 # Warm up dependency cache (ignore failure if dependencies task isn't available)
 RUN ./gradlew --no-daemon help >/dev/null 2>&1 || true
