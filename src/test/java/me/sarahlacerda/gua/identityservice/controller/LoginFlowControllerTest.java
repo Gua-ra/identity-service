@@ -19,11 +19,15 @@ import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import me.sarahlacerda.gua.identityservice.client.matrix.MatrixAdminClient;
 import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
@@ -42,11 +46,13 @@ import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationCode;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationService;
+import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 
 @WebMvcTest(LoginFlowController.class)
 @AutoConfigureMockMvc(addFilters = false)
+@AutoConfigureObservability   // provide a MeterRegistry in the slice (micrometer-prometheus is on the classpath)
 class LoginFlowControllerTest {
 
     private static final String SID = "session-id";
@@ -79,6 +85,8 @@ class LoginFlowControllerTest {
     private UsernamePolicy usernamePolicy;
     @MockitoBean
     private OidcAuthorizationService authorizationService;
+    @MockitoBean
+    private PasskeyService passkeyService;
     @MockitoBean
     private HomeserverRouter homeserverRouter;
     @MockitoBean
@@ -140,14 +148,12 @@ class LoginFlowControllerTest {
     }
 
     @Test
-    void submitOtpForReturningUserWithoutPinCompletes() throws Exception {
+    void submitOtpForReturningUserWithoutPinRoutesToPasskeySetup() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
         when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
         DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").displayName("Alice").build();
         when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
         when(userSecurityService.hasPin("u1")).thenReturn(false);
-        when(authorizationService.issueCode(any(), eq(CALLBACK), any()))
-                .thenReturn(issuedCode());
 
         mockMvc.perform(post("/login/otp")
                 .cookie(cookie())
@@ -155,8 +161,7 @@ class LoginFlowControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"code\":\"123456\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.phase").value("COMPLETED"))
-                .andExpect(jsonPath("$.redirectUrl").value(CALLBACK + "?code=auth-code&state=xyz"));
+                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"));
 
         verify(otpService).verifyOtp(PHONE, "123456");
     }
@@ -195,13 +200,11 @@ class LoginFlowControllerTest {
     }
 
     @Test
-    void submitPinCompletesForReturningUser() throws Exception {
+    void submitPinRoutesToPasskeySetupForReturningUser() throws Exception {
         LoginSession session = session(Phase.PIN_REQUIRED);
         session.setUserId("u1");
         session.setDisplayName("Alice");
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
-        when(authorizationService.issueCode(any(), eq(CALLBACK), any()))
-                .thenReturn(issuedCode());
 
         mockMvc.perform(post("/login/pin")
                 .cookie(cookie())
@@ -209,7 +212,7 @@ class LoginFlowControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"pin\":\"123456\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"));
 
         verify(userSecurityService).validatePinOrThrow("u1", "123456");
     }
@@ -234,11 +237,10 @@ class LoginFlowControllerTest {
     }
 
     @Test
-    void submitPinSetupWithPinSetsItAndCompletes() throws Exception {
+    void submitPinSetupWithPinSetsItAndRoutesToPasskeySetup() throws Exception {
         LoginSession session = session(Phase.PIN_SETUP);
         session.setUserId("@alice:gua.local");
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
-        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
 
         mockMvc.perform(post("/login/pin-setup")
                 .cookie(cookie())
@@ -246,17 +248,16 @@ class LoginFlowControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"pin\":\"123456\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"));
 
         verify(userSecurityService).setInitialPin("@alice:gua.local", "123456");
     }
 
     @Test
-    void submitPinSetupSkipCompletesWithoutPin() throws Exception {
+    void submitPinSetupSkipRoutesToPasskeySetupWithoutPin() throws Exception {
         LoginSession session = session(Phase.PIN_SETUP);
         session.setUserId("@alice:gua.local");
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
-        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
 
         mockMvc.perform(post("/login/pin-setup")
                 .cookie(cookie())
@@ -264,9 +265,74 @@ class LoginFlowControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"skip\":true}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"));
 
         verify(userSecurityService, org.mockito.Mockito.never()).setInitialPin(any(), any());
+    }
+
+    @Test
+    void passkeyRegistrationOptionsAreAvailableAfterPinStep() throws Exception {
+        LoginSession session = session(Phase.PASSKEY_SETUP);
+        session.setUserId("@alice:gua.local");
+        ObjectNode options = JsonNodeFactory.instance.objectNode();
+        options.put("challenge", "abc");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.startRegistration(SID, session)).thenReturn(options);
+
+        mockMvc.perform(post("/login/passkey/register/options")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.publicKey.challenge").value("abc"));
+    }
+
+    @Test
+    void passkeyRegistrationVerifyCompletesLogin() throws Exception {
+        LoginSession session = session(Phase.PASSKEY_SETUP);
+        session.setUserId("@alice:gua.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        mockMvc.perform(post("/login/passkey/register/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.redirectUrl").value(CALLBACK + "?code=auth-code&state=xyz"));
+
+        verify(passkeyService).finishRegistration(eq(SID), eq(session), any());
+    }
+
+    @Test
+    void passkeySetupSkipCompletesLogin() throws Exception {
+        LoginSession session = session(Phase.PASSKEY_SETUP);
+        session.setUserId("@alice:gua.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        mockMvc.perform(post("/login/passkey/setup-skip")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.redirectUrl").value(CALLBACK + "?code=auth-code&state=xyz"));
+    }
+
+    @Test
+    void passkeyAuthenticationIsDisabledBeforePhoneVerification() throws Exception {
+        mockMvc.perform(post("/login/passkey/auth/options")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("passkey_auth_disabled"));
     }
 
     @Test

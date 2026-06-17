@@ -6,6 +6,7 @@ import java.util.Optional;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
 
 import org.springframework.dao.DataIntegrityViolationException;
@@ -25,6 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.JsonNode;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -50,6 +52,7 @@ import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationCode;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationService;
+import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 
 /**
@@ -87,6 +90,7 @@ public class LoginFlowController {
     private final MatrixAdminClient matrixAdminClient;
     private final UsernamePolicy usernamePolicy;
     private final OidcAuthorizationService authorizationService;
+    private final PasskeyService passkeyService;
 
     @GetMapping("/context")
     @Operation(summary = "Fetch the current login state", description = "Returns the current step, a CSRF token to echo on subsequent calls, and the masked phone when known.")
@@ -144,7 +148,7 @@ public class LoginFlowController {
                 loginSessionService.save(sessionId, session);
                 return ResponseEntity.ok(state(session, null));
             }
-            return complete(sessionId, session);
+            return advanceToPasskeySetup(sessionId, session);
         }
 
         // Brand-new user: choose a username + display name next.
@@ -165,7 +169,7 @@ public class LoginFlowController {
         requirePhase(session, Phase.PIN_REQUIRED);
 
         userSecurityService.validatePinOrThrow(session.getUserId(), request.pin().trim());
-        return complete(sessionId, session);
+        return advanceToPasskeySetup(sessionId, session);
     }
 
     @PostMapping("/profile")
@@ -218,7 +222,7 @@ public class LoginFlowController {
     }
 
     @PostMapping("/pin-setup")
-    @Operation(summary = "Set up (or skip) an account PIN", description = "Optional two-step verification step offered to brand-new accounts. Sends a PIN to enable it, or skip:true to finish without one. Completes login either way.")
+    @Operation(summary = "Set up (or skip) an account PIN", description = "Optional two-step verification step offered to brand-new accounts. Sends a PIN to enable it, or skip:true to continue without one.")
     public ResponseEntity<LoginStateResponse> submitPinSetup(
             @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
             @RequestHeader(value = CSRF_HEADER, required = false) String csrf,
@@ -230,7 +234,60 @@ public class LoginFlowController {
         if (!request.skip() && StringUtils.hasText(request.pin())) {
             userSecurityService.setInitialPin(session.getUserId(), request.pin().trim());
         }
+        return advanceToPasskeySetup(sessionId, session);
+    }
+
+    @PostMapping("/passkey/register/options")
+    @Operation(summary = "Start passkey setup", description = "Creates WebAuthn registration options after phone verification and any PIN step are complete.")
+    public ResponseEntity<PasskeyOptionsResponse> startPasskeyRegistration(
+            @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
+            @RequestHeader(value = CSRF_HEADER, required = false) String csrf) {
+        LoginSession session = requireSession(sessionId);
+        requireCsrf(session, csrf);
+        requirePhase(session, Phase.PASSKEY_SETUP);
+
+        return ResponseEntity.ok(new PasskeyOptionsResponse(passkeyService.startRegistration(sessionId, session)));
+    }
+
+    @PostMapping("/passkey/register/verify")
+    @Operation(summary = "Finish passkey setup", description = "Verifies the WebAuthn attestation response and stores the credential for future passkey sign-ins.")
+    public ResponseEntity<LoginStateResponse> finishPasskeyRegistration(
+            @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
+            @RequestHeader(value = CSRF_HEADER, required = false) String csrf,
+            @RequestBody @Valid PasskeyCredentialRequest request) {
+        LoginSession session = requireSession(sessionId);
+        requireCsrf(session, csrf);
+        requirePhase(session, Phase.PASSKEY_SETUP);
+
+        passkeyService.finishRegistration(sessionId, session, request.credential());
         return complete(sessionId, session);
+    }
+
+    @PostMapping("/passkey/setup-skip")
+    @Operation(summary = "Skip passkey setup", description = "Completes login without associating a passkey.")
+    public ResponseEntity<LoginStateResponse> skipPasskeySetup(
+            @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
+            @RequestHeader(value = CSRF_HEADER, required = false) String csrf) {
+        LoginSession session = requireSession(sessionId);
+        requireCsrf(session, csrf);
+        requirePhase(session, Phase.PASSKEY_SETUP);
+
+        return complete(sessionId, session);
+    }
+
+    @PostMapping("/passkey/auth/options")
+    @Operation(summary = "Passkey sign-in disabled", description = "Phone verification is mandatory; passkeys can only be associated after OTP and any PIN step.")
+    public ResponseEntity<PasskeyOptionsResponse> startPasskeyAuthentication() {
+        throw new LoginFlowException(HttpStatus.NOT_FOUND, "passkey_auth_disabled",
+                "Phone verification is required before passkey setup.");
+    }
+
+    @PostMapping("/passkey/auth/verify")
+    @Operation(summary = "Passkey sign-in disabled", description = "Phone verification is mandatory; passkeys can only be associated after OTP and any PIN step.")
+    public ResponseEntity<LoginStateResponse> finishPasskeyAuthentication(
+            @RequestBody(required = false) PasskeyCredentialRequest request) {
+        throw new LoginFlowException(HttpStatus.NOT_FOUND, "passkey_auth_disabled",
+                "Phone verification is required before passkey setup.");
     }
 
     /**
@@ -272,6 +329,12 @@ public class LoginFlowController {
         return ResponseEntity.ok()
                 .header(HttpHeaders.SET_COOKIE, expired.toString())
                 .body(state(session, redirect.toUriString()));
+    }
+
+    private ResponseEntity<LoginStateResponse> advanceToPasskeySetup(String sessionId, LoginSession session) {
+        session.setPhase(Phase.PASSKEY_SETUP);
+        loginSessionService.save(sessionId, session);
+        return ResponseEntity.ok(state(session, null));
     }
 
     private LoginSession requireSession(String sessionId) {
@@ -358,6 +421,12 @@ public class LoginFlowController {
     }
 
     public record ProfileRequest(@NotBlank String username, String displayName) {
+    }
+
+    public record PasskeyCredentialRequest(@NotNull JsonNode credential) {
+    }
+
+    public record PasskeyOptionsResponse(JsonNode publicKey) {
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
