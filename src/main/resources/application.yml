@@ -142,12 +142,15 @@ management:
   endpoints:
     web:
       exposure:
-        include: ${MANAGEMENT_ENDPOINTS_EXPOSURE:health,info}
+        include: ${MANAGEMENT_ENDPOINTS_EXPOSURE:health,info,prometheus}
   endpoint:
     health:
       probes:
         enabled: true
       show-details: never
+  metrics:
+    tags:
+      application: identity-service   # so dashboards can filter Gua app metrics by service
   health:
     redis:
       enabled: true

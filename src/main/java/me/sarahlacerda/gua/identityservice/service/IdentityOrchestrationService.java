@@ -3,6 +3,7 @@ package me.sarahlacerda.gua.identityservice.service;
 import java.util.List;
 import java.util.Optional;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.Nullable;
 import lombok.RequiredArgsConstructor;
 import me.sarahlacerda.gua.identityservice.client.matrix.MatrixAdminClient;
@@ -38,6 +39,7 @@ public class IdentityOrchestrationService {
     private final DeviceNotificationService deviceNotificationService;
     private final UsernamePolicy usernamePolicy;
     private final ResolverDirectoryClient resolverDirectoryClient;
+    private final MeterRegistry metrics;
 
     public void sendOtp(String e164PhoneNumber, String requesterIp, String language) {
         otpService.sendOtp(e164PhoneNumber, requesterIp, language);
@@ -129,6 +131,8 @@ public class IdentityOrchestrationService {
         directoryService.upsertByDigest(digest, phoneNumberMasker.mask(e164PhoneNumber), userId, resolvedDisplayName);
         // Keep the shared resolver directory in sync (covers accounts created before this integration).
         resolverDirectoryClient.registerPhone(e164PhoneNumber);
+        // gua_identity_login_total{result} — successful sign-ins of existing accounts.
+        metrics.counter("gua.identity.login", "result", "success").increment();
         userSecurityService.recordSuccessfulLogin(userId);
         registerDeviceIfPresent(userId, session, deviceMetadata);
 
@@ -187,6 +191,8 @@ public class IdentityOrchestrationService {
         // to us (best-effort; the local directory above is authoritative for our own users).
         resolverDirectoryClient.registerPhone(phone);
 
+        // gua_identity_signup_total{result} — completed new-account registrations.
+        metrics.counter("gua.identity.signup", "result", "success").increment();
         userSecurityService.recordSuccessfulLogin(userId);
         registerDeviceIfPresent(userId, session, deviceMetadata);
 

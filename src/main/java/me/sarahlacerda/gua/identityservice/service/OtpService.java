@@ -7,6 +7,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.exception.InvalidOtpException;
 import me.sarahlacerda.gua.identityservice.exception.OtpRateLimitedException;
@@ -24,19 +25,27 @@ public class OtpService {
     private final OtpCodeGenerator codeGenerator;
     private final SmsSender smsSender;
     private final RateLimiter rateLimiter;
+    private final MeterRegistry metrics;
+    private final String smsProvider;
 
     public OtpService(
         StringRedisTemplate redisTemplate,
         IdentityServiceProperties properties,
         OtpCodeGenerator codeGenerator,
         SmsSender smsSender,
-        RateLimiter rateLimiter
+        RateLimiter rateLimiter,
+        MeterRegistry metrics
     ) {
         this.redisTemplate = redisTemplate;
         this.properties = properties;
         this.codeGenerator = codeGenerator;
         this.smsSender = smsSender;
         this.rateLimiter = rateLimiter;
+        this.metrics = metrics;
+        // e.g. TwilioSmsSender -> "twilio", LoggingSmsSender -> "logging". Lets the SMS-usage metric
+        // distinguish the real provider from the dev logger once real SMS is wired.
+        this.smsProvider = smsSender.getClass().getSimpleName()
+            .replace("SmsSender", "").toLowerCase(java.util.Locale.ROOT);
     }
 
     public void sendOtp(String e164PhoneNumber, String requesterIp, String language) {
@@ -47,16 +56,26 @@ public class OtpService {
         String key = OTP_KEY_PREFIX + e164PhoneNumber;
         Duration ttl = properties.getOtp().getTtl();
         redisTemplate.opsForValue().set(key, code, ttl);
-        smsSender.send(e164PhoneNumber, messageBody);
+        try {
+            smsSender.send(e164PhoneNumber, messageBody);
+            // gua_identity_sms_send_total{provider,result} — SMS usage + delivery failures.
+            metrics.counter("gua.identity.sms.send", "provider", smsProvider, "result", "sent").increment();
+        } catch (RuntimeException ex) {
+            metrics.counter("gua.identity.sms.send", "provider", smsProvider, "result", "failed").increment();
+            throw ex;
+        }
     }
 
     public void verifyOtp(String e164PhoneNumber, String code) {
         String key = OTP_KEY_PREFIX + e164PhoneNumber;
         String storedCode = redisTemplate.opsForValue().get(key);
         if (!StringUtils.hasText(storedCode) || !storedCode.equals(code)) {
+            // gua_identity_otp_verify_total{result} — wrong/expired codes (auth friction / abuse signal).
+            metrics.counter("gua.identity.otp.verify", "result", "invalid").increment();
             throw new InvalidOtpException("Invalid or expired verification code");
         }
         redisTemplate.delete(key);
+        metrics.counter("gua.identity.otp.verify", "result", "valid").increment();
     }
 
     private void enforceRateLimits(String e164PhoneNumber, String requesterIp) {

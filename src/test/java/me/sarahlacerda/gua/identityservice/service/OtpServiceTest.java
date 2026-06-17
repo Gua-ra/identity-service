@@ -48,7 +48,8 @@ class OtpServiceTest {
     @BeforeEach
     void setUp() {
         properties = new IdentityServiceProperties();
-        otpService = new OtpService(redisTemplate, properties, codeGenerator, smsSender, rateLimiter);
+        otpService = new OtpService(redisTemplate, properties, codeGenerator, smsSender, rateLimiter,
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
     }
 
     @Test
