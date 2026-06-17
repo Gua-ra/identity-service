@@ -15,8 +15,8 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.crypto.Ed25519;
 
 /**
- * Publishes this homeserver's accounts into the gua-resolver's <b>shared</b> phone-&gt;homeserver directory
- * (POST /directory/entries), so the global federation front door can route an existing phone to us. The
+ * Publishes the homeserver's accounts into the gua-resolver's <b>shared</b> phone-&gt;homeserver directory
+ * (POST /directory/entries), so the global federation front door can route an existing phone to the homeserver. The
  * write is authenticated with this homeserver's membership credential (its Ed25519 roster signing key), so
  * the resolver only accepts entries for accounts we host.
  *
