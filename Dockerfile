@@ -6,7 +6,9 @@
 FROM eclipse-temurin:21-jdk AS builder
 WORKDIR /workspace
 
-# Copy Gradle wrapper and build files first for better layer caching
+# Copy Gradle wrapper and build files first for better layer caching.
+# NB: `COPY gradlew ./` (NOT `COPY gradlew gradlew*`, which copies it to a file literally named "gradlew*"
+# and makes `./gradlew` exit 127).
 COPY gradlew ./
 COPY gradle gradle
 COPY build.gradle settings.gradle ./

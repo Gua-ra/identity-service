@@ -55,8 +55,12 @@ class IdentityOrchestrationServiceTest {
         private TrustedDeviceService trustedDeviceService;
         @Mock
         private DeviceNotificationService deviceNotificationService;
+        @Mock
+        private me.sarahlacerda.gua.identityservice.service.routing.ResolverDirectoryClient resolverDirectoryClient;
 
         private final UsernamePolicy usernamePolicy = new UsernamePolicy();
+        private final io.micrometer.core.instrument.MeterRegistry meterRegistry =
+                        new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
 
         private IdentityOrchestrationService service;
 
@@ -74,7 +78,9 @@ class IdentityOrchestrationServiceTest {
                                 userSecurityService,
                                 trustedDeviceService,
                                 deviceNotificationService,
-                                usernamePolicy);
+                                usernamePolicy,
+                                resolverDirectoryClient,
+                                meterRegistry);
         }
 
         @Test

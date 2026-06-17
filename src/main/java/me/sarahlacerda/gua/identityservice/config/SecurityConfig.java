@@ -41,6 +41,7 @@ public class SecurityConfig {
                         "/actuator/health",
                         "/actuator/health/**",
                         "/actuator/info",
+                        "/actuator/prometheus",   // scraped by Prometheus in-cluster; blocked at the public edge
                         "/signup/check-username");
 
         @Bean
