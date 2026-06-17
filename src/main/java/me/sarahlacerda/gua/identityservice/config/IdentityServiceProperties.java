@@ -31,6 +31,20 @@ public class IdentityServiceProperties {
     private final SecurityProperties security = new SecurityProperties();
     private final SmsProperties sms = new SmsProperties();
     private final RateLimitProperties rateLimits = new RateLimitProperties();
+    private final ResolverProperties resolver = new ResolverProperties();
+
+    /**
+     * gua-resolver integration: publish this homeserver's accounts into the shared phone-&gt;homeserver
+     * directory. All blank = disabled (single-homeserver dev works without it). signingPrivateKey is this
+     * homeserver's Ed25519 membership credential (base64 PKCS#8), injected from a Secret.
+     */
+    @Getter
+    @Setter
+    public static class ResolverProperties {
+        private String baseUrl;
+        private String homeserverId;
+        private String signingPrivateKey;
+    }
 
     @Getter
     @Setter

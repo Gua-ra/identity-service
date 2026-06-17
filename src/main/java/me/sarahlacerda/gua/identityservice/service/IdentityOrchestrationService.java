@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
+import me.sarahlacerda.gua.identityservice.service.routing.ResolverDirectoryClient;
 import me.sarahlacerda.gua.identityservice.service.security.DeviceNotificationService;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
@@ -36,6 +37,7 @@ public class IdentityOrchestrationService {
     private final TrustedDeviceService trustedDeviceService;
     private final DeviceNotificationService deviceNotificationService;
     private final UsernamePolicy usernamePolicy;
+    private final ResolverDirectoryClient resolverDirectoryClient;
 
     public void sendOtp(String e164PhoneNumber, String requesterIp, String language) {
         otpService.sendOtp(e164PhoneNumber, requesterIp, language);
@@ -125,6 +127,8 @@ public class IdentityOrchestrationService {
 
         final String digest = phoneNumberHasher.digest(e164PhoneNumber);
         directoryService.upsertByDigest(digest, phoneNumberMasker.mask(e164PhoneNumber), userId, resolvedDisplayName);
+        // Keep the shared resolver directory in sync (covers accounts created before this integration).
+        resolverDirectoryClient.registerPhone(e164PhoneNumber);
         userSecurityService.recordSuccessfulLogin(userId);
         registerDeviceIfPresent(userId, session, deviceMetadata);
 
@@ -178,6 +182,10 @@ public class IdentityOrchestrationService {
         } catch (DataIntegrityViolationException ex) {
             throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
         }
+
+        // Publish to the gua-resolver shared directory so the federation front door can route this phone
+        // to us (best-effort; the local directory above is authoritative for our own users).
+        resolverDirectoryClient.registerPhone(phone);
 
         userSecurityService.recordSuccessfulLogin(userId);
         registerDeviceIfPresent(userId, session, deviceMetadata);
