@@ -14,7 +14,6 @@ public record OidcAuthorization(
 
     public OidcAuthorization {
         Objects.requireNonNull(userId, "userId must not be null");
-        Objects.requireNonNull(phoneNumber, "phoneNumber must not be null");
         Objects.requireNonNull(scope, "scope must not be null");
         Objects.requireNonNull(clientId, "clientId must not be null");
         scope = Set.copyOf(scope);

@@ -13,6 +13,7 @@ import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -117,8 +118,11 @@ public class OidcTokenService {
                 .jwtID(UUID.randomUUID().toString())
                 .issueTime(Date.from(now))
                 .expirationTime(Date.from(expiresAt))
-                .claim("scope", authorization.scopeAsString())
-                .claim("phone_number", authorization.phoneNumber());
+                .claim("scope", authorization.scopeAsString());
+
+        if (StringUtils.hasText(authorization.phoneNumber())) {
+            builder.claim("phone_number", authorization.phoneNumber());
+        }
 
         if (authorization.displayName() != null) {
             builder.claim("name", authorization.displayName());
