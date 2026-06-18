@@ -1,0 +1,93 @@
+name: CI/CD
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/gua-ra/identity-service
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - run: ./gradlew test --no-daemon
+
+  image:
+    needs: test
+    if: github.event_name != 'pull_request' && github.repository == 'Gua-ra/identity-service'
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.ref.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: ref
+        run: echo "ref=${IMAGE}:sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=tag
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # AUTOMATIC: every merge to main updates the dev cluster.
+  deploy-dev:
+    needs: image
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, dev]
+    environment: dev
+    steps:
+      - name: Roll out ${{ needs.image.outputs.ref }} to dev
+        run: |
+          IMG="${{ needs.image.outputs.ref }}"
+          # The dev cluster side-loads images (imagePullPolicy: Never), and the runner lives on the host:
+          # pull the immutable sha-tagged image from GHCR, import it into k3s containerd, then set + roll.
+          docker pull "$IMG"
+          docker save "$IMG" | sudo k3s ctr images import -
+          kubectl -n gua set image deployment/identity-service identity-service="$IMG"
+          kubectl -n gua rollout status deployment/identity-service --timeout=180s
+
+  # MANUAL GATE: pauses until a maintainer approves the `production` GitHub Environment.
+  deploy-prod:
+    needs: deploy-dev
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, prod]
+    environment: production
+    steps:
+      - name: Roll out ${{ needs.image.outputs.ref }} to prod
+        run: |
+          IMG="${{ needs.image.outputs.ref }}"
+          docker pull "$IMG"
+          docker save "$IMG" | sudo k3s ctr images import -
+          kubectl -n gua set image deployment/identity-service identity-service="$IMG"
+          kubectl -n gua rollout status deployment/identity-service --timeout=180s

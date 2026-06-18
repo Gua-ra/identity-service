@@ -16,7 +16,10 @@ The **Gua Identity Service** is a Spring Boot–based microservice that handles 
 - 🔢 **Account PIN (two-step verification)** — set, OTP-protected change with a 24h cooldown, recovery reset, 5-attempt lockout with a 15-minute lock, and audit logging. A NIST-aligned strength policy rejects non-6-digit, all-repeated, sequential, and common PINs.
 - 🛡️ **Privileged account operations** — fresh phone-OTP reauthentication gates account deactivation and identity-credential reset (modeled on Matrix UIA `m.login.msisdn`).
 - 🔑 **OpenID Connect provider** — RS256 authorization-code + PKCE flow with an **interactive browser login** (phone → OTP → PIN/profile) that MAS redirects into, discovery/JWKS endpoints, and seeded clients for MAS (confidential) and the Gua apps (public, PKCE-required).
+- 🪪 **Passkeys (WebAuthn)** — after phone verification, the user can optionally **register a passkey** and later **sign in with it** instead of an SMS code. Built on Yubico `webauthn-server-core`; credentials are persisted (`passkey_credentials`) and the login flow gains a `PASSKEY_SETUP` step.
+- 🌐 **Federation directory publishing** — at account provisioning, publishes `phone → this homeserver` to the **gua-resolver** shared directory (`POST /directory/entries`), signed with the homeserver's Ed25519 membership credential. Best-effort: a resolver outage never blocks sign-up/sign-in.
 - 📇 **Directory lookup** — privacy-preserving phone-hash search using a server-side pepper. The raw phone number is never stored; only an irreversible HMAC digest plus a display-only masked form (e.g. `••••4567`).
+- 📊 **Prometheus metrics** — Micrometer at `/actuator/prometheus` (HTTP/JVM/DB-pool) plus domain counters (`gua_identity_signup_total`, `gua_identity_login_total`, `gua_identity_otp_verify_total`, `gua_identity_sms_send_total{provider,result}`).
 - 🚦 **Built-in rate limiting** — per-endpoint Resilience4j limiters so the service is safe to run without an upstream WAF.
 - 🗄️ **Persistent identities** — PostgreSQL with Flyway migrations.
 - 📚 **OpenAPI/Swagger UI** at `/swagger-ui.html`.
@@ -257,6 +260,11 @@ For browser-based login (the path used by MAS and the Gua apps), the identity se
 | `POST /login/otp` | Verify the OTP; routes to the PIN step (returning two-step user), the profile step (new user), or completes login. |
 | `POST /login/pin` | Verify the account PIN (returning two-step user). |
 | `POST /login/profile` | Choose username + display name (new user). |
+| `POST /login/passkey/register/options` · `…/register/verify` | Register a passkey for the account (WebAuthn create). |
+| `POST /login/passkey/setup-skip` | Decline passkey setup and complete login. |
+| `POST /login/passkey/auth/options` · `…/auth/verify` | Sign in with an existing passkey (WebAuthn get). |
+
+Once phone (and any PIN) verification completes, the flow may enter the `PASSKEY_SETUP` step, offering passkey registration before finishing; the user can skip it. A returning user may instead authenticate with a passkey via the `…/auth/*` endpoints.
 
 On success an authorization code is issued, the login session is consumed (and its cookie cleared), and the response carries `redirectUrl` for the UI to navigate back to the client, which exchanges the code at `/oauth2/token`. For new users the chosen handle is emitted as the `preferred_username` claim so MAS uses it as the Matrix localpart on first provisioning; the OIDC `sub` is an opaque, stable identifier.
 
@@ -303,6 +311,42 @@ Every public endpoint is protected by a **Resilience4j**-based rate limiter, so 
 Set `IDENTITY_RATE_LIMITS_ENABLED=false` to disable the limiter (e.g., for load testing). Otherwise clients receive HTTP `429` with a JSON body (`{"message":"Rate limit exceeded"}`) and a `Retry-After` header.
 
 ---
+## 🌐 Federation directory (gua-resolver)
+
+This homeserver publishes its accounts into the **gua-resolver** shared phone→homeserver directory, so the
+global federation front door can route an existing phone to us. At provisioning (and re-affirmed on sign-in)
+the service `POST`s `phone → homeserverId` to the resolver's `/directory/entries`, **signed with this
+homeserver's Ed25519 membership credential** (the key the resolver admitted for it) so the resolver only
+accepts entries for accounts we host. It is **best-effort** — a resolver outage never blocks sign-up/sign-in,
+and the local [directory](#-directory) stays authoritative for our own users.
+
+Configuration (`identity.resolver.*`, all blank = disabled, single-homeserver dev works without it):
+
+| Property | Env | Notes |
+| --- | --- | --- |
+| `base-url` | `IDENTITY_RESOLVER_BASEURL` | resolver base URL (e.g. the in-cluster service) |
+| `homeserver-id` | `IDENTITY_RESOLVER_HOMESERVERID` | this homeserver's id in the resolver roster |
+| `signing-private-key` | `IDENTITY_RESOLVER_SIGNINGPRIVATEKEY` | Ed25519 membership credential, base64 PKCS#8 — inject from a Secret |
+
+The `IDENTITY_DIRECTORY_PEPPER` **must match** the resolver's directory pepper so phone hashes line up.
+
+## 📊 Observability
+
+Micrometer exposes Prometheus metrics at **`/actuator/prometheus`** (enable via
+`MANAGEMENT_ENDPOINTS_EXPOSURE=health,info,prometheus` — the default; the endpoint is permitted in
+`SecurityConfig` for in-cluster scraping and tagged `application=identity-service`). Alongside the free
+HTTP/JVM/DB-pool metrics, these domain counters drive the Gua usage/reliability dashboards + alerts:
+
+| Metric | Meaning |
+| --- | --- |
+| `gua_identity_signup_total{result}` | completed new-account registrations |
+| `gua_identity_login_total{result}` | successful sign-ins of existing accounts |
+| `gua_identity_otp_verify_total{result=valid\|invalid}` | OTP correctness (delivery / abuse signal) |
+| `gua_identity_sms_send_total{provider,result=sent\|failed}` | SMS usage + delivery failures (`provider` = the active `SmsSender`) |
+
+> Keep `/actuator` off the public edge (block it at the ingress/reverse-proxy) — Prometheus scrapes it on the
+> internal Service.
+
 ## 🚀 Deployment
 
 ### Build the container image
@@ -323,6 +367,8 @@ An example `docker-compose.identity.yml` is included. Provide environment values
 - `OIDC_RSA_PRIVATE_KEY` / `OIDC_RSA_PUBLIC_KEY` – RSA keypair used to sign and verify RS256 OIDC tokens (an ephemeral key is generated if omitted — not suitable for production)
 - `OIDC_CLIENT_MAS_SECRET` – confidential client secret for the MAS OIDC client
 - `IDENTITY_SMS_TWILIO_*` – Twilio credentials if SMS delivery is enabled (`IDENTITY_SMS_TWILIO_ENABLED=true`)
+- `IDENTITY_RESOLVER_*` – `BASEURL`, `HOMESERVERID`, and `SIGNINGPRIVATEKEY` to publish into the gua-resolver shared directory (see [Federation directory](#-federation-directory-gua-resolver)); leave blank to disable
+- `MANAGEMENT_ENDPOINTS_EXPOSURE` – actuator endpoints to expose (default `health,info,prometheus`)
 
 Then run:
 
