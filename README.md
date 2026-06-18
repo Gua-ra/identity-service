@@ -379,25 +379,3 @@ docker compose -f docker-compose.identity.yml up -d --build
 The container exposes port `8080` by default and relies on the surrounding services (Postgres/Redis/Synapse) defined in the compose file. Adjust or remove the bundled Postgres/Redis services if you point at managed instances instead.
 
 ---
-
-## 🔁 CI/CD
-
-[`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml):
-
-1. **Test** — `./gradlew test` on every push/PR.
-2. **Image** — on `main`/tags, build a multi-arch image and push to `ghcr.io/gua-ra/identity-service`
-   (tagged by commit SHA).
-3. **Deploy dev (automatic)** — every merge to `main` rolls the new image out to the **dev** cluster.
-4. **Deploy prod (manual gate)** — a follow-up job that pauses on the GitHub **`production` Environment**;
-   it ships only after a maintainer clicks **Review deployments → Approve** in the Actions run.
-
-The deploy jobs run on **self-hosted runners on the cluster host** (labelled `dev` / `prod`) because the k3s
-API + per-env values are LAN/WireGuard-only. One-time setup:
-
-- Register a self-hosted runner on the dev host (emolga) with label `dev` (and on the prod host with `prod`
-  when it exists) — see the runner instructions in `gua-deploy/k8s/cicd/README.md`.
-- Create a GitHub **Environment** named `production` with **required reviewers** (that's the manual button).
-
-You can also trigger a deploy by hand: `gh workflow run ci-cd.yml -R Gua-ra/identity-service`.
-
----
