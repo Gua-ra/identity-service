@@ -173,7 +173,11 @@ public class IdentityServiceProperties {
             private boolean enabled = false;
             private String accountSid;
             private String authToken;
+            /** Sender phone number (E.164). Used when {@code messagingServiceSid} is not set. */
             private String fromNumber;
+            /** Twilio Messaging Service SID (preferred for production: number pool, opt-out/compliance).
+             * Takes precedence over {@code fromNumber} when set. */
+            private String messagingServiceSid;
         }
     }
 

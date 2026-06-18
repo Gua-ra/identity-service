@@ -366,7 +366,15 @@ An example `docker-compose.identity.yml` is included. Provide environment values
 - `IDENTITY_DIRECTORY_PEPPER` – server-side secret used to hash phone digests
 - `OIDC_RSA_PRIVATE_KEY` / `OIDC_RSA_PUBLIC_KEY` – RSA keypair used to sign and verify RS256 OIDC tokens (an ephemeral key is generated if omitted — not suitable for production)
 - `OIDC_CLIENT_MAS_SECRET` – confidential client secret for the MAS OIDC client
-- `IDENTITY_SMS_TWILIO_*` – Twilio credentials if SMS delivery is enabled (`IDENTITY_SMS_TWILIO_ENABLED=true`)
+- **SMS delivery (Twilio).** By default SMS is logged, not sent (`LoggingSmsSender`). Set
+  `IDENTITY_SMS_TWILIO_ENABLED=true` to send real OTPs via Twilio:
+  - `IDENTITY_SMS_TWILIO_ACCOUNTSID` – Twilio Account SID (`AC…`)
+  - `IDENTITY_SMS_TWILIO_AUTHTOKEN` – Twilio Auth Token (secret)
+  - `IDENTITY_SMS_TWILIO_FROMNUMBER` – an SMS-capable Twilio number in E.164 (e.g. `+1…`), **or**
+  - `IDENTITY_SMS_TWILIO_MESSAGINGSERVICESID` – a Twilio Messaging Service SID (`MG…`), preferred for
+    production (number pool, opt-out/compliance); takes precedence over the from-number when both are set.
+
+  (On a Twilio trial account, SMS can only be delivered to verified numbers.)
 - `IDENTITY_RESOLVER_*` – `BASEURL`, `HOMESERVERID`, and `SIGNINGPRIVATEKEY` to publish into the gua-resolver shared directory (see [Federation directory](#-federation-directory-gua-resolver)); leave blank to disable
 - `MANAGEMENT_ENDPOINTS_EXPOSURE` – actuator endpoints to expose (default `health,info,prometheus`)
 
