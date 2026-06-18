@@ -1,7 +1,5 @@
 name: CI/CD
 
-# test on every push/PR; on merge to main build+publish the image and roll it out to dev automatically,
-# then offer prod behind a manual approval gate.
 on:
   push:
     branches: ["main"]
