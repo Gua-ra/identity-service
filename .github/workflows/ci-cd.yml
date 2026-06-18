@@ -70,10 +70,9 @@ jobs:
       - name: Roll out ${{ needs.image.outputs.ref }} to dev
         run: |
           IMG="${{ needs.image.outputs.ref }}"
-          # The dev cluster side-loads images (imagePullPolicy: Never), and the runner lives on the host:
-          # pull the immutable sha-tagged image from GHCR, import it into k3s containerd, then set + roll.
-          docker pull "$IMG"
-          docker save "$IMG" | sudo k3s ctr images import -
+          # emolga is k3s/containerd (no Docker) and pods use imagePullPolicy: Never, so pull the immutable
+          # sha-tagged image straight into the kubelet's containerd namespace, then set the image + roll.
+          sudo k3s ctr -n k8s.io images pull --user "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" "$IMG"
           kubectl -n gua set image deployment/identity-service identity-service="$IMG"
           kubectl -n gua rollout status deployment/identity-service --timeout=180s
 
@@ -87,7 +86,6 @@ jobs:
       - name: Roll out ${{ needs.image.outputs.ref }} to prod
         run: |
           IMG="${{ needs.image.outputs.ref }}"
-          docker pull "$IMG"
-          docker save "$IMG" | sudo k3s ctr images import -
+          sudo k3s ctr -n k8s.io images pull --user "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" "$IMG"
           kubectl -n gua set image deployment/identity-service identity-service="$IMG"
           kubectl -n gua rollout status deployment/identity-service --timeout=180s
