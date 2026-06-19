@@ -199,6 +199,42 @@ class WebClientMatrixAdminClientWireMockTest {
     }
 
     @Test
+    void findUserIdByPhoneResolvesViaThreepidBinding() {
+        wireMock.stubFor(get(urlPathMatching("/_synapse/admin/v1/threepid/msisdn/users/.+"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                    {"user_id": "@user:example.com"}
+                    """)));
+
+        assertThat(client.findUserIdByPhone("+15551234567"))
+            .contains("@user:example.com");
+
+        wireMock.verify(getRequestedFor(urlPathMatching("/_synapse/admin/v1/threepid/msisdn/users/.+"))
+            .withHeader("Authorization", equalTo("Bearer admin-token-abc")));
+    }
+
+    @Test
+    void findUserIdByPhoneReturnsEmptyWhenNotBound() {
+        wireMock.stubFor(get(urlPathMatching("/_synapse/admin/v1/threepid/msisdn/users/.+"))
+            .willReturn(aResponse()
+                .withStatus(404)
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                    {"errcode": "M_NOT_FOUND", "error": "User not found"}
+                    """)));
+
+        assertThat(client.findUserIdByPhone("+15551234567")).isEmpty();
+    }
+
+    @Test
+    void findUserIdByPhoneReturnsEmptyForBlankInput() {
+        assertThat(client.findUserIdByPhone(null)).isEmpty();
+        assertThat(client.findUserIdByPhone("  ")).isEmpty();
+    }
+
+    @Test
     void loginPostsCredentialsAndParsesAccessToken() {
         wireMock.stubFor(post(urlEqualTo("/_matrix/client/v3/login"))
             .willReturn(aResponse()

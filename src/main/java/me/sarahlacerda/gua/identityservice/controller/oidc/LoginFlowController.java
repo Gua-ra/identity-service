@@ -9,6 +9,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -75,6 +77,8 @@ import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 @Tag(name = "Interactive Login", description = "Browser-driven OIDC login flow (phone, OTP, PIN/profile) used by gua-idp-web")
 public class LoginFlowController {
 
+    private static final Logger log = LoggerFactory.getLogger(LoginFlowController.class);
+
     private static final String CSRF_HEADER = "X-CSRF-Token";
     private static final String COOKIE_NAME_EXPR = "${idp.login.cookie-name:gua_login}";
 
@@ -136,26 +140,71 @@ public class LoginFlowController {
         String digest = phoneNumberHasher.digest(session.getPhoneNumber());
         Optional<DirectoryEntry> existing = directoryService.findByDigest(digest);
         if (existing.isPresent()) {
-            DirectoryEntry entry = existing.get();
-            session.setUserId(entry.getUserId());
-            session.setDisplayName(entry.getDisplayName());
-            // Returning users are still NEW to MAS on their first delegated login, which
-            // requires a localpart. Re-emit it from the stable MXID we already store.
-            session.setPreferredUsername(localpartOf(entry.getUserId()));
-            session.setNewUser(false);
-            if (userSecurityService.hasPin(entry.getUserId())) {
-                session.setPhase(Phase.PIN_REQUIRED);
-                loginSessionService.save(sessionId, session);
-                return ResponseEntity.ok(state(session, null));
-            }
-            return advanceToPasskeySetup(sessionId, session);
+            return routeExistingUser(sessionId, session, existing.get().getUserId(), existing.get().getDisplayName());
         }
 
-        // Brand-new user: choose a username + display name next.
+        // The peppered phone digest missed. Before treating this as a brand-new
+        // signup, fall back to the homeserver's phone (msisdn threepid) binding,
+        // which is independent of the directory pepper. A rotated/drifted
+        // IDENTITY_DIRECTORY_PEPPER, or env/DB drift, orphans the directory row but
+        // NOT this binding, so a genuine returning user is still recognised here and
+        // is never minted a second MXID + directory row (the duplicate-account bug).
+        Optional<String> boundUserId = matrixAdminClient.findUserIdByPhone(session.getPhoneNumber());
+        if (boundUserId.isPresent()) {
+            String userId = boundUserId.get();
+            log.warn("Directory row missing for a returning account (digest miss); recovered userId via "
+                    + "homeserver phone binding and healing the directory row");
+            // Heal the directory row so future logins resolve via the fast digest path.
+            healDirectoryRow(digest, session.getPhoneNumber(), userId);
+            DirectoryEntry healed = directoryService.findByDigest(digest).orElse(null);
+            String displayName = healed != null ? healed.getDisplayName() : null;
+            return routeExistingUser(sessionId, session, userId, displayName);
+        }
+
+        // Genuine no-match anywhere: brand-new user; choose a username + display name.
         session.setNewUser(true);
         session.setPhase(Phase.PROFILE_REQUIRED);
         loginSessionService.save(sessionId, session);
         return ResponseEntity.ok(state(session, null));
+    }
+
+    /**
+     * Routes an authenticated returning user (resolved either from the directory
+     * digest or the homeserver phone-binding fallback) to the PIN step or straight
+     * to passkey setup. Always marks the session as an existing user and re-emits a
+     * localpart from the stable MXID, which MAS imports as {@code preferred_username}
+     * on the first delegated login.
+     */
+    private ResponseEntity<LoginStateResponse> routeExistingUser(
+            String sessionId, LoginSession session, String userId, String displayName) {
+        session.setUserId(userId);
+        session.setDisplayName(displayName);
+        // Returning users are still NEW to MAS on their first delegated login, which
+        // requires a localpart. Re-emit it from the stable MXID we already store.
+        session.setPreferredUsername(localpartOf(userId));
+        session.setNewUser(false);
+        if (userSecurityService.hasPin(userId)) {
+            session.setPhase(Phase.PIN_REQUIRED);
+            loginSessionService.save(sessionId, session);
+            return ResponseEntity.ok(state(session, null));
+        }
+        return advanceToPasskeySetup(sessionId, session);
+    }
+
+    /**
+     * Re-binds the (current-pepper) phone digest to an existing MXID after the
+     * directory row was orphaned. Best-effort: a failure here must not block a
+     * returning user from signing in, so it is logged and swallowed.
+     */
+    private void healDirectoryRow(String digest, String phone, String userId) {
+        try {
+            String maskedPhone = phoneNumberMasker.mask(phone);
+            // Null displayName preserves any existing value (none here, since the row
+            // was missing) without clobbering it.
+            directoryService.upsertByDigest(digest, maskedPhone, userId, null);
+        } catch (RuntimeException ex) {
+            log.warn("Failed to heal directory row for recovered account: {}", ex.getMessage());
+        }
     }
 
     @PostMapping("/pin")

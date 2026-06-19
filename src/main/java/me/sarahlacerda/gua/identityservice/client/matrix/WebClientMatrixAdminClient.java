@@ -104,6 +104,37 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
     }
 
     @Override
+    public Optional<String> findUserIdByPhone(String phone) {
+        if (phone == null || phone.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            ThreepidUserResponse response = adminClient.get()
+                    .uri(builder -> builder.path("/_synapse/admin/v1/threepid/msisdn/users/{address}")
+                            .build(phone))
+                    .exchangeToMono(resp -> {
+                        if (resp.statusCode().is2xxSuccessful()) {
+                            return resp.bodyToMono(ThreepidUserResponse.class);
+                        }
+                        // 404 / M_NOT_FOUND means the phone is not bound to any account.
+                        return resp.releaseBody().then(Mono.empty());
+                    })
+                    .onErrorResume(ex -> {
+                        log.warn("Reverse phone lookup failed: {}", ex.getMessage());
+                        return Mono.empty();
+                    })
+                    .block();
+            if (response == null || response.userId() == null || response.userId().isBlank()) {
+                return Optional.empty();
+            }
+            return Optional.of(response.userId());
+        } catch (Exception ex) {
+            log.warn("Reverse phone lookup failed: {}", ex.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    @Override
     public void linkPhone(String userId, String phone) {
         List<ThreePid> current = fetchThreepids(userId);
         boolean alreadyLinked = current.stream()
@@ -260,5 +291,8 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
     }
 
     private record ThreePid(String medium, String address) {
+    }
+
+    private record ThreepidUserResponse(@com.fasterxml.jackson.annotation.JsonProperty("user_id") String userId) {
     }
 }
