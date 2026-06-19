@@ -29,6 +29,7 @@ import me.sarahlacerda.gua.identityservice.controller.dto.AccountReauthVerifyReq
 import me.sarahlacerda.gua.identityservice.controller.dto.IdentityResetCredentialsRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.IdentityResetCredentialsResponse;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
+import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.security.AccountReauthService;
 import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
 
@@ -55,6 +56,7 @@ public class AccountController {
         private final AuthenticatedUserAccessor authenticatedUserAccessor;
         private final MatrixAdminClient matrixAdminClient;
         private final TokenRevocationService tokenRevocationService;
+        private final DirectoryService directoryService;
 
         @PostMapping("/reauth/start")
         @Operation(summary = "Send a fresh OTP for account reauthentication", description = "Sends an OTP via SMS to the phone linked to the authenticated user.")
@@ -109,9 +111,25 @@ public class AccountController {
                         @RequestBody @Valid IdentityResetCredentialsRequest request) {
                 String userId = authenticatedUserAccessor.requireCurrentUserId();
                 reauthService.requireValidReauth(userId, request.getReauthToken());
-                String password = matrixAdminClient.rotatePassword(userId);
-                tokenRevocationService.revokeAllTokens(userId);
-                log.info("Issued identity-reset UIA credentials for {}", userId);
-                return ResponseEntity.ok(new IdentityResetCredentialsResponse(userId, password));
+
+                // Reset rotates the homeserver credential for the SAME existing account; it
+                // must never mint a new MXID or a new directory row. Pin the operation to the
+                // stable MXID already on file for this user so a credential reset can never be
+                // turned into a fresh identity (the other half of the identity-reset loop).
+                String existingUserId = directoryService.findByUserId(userId).stream()
+                                .findFirst()
+                                .map(entry -> entry.getUserId())
+                                .orElse(userId);
+                if (!existingUserId.equals(userId)) {
+                        // Defensive: the authenticated MXID and the directory row disagree. Never
+                        // proceed against the wrong/new identity.
+                        throw new IllegalStateException(
+                                        "Identity-reset target does not match the stored account; refusing to reset");
+                }
+
+                String password = matrixAdminClient.rotatePassword(existingUserId);
+                tokenRevocationService.revokeAllTokens(existingUserId);
+                log.info("Issued identity-reset UIA credentials for {} (existing MXID reused)", existingUserId);
+                return ResponseEntity.ok(new IdentityResetCredentialsResponse(existingUserId, password));
         }
 }

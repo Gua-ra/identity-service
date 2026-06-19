@@ -16,6 +16,11 @@ identity:
     user-localpart-prefix: ${IDENTITY_MATRIX_LOCALPART_PREFIX}
   directory:
     pepper: ${IDENTITY_DIRECTORY_PEPPER}
+    # Optional integrity pin for the pepper. A non-reversible fingerprint of the
+    # live pepper; when set, the service fails fast on startup if the configured
+    # pepper does not match (catches an accidental rotation that would orphan every
+    # account). Blank in dev; pin in every long-lived environment. Not a secret.
+    pepper-fingerprint: ${IDENTITY_DIRECTORY_PEPPER_FINGERPRINT:}
     max-lookup-batch: ${IDENTITY_DIRECTORY_MAX_LOOKUP_BATCH:1000}
   security:
     pin-reset-cooldown: ${IDENTITY_SECURITY_PIN_RESET_COOLDOWN:PT168H}

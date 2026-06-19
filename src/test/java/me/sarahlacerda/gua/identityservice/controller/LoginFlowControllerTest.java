@@ -188,6 +188,8 @@ class LoginFlowControllerTest {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
         when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
         when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
+        // No homeserver phone binding either: genuine no-match -> signup.
+        when(matrixAdminClient.findUserIdByPhone(PHONE)).thenReturn(Optional.empty());
 
         mockMvc.perform(post("/login/otp")
                 .cookie(cookie())
@@ -197,6 +199,52 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phase").value("PROFILE_REQUIRED"))
                 .andExpect(jsonPath("$.newUser").value(true));
+    }
+
+    @Test
+    void submitOtpRecoversExistingUserViaHomeserverBindingWhenDigestMisses() throws Exception {
+        // Directory digest misses (e.g. rotated/drifted pepper) but the phone is
+        // still bound to an existing MXID on the homeserver. The user must be routed
+        // as an EXISTING user (no signup, no duplicate account) and the directory row
+        // must be healed.
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
+        when(matrixAdminClient.findUserIdByPhone(PHONE)).thenReturn(Optional.of("@alice:dev.local"));
+        when(phoneNumberMasker.mask(PHONE)).thenReturn("••••4567");
+        when(userSecurityService.hasPin("@alice:dev.local")).thenReturn(false);
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"))
+                .andExpect(jsonPath("$.newUser").value(false));
+
+        // Heals the directory row under the current pepper's digest, reusing the MXID.
+        verify(directoryService).upsertByDigest(eq("digest"), any(), eq("@alice:dev.local"),
+                org.mockito.ArgumentMatchers.isNull());
+    }
+
+    @Test
+    void submitOtpRecoveredUserWithPinRoutesToPin() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
+        when(matrixAdminClient.findUserIdByPhone(PHONE)).thenReturn(Optional.of("@alice:dev.local"));
+        when(phoneNumberMasker.mask(PHONE)).thenReturn("••••4567");
+        when(userSecurityService.hasPin("@alice:dev.local")).thenReturn(true);
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_REQUIRED"))
+                .andExpect(jsonPath("$.newUser").value(false));
     }
 
     @Test

@@ -93,6 +93,20 @@ public class IdentityServiceProperties {
         @NotBlank
         private String pepper;
 
+        /**
+         * Optional pin against silent pepper rotation/drift. The pepper is an
+         * immutable, backed-up secret: changing it re-keys every phone digest and
+         * orphans every existing directory row (forcing returning users into signup
+         * and minting duplicate accounts). When set to the expected, non-reversible
+         * fingerprint of the live pepper (see
+         * {@code DirectoryPepperPinValidator}), the service FAILS FAST on startup if
+         * the configured pepper does not match — so an accidental rotation is caught
+         * loudly instead of silently corrupting identities. Leave blank in dev; pin
+         * it in every long-lived environment. This is a fingerprint, never the pepper
+         * itself, so it is safe to commit/store.
+         */
+        private String pepperFingerprint;
+
         /** Max phone numbers accepted per /directory/lookup request. */
         private int maxLookupBatch = 1000;
     }

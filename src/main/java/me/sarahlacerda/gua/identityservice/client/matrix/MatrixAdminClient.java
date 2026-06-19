@@ -10,6 +10,19 @@ public interface MatrixAdminClient {
 
     List<String> getLinkedPhones(String userId);
 
+    /**
+     * Reverse lookup: resolves a phone number (E.164) to the Matrix user id it is
+     * bound to on the homeserver, via the {@code msisdn} third-party identifier
+     * binding ({@code GET /_synapse/admin/v1/threepid/msisdn/users/{address}}).
+     * <p>
+     * This binding is stored by the homeserver and is independent of the identity
+     * directory's peppered phone digest, which makes it the authoritative fallback
+     * for deciding whether a phone belongs to an existing account when the local
+     * directory row is missing (e.g. a rotated/drifted directory pepper). Returns
+     * empty when no account is bound to the number.
+     */
+    java.util.Optional<String> findUserIdByPhone(String phone);
+
     void linkPhone(String userId, String phone);
 
     void unlinkPhone(String userId, String phone);
