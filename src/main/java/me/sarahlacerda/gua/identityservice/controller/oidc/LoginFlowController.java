@@ -106,6 +106,30 @@ public class LoginFlowController {
         return ResponseEntity.ok(state(session, null));
     }
 
+    @GetMapping("/passkey/enroll/{token}")
+    @Operation(summary = "Open the in-app passkey enrollment web view", description = "One-time handoff for an already-signed-in user adding a passkey from settings. The enrollment session is created by POST /security/passkey/enroll/start; the cookie set on that API call is not present in this separate web view, so this redeems the one-time token, drops the first-party login cookie, and redirects into the sign-in SPA at the passkey setup step.")
+    public ResponseEntity<Void> openPasskeyEnrollment(
+            @org.springframework.web.bind.annotation.PathVariable("token") String token) {
+        String sessionId = loginSessionService.consumeEnrollToken(token)
+                .orElseThrow(() -> new LoginFlowException(HttpStatus.GONE, "enroll_link_expired",
+                        "This passkey setup link has expired. Please try again."));
+        // Confirm the session is still live before establishing the cookie.
+        requireSession(sessionId);
+
+        ResponseCookie cookie = ResponseCookie.from(properties.getCookieName(), sessionId)
+                .httpOnly(true)
+                .secure(properties.isCookieSecure())
+                .sameSite("Lax")
+                .path("/")
+                .maxAge(properties.getSessionTtl())
+                .build();
+
+        return ResponseEntity.status(HttpStatus.FOUND)
+                .header(HttpHeaders.SET_COOKIE, cookie.toString())
+                .header(HttpHeaders.LOCATION, properties.getUiUrl())
+                .build();
+    }
+
     @PostMapping("/phone")
     @Operation(summary = "Submit the phone number", description = "Dispatches an OTP to the supplied phone number and advances to the OTP step.")
     public ResponseEntity<LoginStateResponse> submitPhone(
@@ -344,18 +368,59 @@ public class LoginFlowController {
     }
 
     @PostMapping("/passkey/auth/options")
-    @Operation(summary = "Passkey sign-in disabled", description = "Phone verification is mandatory; passkeys can only be associated after OTP and any PIN step.")
-    public ResponseEntity<PasskeyOptionsResponse> startPasskeyAuthentication() {
-        throw new LoginFlowException(HttpStatus.NOT_FOUND, "passkey_auth_disabled",
-                "Phone verification is required before passkey setup.");
+    @Operation(summary = "Start passkey sign-in", description = "Begins a passkey assertion from the phone step, letting a returning user with a registered passkey sign in without an OTP. Only ever resolves to a pre-existing account.")
+    public ResponseEntity<PasskeyOptionsResponse> startPasskeyAuthentication(
+            @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
+            @RequestHeader(value = CSRF_HEADER, required = false) String csrf) {
+        LoginSession session = requireSession(sessionId);
+        requireCsrf(session, csrf);
+        // Offered at the very start of the flow ("sign in with a passkey"), before OTP.
+        requirePhase(session, Phase.PHONE, Phase.OTP_SENT);
+
+        return ResponseEntity.ok(new PasskeyOptionsResponse(passkeyService.startAuthentication(sessionId)));
     }
 
     @PostMapping("/passkey/auth/verify")
-    @Operation(summary = "Passkey sign-in disabled", description = "Phone verification is mandatory; passkeys can only be associated after OTP and any PIN step.")
+    @Operation(summary = "Finish passkey sign-in", description = "Verifies the WebAuthn assertion and, only when it resolves to an existing OTP-registered account with a phone on file, completes login — intentionally bypassing the OTP step. Never creates an account.")
     public ResponseEntity<LoginStateResponse> finishPasskeyAuthentication(
-            @RequestBody(required = false) PasskeyCredentialRequest request) {
-        throw new LoginFlowException(HttpStatus.NOT_FOUND, "passkey_auth_disabled",
-                "Phone verification is required before passkey setup.");
+            @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
+            @RequestHeader(value = CSRF_HEADER, required = false) String csrf,
+            @RequestBody @Valid PasskeyCredentialRequest request) {
+        LoginSession session = requireSession(sessionId);
+        requireCsrf(session, csrf);
+        requirePhase(session, Phase.PHONE, Phase.OTP_SENT);
+
+        PasskeyService.PasskeyAuthentication auth = passkeyService.finishAuthentication(sessionId, request.credential());
+        String userId = auth.userId();
+
+        // POLICY: passkey sign-in may bypass OTP, but ONLY for an existing account that
+        // already registered via OTP and has a phone on file. The asserted credential must
+        // resolve to such an account; otherwise reject. This path must NEVER create an
+        // account, set newUser, or reach PROFILE_REQUIRED. The directory row is phone-keyed
+        // (phone_digest is its non-null key), so its presence is proof of OTP registration
+        // with a phone bound.
+        DirectoryEntry entry = directoryService.findByUserId(userId).stream()
+                .filter(e -> StringUtils.hasText(e.getPhoneDigest()))
+                .findFirst()
+                .orElseThrow(() -> new LoginFlowException(HttpStatus.FORBIDDEN, "passkey_user_not_registered",
+                        "This passkey is not linked to a registered account."));
+
+        // On a re-authentication the asserted credential must belong to the existing subject.
+        if (session.getReauthUserId() != null && !session.getReauthUserId().equals(userId)) {
+            throw reauthMismatch();
+        }
+
+        session.setUserId(userId);
+        session.setDisplayName(entry.getDisplayName());
+        // Returning users are still new to MAS on their first delegated login, which needs a
+        // localpart (MAS imports it as preferred_username). Prefer the directory's global
+        // handle, falling back to the localpart of the stable MXID.
+        session.setPreferredUsername(StringUtils.hasText(entry.getUsername())
+                ? entry.getUsername()
+                : localpartOf(userId));
+        session.setNewUser(false);
+        // Intentional OTP bypass: a proven existing user signs in straight through.
+        return complete(sessionId, session);
     }
 
     /**

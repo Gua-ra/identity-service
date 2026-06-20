@@ -1,6 +1,7 @@
 package me.sarahlacerda.gua.identityservice.service.oidc;
 
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.Optional;
 
@@ -25,6 +26,7 @@ import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 public class LoginSessionService {
 
     private static final String KEY_PREFIX = "oidc:login:";
+    private static final String ENROLL_TOKEN_PREFIX = "oidc:login:enroll:";
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final StringRedisTemplate redisTemplate;
@@ -74,6 +76,27 @@ public class LoginSessionService {
         }
     }
 
+    /**
+     * Issues a one-time token mapping to a login session id, used by the in-app
+     * passkey enrollment handoff. The cookie set on the (separate-context) API POST
+     * is not present in the web view, so the web view opens this token and the GET
+     * handler turns it back into a first-party session cookie. Stored with a short
+     * TTL and consumed on first read.
+     */
+    public String createEnrollToken(String sessionId, Duration ttl) {
+        String token = newToken();
+        redisTemplate.opsForValue().set(enrollTokenKey(token), sessionId, ttl);
+        return token;
+    }
+
+    /** Atomically reads and removes a one-time enroll token, returning its session id. */
+    public Optional<String> consumeEnrollToken(String token) {
+        if (token == null || token.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(redisTemplate.opsForValue().getAndDelete(enrollTokenKey(token)));
+    }
+
     /** Generates an opaque token suitable for a session id or a CSRF token. */
     public String newToken() {
         byte[] bytes = new byte[32];
@@ -83,5 +106,9 @@ public class LoginSessionService {
 
     private String keyFor(String id) {
         return KEY_PREFIX + id;
+    }
+
+    private String enrollTokenKey(String token) {
+        return ENROLL_TOKEN_PREFIX + token;
     }
 }
