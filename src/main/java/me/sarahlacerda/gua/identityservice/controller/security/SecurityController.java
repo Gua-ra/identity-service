@@ -1,5 +1,7 @@
 package me.sarahlacerda.gua.identityservice.controller.security;
 
+import java.util.List;
+
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -10,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -20,6 +23,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
+import me.sarahlacerda.gua.identityservice.controller.dto.PasskeyEnrollStartResponse;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeCompleteRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeStartRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeStartResponse;
@@ -28,8 +32,15 @@ import me.sarahlacerda.gua.identityservice.controller.dto.PinResetRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinStatusResponse;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinUpdateRequest;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
+import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
+import me.sarahlacerda.gua.identityservice.config.OidcProperties;
+import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinOperationException;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
+import me.sarahlacerda.gua.identityservice.service.DirectoryService;
+import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
+import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.Phase;
+import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 
 @RestController
@@ -42,6 +53,10 @@ public class SecurityController {
     private final UserSecurityService userSecurityService;
     private final AuthenticatedUserAccessor authenticatedUserAccessor;
     private final IdentityServiceProperties properties;
+    private final DirectoryService directoryService;
+    private final LoginSessionService loginSessionService;
+    private final LoginFlowProperties loginProperties;
+    private final OidcProperties oidcProperties;
 
     @GetMapping("/pin/status")
     @Operation(summary = "Check whether the authenticated user has a PIN set", description = "Returns hasPin=true once the user has configured a security PIN. Used by clients to drive the 'set up two-step verification' nudge.", security = @SecurityRequirement(name = "oidcAccessToken"))
@@ -134,5 +149,68 @@ public class SecurityController {
         userSecurityService.completePinReset(request.getUserId(), request.getPhone(), request.getCode(),
                 request.getNewPin());
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/passkey/enroll/start")
+    @Operation(summary = "Start in-app passkey enrollment", description = "Lets an already-signed-in user add a passkey from settings. Builds a login session pinned to the authenticated user and returns a one-time enroll URL the client opens in an authenticated web view, which reuses the same passkey setup step as onboarding.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Enrollment session created; open the returned enrollUrl in a web view"),
+            @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content)
+    })
+    public ResponseEntity<PasskeyEnrollStartResponse> startPasskeyEnrollment() {
+        String userId = authenticatedUserAccessor.requireCurrentUserId();
+
+        LoginSession session = new LoginSession();
+        session.setUserId(userId);
+        // Pin the session to the authenticated subject. This forces the LOGIN-ONLY
+        // contract in LoginFlowController so the enroll flow can never degrade into an
+        // open signup/login even though the user is dropped straight at passkey setup.
+        session.setReauthUserId(userId);
+        session.setDisplayName(displayNameFor(userId));
+        session.setPreferredUsername(localpartOf(userId));
+        // The app scheme the OIDC client uses; only echoed back if the ceremony reaches
+        // completion, and never reachable as an open login (reauthUserId is set above).
+        session.setRedirectUri(loginProperties.getEnroll().getRedirectUri());
+        session.setPhase(Phase.PASSKEY_SETUP);
+        session.setCsrfToken(loginSessionService.newToken());
+
+        String sessionId = loginSessionService.create(session);
+        String enrollToken = loginSessionService.createEnrollToken(sessionId,
+                loginProperties.getEnroll().getTokenTtl());
+
+        // Absolute URL on the web origin that serves the sign-in SPA (same origin the
+        // login cookie is first-party to), so the web view loads it directly.
+        String enrollUrl = UriComponentsBuilder.fromUriString(oidcProperties.getIssuer())
+                .path("/login/passkey/enroll/{token}")
+                .buildAndExpand(enrollToken)
+                .toUriString();
+        return ResponseEntity.ok(new PasskeyEnrollStartResponse(enrollUrl));
+    }
+
+    /**
+     * Resolves a human-friendly display name for the passkey credential from the
+     * user's directory entry, falling back to the localpart of the MXID when the
+     * directory has no row (or no display name) for the user.
+     */
+    private String displayNameFor(String userId) {
+        List<DirectoryEntry> entries = directoryService.findByUserId(userId);
+        return entries.stream()
+                .map(DirectoryEntry::getDisplayName)
+                .filter(name -> name != null && !name.isBlank())
+                .findFirst()
+                .orElseGet(() -> localpartOf(userId));
+    }
+
+    /**
+     * Extracts the localpart from a Matrix user id, e.g.
+     * {@code @alice:dev.local -> alice}.
+     */
+    private static String localpartOf(String matrixUserId) {
+        if (matrixUserId == null || matrixUserId.isBlank()) {
+            return null;
+        }
+        String value = matrixUserId.startsWith("@") ? matrixUserId.substring(1) : matrixUserId;
+        int colon = value.indexOf(':');
+        return colon >= 0 ? value.substring(0, colon) : value;
     }
 }

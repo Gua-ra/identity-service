@@ -136,6 +136,36 @@ class LoginFlowControllerTest {
     }
 
     @Test
+    void openPasskeyEnrollmentSetsCookieAndRedirectsToSignin() throws Exception {
+        when(properties.getCookieName()).thenReturn("gua_login");
+        when(properties.isCookieSecure()).thenReturn(true);
+        when(properties.getSessionTtl()).thenReturn(java.time.Duration.ofMinutes(10));
+        when(properties.getUiUrl()).thenReturn("/signin");
+        when(loginSessionService.consumeEnrollToken("tok-1")).thenReturn(Optional.of(SID));
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PASSKEY_SETUP)));
+
+        mockMvc.perform(get("/login/passkey/enroll/{token}", "tok-1"))
+                .andExpect(status().isFound())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Location", "/signin"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Set-Cookie", org.hamcrest.Matchers.allOf(
+                                org.hamcrest.Matchers.containsString("gua_login=" + SID),
+                                org.hamcrest.Matchers.containsString("HttpOnly"),
+                                org.hamcrest.Matchers.containsString("Secure"),
+                                org.hamcrest.Matchers.containsString("SameSite=Lax"))));
+    }
+
+    @Test
+    void openPasskeyEnrollmentRejectsExpiredToken() throws Exception {
+        when(loginSessionService.consumeEnrollToken("tok-1")).thenReturn(Optional.empty());
+
+        mockMvc.perform(get("/login/passkey/enroll/{token}", "tok-1"))
+                .andExpect(status().isGone())
+                .andExpect(jsonPath("$.code").value("enroll_link_expired"));
+    }
+
+    @Test
     void submitPhoneDispatchesOtpAndAdvances() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
 
@@ -467,14 +497,86 @@ class LoginFlowControllerTest {
     }
 
     @Test
-    void passkeyAuthenticationIsDisabledBeforePhoneVerification() throws Exception {
+    void passkeyAuthOptionsAreOfferedBeforeOtp() throws Exception {
+        ObjectNode options = JsonNodeFactory.instance.objectNode();
+        options.put("challenge", "abc");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
+        when(passkeyService.startAuthentication(SID)).thenReturn(options);
+
         mockMvc.perform(post("/login/passkey/auth/options")
                 .cookie(cookie())
                 .header("X-CSRF-Token", CSRF)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{}"))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("passkey_auth_disabled"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.publicKey.challenge").value("abc"));
+    }
+
+    @Test
+    void passkeyAuthVerifyForRegisteredUserSkipsOtpAndCompletes() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local"));
+        DirectoryEntry entry = DirectoryEntry.builder()
+                .phoneDigest("digest").userId("@alice:dev.local").username("alice").displayName("Alice").build();
+        when(directoryService.findByUserId("@alice:dev.local")).thenReturn(List.of(entry));
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        mockMvc.perform(post("/login/passkey/auth/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.newUser").value(false))
+                .andExpect(jsonPath("$.redirectUrl").value(CALLBACK + "?code=auth-code&state=xyz"));
+
+        // OTP is bypassed entirely for a proven existing user.
+        verify(otpService, org.mockito.Mockito.never()).verifyOtp(any(), any());
+    }
+
+    @Test
+    void passkeyAuthVerifyRejectsUserNotRegisteredAndCreatesNoAccount() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@ghost:dev.local"));
+        // The asserted credential resolves to no directory row (no OTP registration / no phone).
+        when(directoryService.findByUserId("@ghost:dev.local")).thenReturn(List.of());
+
+        mockMvc.perform(post("/login/passkey/auth/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("passkey_user_not_registered"));
+
+        // Never mints an account or issues a code for an unregistered subject.
+        verify(directoryService, org.mockito.Mockito.never()).upsertByDigest(any(), any(), any(), any());
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    @Test
+    void passkeyAuthVerifyRejectsWhenResolvedUserMismatchesReauthSubject() throws Exception {
+        LoginSession session = session(Phase.PHONE);
+        session.setReauthUserId("@alice:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@bob:dev.local"));
+        DirectoryEntry entry = DirectoryEntry.builder()
+                .phoneDigest("digest").userId("@bob:dev.local").username("bob").displayName("Bob").build();
+        when(directoryService.findByUserId("@bob:dev.local")).thenReturn(List.of(entry));
+
+        mockMvc.perform(post("/login/passkey/auth/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("reauth_user_mismatch"));
+
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
     @Test

@@ -142,6 +142,23 @@ idp:
     session-ttl: ${IDP_LOGIN_SESSION_TTL:PT10M}
     cookie-name: ${IDP_LOGIN_COOKIE_NAME:gua_login}
     cookie-secure: ${IDP_LOGIN_COOKIE_SECURE:true}
+    # In-app passkey enrollment handoff (already-signed-in user adds a passkey from settings).
+    enroll:
+      # OIDC app scheme echoed back only if the ceremony completes; the session is pinned to
+      # the authenticated user so this is never reachable as an open login.
+      redirect-uri: ${IDP_LOGIN_ENROLL_REDIRECT_URI:global.gua:/oidc}
+      token-ttl: ${IDP_LOGIN_ENROLL_TOKEN_TTL:PT2M}
+    # Passkey / WebAuthn (browser login + in-app enrollment).
+    # PROD MUST set rp-id to the registrable Gua auth domain (gua.global) and origins to the
+    # EXACT HTTPS origin serving the sign-in SPA (e.g. https://gua.global). Mismatched values
+    # make the browser reject every WebAuthn ceremony — this also fixes onboarding passkeys in prod.
+    passkeys:
+      enabled: ${IDP_LOGIN_PASSKEYS_ENABLED:true}
+      rp-id: ${IDP_LOGIN_PASSKEYS_RP_ID:localhost}
+      rp-name: ${IDP_LOGIN_PASSKEYS_RP_NAME:Gua}
+      origins: ${IDP_LOGIN_PASSKEYS_ORIGINS:http://localhost:5173,http://localhost:8080}
+      challenge-ttl: ${IDP_LOGIN_PASSKEYS_CHALLENGE_TTL:PT5M}
+      timeout-millis: ${IDP_LOGIN_PASSKEYS_TIMEOUT_MILLIS:60000}
 
 management:
   endpoints:

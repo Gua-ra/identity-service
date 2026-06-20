@@ -48,6 +48,35 @@ public class LoginFlowProperties {
     private boolean cookieSecure = true;
 
     /**
+     * Settings for the in-app passkey enrollment handoff: an already-signed-in
+     * client opens an authenticated web view at a one-time enroll URL, which drops
+     * the first-party login cookie and redirects into the same {@code /signin} SPA
+     * onboarding uses to render the passkey setup step.
+     */
+    @NotNull
+    private Enroll enroll = new Enroll();
+
+    @Getter
+    @Setter
+    public static class Enroll {
+        /**
+         * App redirect URI the enrollment {@link LoginSession} echoes back when the
+         * passkey ceremony completes (the OIDC app scheme, e.g. {@code global.gua:/oidc}).
+         * It is never reached as an open login because the session is pinned to the
+         * authenticated subject via {@code reauthUserId}.
+         */
+        @NotBlank
+        private String redirectUri = "global.gua:/oidc";
+
+        /**
+         * How long a one-time enroll token (mapping to the login session) stays
+         * redeemable. Kept short: it is consumed immediately when the web view opens.
+         */
+        @NotNull
+        private Duration tokenTtl = Duration.ofMinutes(2);
+    }
+
+    /**
      * Passkey / WebAuthn settings for the browser login flow.
      */
     @NotNull
