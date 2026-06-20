@@ -45,6 +45,7 @@ import me.sarahlacerda.gua.identityservice.service.MatrixProvisioningService;
 import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
+import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
 import me.sarahlacerda.gua.identityservice.service.routing.AccountPlacementContext;
 import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRouter;
 import me.sarahlacerda.gua.identityservice.service.UsernamePolicy;
@@ -88,6 +89,7 @@ public class LoginFlowController {
     private final DirectoryService directoryService;
     private final PhoneNumberHasher phoneNumberHasher;
     private final PhoneNumberMasker phoneNumberMasker;
+    private final PhoneNumberNormalizer phoneNumberNormalizer;
     private final HomeserverRouter homeserverRouter;
     private final UserSecurityService userSecurityService;
     private final MatrixProvisioningService matrixProvisioningService;
@@ -115,7 +117,10 @@ public class LoginFlowController {
         requireCsrf(session, csrf);
         requirePhase(session, Phase.PHONE, Phase.OTP_SENT);
 
-        String phone = request.phoneNumber().trim();
+        // Normalize to canonical E.164 at the boundary so a number supplied without a
+        // country code can never key the OTP / phone digest under a different value and
+        // silently mint a duplicate account. Rejects anything that isn't a valid number.
+        String phone = phoneNumberNormalizer.toE164(request.phoneNumber());
         otpService.sendOtp(phone, servletRequest.getRemoteAddr(), request.locale());
 
         session.setPhoneNumber(phone);
@@ -161,6 +166,13 @@ public class LoginFlowController {
             return routeExistingUser(sessionId, session, userId, displayName);
         }
 
+        // Re-authentication is LOGIN-ONLY: a phone that resolves to no existing account
+        // must be rejected here. It must never fall through to the new-account /
+        // username-creation phase for an already signed-in user re-verifying.
+        if (session.getReauthUserId() != null) {
+            throw reauthMismatch();
+        }
+
         // Genuine no-match anywhere: brand-new user; choose a username + display name.
         session.setNewUser(true);
         session.setPhase(Phase.PROFILE_REQUIRED);
@@ -177,6 +189,13 @@ public class LoginFlowController {
      */
     private ResponseEntity<LoginStateResponse> routeExistingUser(
             String sessionId, LoginSession session, String userId, String displayName) {
+        // On a re-authentication (login-only) the verified phone must belong to the
+        // already-authenticated user. A different owner is rejected — the change-phone
+        // flow, where the new number is intentionally not yet the user's, runs through a
+        // separate endpoint and never sets reauthUserId, so it is unaffected.
+        if (session.getReauthUserId() != null && !session.getReauthUserId().equals(userId)) {
+            throw reauthMismatch();
+        }
         session.setUserId(userId);
         session.setDisplayName(displayName);
         // Returning users are still NEW to MAS on their first delegated login, which
@@ -384,6 +403,17 @@ public class LoginFlowController {
         session.setPhase(Phase.PASSKEY_SETUP);
         loginSessionService.save(sessionId, session);
         return ResponseEntity.ok(state(session, null));
+    }
+
+    /**
+     * Single rejection for a re-authentication that fails the login-only contract:
+     * the verified phone is unregistered, or registered to a different user than the
+     * one re-authenticating. The message is intentionally generic so it does not leak
+     * whether the phone exists.
+     */
+    private static LoginFlowException reauthMismatch() {
+        return new LoginFlowException(HttpStatus.FORBIDDEN, "reauth_user_mismatch",
+                "This phone number is not associated with your account.");
     }
 
     private LoginSession requireSession(String sessionId) {

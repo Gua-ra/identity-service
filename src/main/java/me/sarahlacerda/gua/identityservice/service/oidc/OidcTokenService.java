@@ -92,6 +92,35 @@ public class OidcTokenService {
     }
 
     /**
+     * Extracts the authenticated subject from an OIDC {@code id_token_hint} supplied
+     * on a re-authentication authorize request. The hint must be one of our own
+     * RS256-signed ID tokens (verified signature + issuer); we ignore expiry here so
+     * a stale-but-genuine session can still re-verify. Returns the {@code sub}, or
+     * empty when the hint is missing, malformed, or not issued by us.
+     */
+    public Optional<String> subjectFromIdTokenHint(String idTokenHint) {
+        if (idTokenHint == null || idTokenHint.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            SignedJWT jwt = SignedJWT.parse(idTokenHint);
+            if (!JWSAlgorithm.RS256.equals(jwt.getHeader().getAlgorithm())) {
+                return Optional.empty();
+            }
+            if (!jwt.verify(new RSASSAVerifier(signingKey.toRSAPublicKey()))) {
+                return Optional.empty();
+            }
+            JWTClaimsSet claims = jwt.getJWTClaimsSet();
+            if (!properties.getIssuer().equals(claims.getIssuer())) {
+                return Optional.empty();
+            }
+            return Optional.ofNullable(claims.getSubject());
+        } catch (ParseException | JOSEException ex) {
+            return Optional.empty();
+        }
+    }
+
+    /**
      * Per RFC 9068 a resource server must reject access tokens that were not issued
      * for it. Every token we mint carries the requesting client id as its audience,
      * so we accept a token only when its audience includes a currently-registered
