@@ -73,6 +73,8 @@ public class OidcAuthorizationController {
             @Parameter(description = "PKCE code challenge (base64url, 43-128 chars). Required for public clients.") @RequestParam(value = "code_challenge", required = false) String codeChallenge,
             @Parameter(description = "PKCE code_challenge_method. Only S256 is supported.") @RequestParam(value = "code_challenge_method", required = false) String codeChallengeMethod,
             @Parameter(description = "Optional login hint (E.164 phone) forwarded by MAS to pre-fill the login UI.") @RequestParam(value = "login_hint", required = false) String loginHint,
+            @Parameter(description = "OIDC prompt parameter. `login` requests re-authentication of an already signed-in user (login-only).") @RequestParam(value = "prompt", required = false) String prompt,
+            @Parameter(description = "OIDC id_token_hint: a previously issued ID token identifying the already-authenticated user for re-authentication.") @RequestParam(value = "id_token_hint", required = false) String idTokenHint,
             @Parameter(description = "Deprecated: direct phone number for the non-interactive flow. Omit to use the interactive login UI.") @RequestParam(value = "phone_number", required = false) String phoneNumber,
             @Parameter(description = "Deprecated: OTP for the non-interactive flow. Omit to use the interactive login UI.") @RequestParam(value = "otp_code", required = false) String otpCode,
             @Parameter(description = "Optional display name (non-interactive flow only).") @RequestParam(value = "display_name", required = false) String displayName) {
@@ -115,6 +117,10 @@ public class OidcAuthorizationController {
         session.setCodeChallengeMethod(codeChallengeMethod);
         session.setPhase(LoginSession.Phase.PHONE);
         session.setPhoneHint(normalizeLoginHint(loginHint));
+        // Re-authentication: an already signed-in user re-verifying (prompt=login /
+        // id_token_hint). Pin the session to that subject so the flow is LOGIN-ONLY —
+        // the phone must already belong to this user and signup can never be reached.
+        session.setReauthUserId(resolveReauthUserId(prompt, idTokenHint));
         session.setCsrfToken(loginSessionService.newToken());
         String sessionId = loginSessionService.create(session);
 
@@ -193,6 +199,40 @@ public class OidcAuthorizationController {
             }
         }
         return new ClientCredentials(clientIdParam, clientSecretParam);
+    }
+
+    /**
+     * Resolves the already-authenticated subject for a re-authentication authorize
+     * request. A request is a re-auth when it carries {@code prompt=login} and/or an
+     * {@code id_token_hint}; we trust only the {@code sub} of a hint we ourselves
+     * signed. Returns {@code null} for a normal (unauthenticated) signup/login.
+     *
+     * <p>
+     * When {@code prompt=login} is present but the hint is missing or not verifiable,
+     * the request is rejected: a re-auth must positively identify its subject so it
+     * cannot silently degrade into an open signup/login.
+     */
+    private String resolveReauthUserId(String prompt, String idTokenHint) {
+        boolean promptLogin = prompt != null && containsPromptValue(prompt, "login");
+        boolean hasHint = idTokenHint != null && !idTokenHint.isBlank();
+        if (!promptLogin && !hasHint) {
+            return null;
+        }
+        String subject = tokenService.subjectFromIdTokenHint(idTokenHint).orElse(null);
+        if (subject == null || subject.isBlank()) {
+            throw new OidcInvalidRequestException("invalid_request",
+                    "Re-authentication requires a valid id_token_hint");
+        }
+        return subject;
+    }
+
+    private static boolean containsPromptValue(String prompt, String value) {
+        for (String part : prompt.trim().split("\\s+")) {
+            if (part.equalsIgnoreCase(value)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static Set<String> parseScopes(String scope) {

@@ -38,6 +38,7 @@ import me.sarahlacerda.gua.identityservice.service.MatrixProvisioningService;
 import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
+import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
 import me.sarahlacerda.gua.identityservice.service.UsernamePolicy;
 import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRouter;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
@@ -76,6 +77,8 @@ class LoginFlowControllerTest {
     @MockitoBean
     private PhoneNumberMasker phoneNumberMasker;
     @MockitoBean
+    private PhoneNumberNormalizer phoneNumberNormalizer;
+    @MockitoBean
     private UserSecurityService userSecurityService;
     @MockitoBean
     private MatrixProvisioningService matrixProvisioningService;
@@ -95,6 +98,7 @@ class LoginFlowControllerTest {
     @BeforeEach
     void setUp() {
         when(properties.getCookieName()).thenReturn("gua_login");
+        when(phoneNumberNormalizer.toE164(PHONE)).thenReturn(PHONE);
         when(homeserverRouter.selectForNewAccount(any()))
                 .thenReturn(new me.sarahlacerda.gua.identityservice.domain.Homeserver(
                         "default", "dev.local", null, null, null, null, 1, true));
@@ -145,6 +149,96 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.maskedPhone").value("\u2022\u2022\u2022\u20224567"));
 
         verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+    }
+
+    @Test
+    void submitPhoneRejectsUnnormalizablePhoneNumber() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
+        when(phoneNumberNormalizer.toE164("555-1234"))
+                .thenThrow(new me.sarahlacerda.gua.identityservice.exception.InvalidPhoneNumberException(
+                        "Phone number is not valid"));
+
+        mockMvc.perform(post("/login/phone")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phoneNumber\":\"555-1234\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("invalid_phone_number"));
+
+        verify(otpService, org.mockito.Mockito.never()).sendOtp(any(), any(), any());
+    }
+
+    @Test
+    void submitPhoneNormalizesToE164BeforeKeyingOtp() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
+        when(phoneNumberNormalizer.toE164("5551234567")).thenReturn(PHONE);
+
+        mockMvc.perform(post("/login/phone")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phoneNumber\":\"5551234567\",\"locale\":\"en-CA\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("OTP_SENT"));
+
+        // OTP is keyed by the normalized E.164 value, not the raw national input.
+        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("en-CA"));
+    }
+
+    @Test
+    void reauthRoutesToExistingUserWhenPhoneBelongsToReauthSubject() throws Exception {
+        LoginSession session = session(Phase.OTP_SENT);
+        session.setReauthUserId("u1");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").displayName("Alice").build();
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
+        when(userSecurityService.hasPin("u1")).thenReturn(false);
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"));
+    }
+
+    @Test
+    void reauthRejectsPhoneBelongingToDifferentUser() throws Exception {
+        LoginSession session = session(Phase.OTP_SENT);
+        session.setReauthUserId("u1");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u2").displayName("Bob").build();
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("reauth_user_mismatch"));
+    }
+
+    @Test
+    void reauthRejectsUnregisteredPhoneInsteadOfStartingSignup() throws Exception {
+        LoginSession session = session(Phase.OTP_SENT);
+        session.setReauthUserId("u1");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
+        when(matrixAdminClient.findUserIdByPhone(PHONE)).thenReturn(Optional.empty());
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("reauth_user_mismatch"));
     }
 
     @Test

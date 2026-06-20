@@ -71,6 +71,17 @@ public class LoginSession {
     private String preferredUsername;
 
     /**
+     * Set only on a re-authentication request (an authorize with an already
+     * authenticated session: {@code prompt=login} / {@code id_token_hint}), where a
+     * logged-in user must re-verify (e.g. to view account settings). Carries the
+     * subject of the existing session. When present the flow is LOGIN-ONLY: the phone
+     * must already be registered AND belong to this user; it must never reach the
+     * new-account / username-creation phase. {@code null} for normal signup/login and
+     * for the change-phone flow.
+     */
+    private String reauthUserId;
+
+    /**
      * Double-submit CSRF token bound to this session and required on state-changing
      * calls.
      */
