@@ -3,7 +3,9 @@
 ##############################
 # Build stage
 ##############################
-FROM eclipse-temurin:21-jdk AS builder
+# Build the (arch-independent) jar on the native builder arch so cross-building an
+# amd64 image from an arm64 host doesn't run Gradle under slow QEMU emulation.
+FROM --platform=$BUILDPLATFORM eclipse-temurin:21-jdk AS builder
 WORKDIR /workspace
 
 # Copy Gradle wrapper and build files first for better layer caching.
