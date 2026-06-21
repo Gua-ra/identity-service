@@ -32,38 +32,6 @@ public class IdentityServiceProperties {
     private final SmsProperties sms = new SmsProperties();
     private final RateLimitProperties rateLimits = new RateLimitProperties();
     private final ResolverProperties resolver = new ResolverProperties();
-    private final PublicProperties publicForms = new PublicProperties();
-
-    /**
-     * Public, unauthenticated web-form endpoints (support + beta sign-up) served
-     * for the gua.global marketing/legal site.
-     *
-     * <p>{@code allowedOrigin} restricts CORS to the site origin. {@code github.*}
-     * configures the out-of-band notification: when a repo + token are set, each
-     * submission opens a GitHub issue in that private inbox repo; left blank the
-     * notification is skipped (the submission is still persisted).
-     */
-    @Getter
-    public static class PublicProperties {
-        /** Exact browser origin allowed to call the public endpoints, e.g. https://gua.global. */
-        @Setter
-        private String allowedOrigin;
-
-        private final GitHubProperties github = new GitHubProperties();
-
-        @Getter
-        @Setter
-        public static class GitHubProperties {
-            /** Private inbox repo in "owner/name" form. Blank disables GitHub notification. */
-            private String inboxRepo;
-
-            /** Token with permission to open issues in {@code inboxRepo}. Blank disables notification. */
-            private String token;
-
-            /** GitHub API base URL (override for GitHub Enterprise). */
-            private String apiBaseUrl = "https://api.github.com";
-        }
-    }
 
     /**
      * gua-resolver integration: publish this homeserver's accounts into the shared phone-&gt;homeserver
