@@ -465,6 +465,11 @@ public class LoginFlowController {
     }
 
     private ResponseEntity<LoginStateResponse> advanceToPasskeySetup(String sessionId, LoginSession session) {
+        // Don't re-offer passkey setup to an account that already has one — re-registering the same
+        // device only fails. Such a user is done authenticating; complete the login straight through.
+        if (passkeyService.isEnabled() && passkeyService.hasPasskey(session.getUserId())) {
+            return complete(sessionId, session);
+        }
         session.setPhase(Phase.PASSKEY_SETUP);
         loginSessionService.save(sessionId, session);
         return ResponseEntity.ok(state(session, null));
