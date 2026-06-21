@@ -10,6 +10,7 @@ import java.util.stream.Collectors;
 
 import lombok.RequiredArgsConstructor;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -64,6 +65,11 @@ public class PasskeyService implements CredentialRepository {
         return loginProperties.getPasskeys().isEnabled();
     }
 
+    /** Whether the given account already has at least one registered passkey. */
+    public boolean hasPasskey(String userId) {
+        return StringUtils.hasText(userId) && repository.existsByUserId(userId);
+    }
+
     public JsonNode startRegistration(String sessionId, LoginSession session) {
         ensureEnabled();
         if (!StringUtils.hasText(session.getUserId())) {
@@ -84,6 +90,9 @@ public class PasskeyService implements CredentialRepository {
                                 .residentKey(ResidentKeyRequirement.REQUIRED)
                                 .userVerification(UserVerificationRequirement.PREFERRED)
                                 .build())
+                        // Exclude the user's existing credentials so a device that already has a
+                        // Gua passkey won't silently re-register (which would fail late on save).
+                        .excludeCredentials(getCredentialIdsForUsername(session.getUserId()))
                         .timeout(loginProperties.getPasskeys().getTimeoutMillis())
                         .build());
 
@@ -134,6 +143,10 @@ public class PasskeyService implements CredentialRepository {
         } catch (IOException ex) {
             throw new LoginFlowException(HttpStatus.BAD_REQUEST, "passkey_response_invalid",
                     "Passkey setup response was invalid.");
+        } catch (DataIntegrityViolationException ex) {
+            // The credential id is unique; a duplicate means this passkey is already registered.
+            throw new LoginFlowException(HttpStatus.CONFLICT, "passkey_already_registered",
+                    "This passkey is already set up for your account.");
         }
     }
 
