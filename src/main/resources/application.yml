@@ -132,7 +132,7 @@ oidc:
       allowed-scopes: openid,profile,phone
       require-pkce: ${OIDC_CLIENT_MAS_REQUIRE_PKCE:false}
     - client-id: ${OIDC_CLIENT_GUA_IOS_ID:gua-ios}
-      redirect-uris: ${OIDC_CLIENT_GUA_IOS_REDIRECTS:me.sarahlacerda.gua://oidc}
+      redirect-uris: ${OIDC_CLIENT_GUA_IOS_REDIRECTS:global.gua:/oidc}
       allowed-scopes: openid,profile,phone
       require-pkce: true
 
