@@ -90,9 +90,9 @@ public class PasskeyService implements CredentialRepository {
                                 .residentKey(ResidentKeyRequirement.REQUIRED)
                                 .userVerification(UserVerificationRequirement.PREFERRED)
                                 .build())
-                        // Exclude the user's existing credentials so a device that already has a
-                        // Gua passkey won't silently re-register (which would fail late on save).
-                        .excludeCredentials(getCredentialIdsForUsername(session.getUserId()))
+                        // RelyingParty.startRegistration auto-populates excludeCredentials from the
+                        // CredentialRepository (getCredentialIdsForUsername), so a device that already
+                        // has a Gua passkey for this user is excluded and won't silently re-register.
                         .timeout(loginProperties.getPasskeys().getTimeoutMillis())
                         .build());
 
