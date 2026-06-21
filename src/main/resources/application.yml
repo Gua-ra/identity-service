@@ -88,6 +88,19 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_DIRECTORY_LOOKUP_LIMIT:30}
         refresh-period: ${IDENTITY_RATE_LIMIT_DIRECTORY_LOOKUP_REFRESH:PT5M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_DIRECTORY_LOOKUP_TIMEOUT:PT0S}
+      - path: /public/**
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_PUBLIC_LIMIT:5}
+        refresh-period: ${IDENTITY_RATE_LIMIT_PUBLIC_REFRESH:PT1H}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_PUBLIC_TIMEOUT:PT0S}
+  # Public gua.global web forms (support + beta sign-up). allowed-origin scopes
+  # CORS to the site; github.* opens an inbox issue per submission (blank = skip).
+  public-forms:
+    allowed-origin: ${IDENTITY_PUBLIC_ALLOWED_ORIGIN:}
+    github:
+      inbox-repo: ${GITHUB_INBOX_REPO:}
+      token: ${GITHUB_TOKEN:}
+      api-base-url: ${GITHUB_API_BASE_URL:https://api.github.com}
   sms:
     twilio:
       enabled: ${IDENTITY_SMS_TWILIO_ENABLED:false}
