@@ -1,12 +1,10 @@
 package me.sarahlacerda.gua.identityservice.config;
 
-import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.security.OidcAccessTokenAuthenticationFilter;
 import me.sarahlacerda.gua.identityservice.security.OidcAccessTokenValidator;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
-import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -15,10 +13,6 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
-import org.springframework.util.StringUtils;
-import org.springframework.web.cors.CorsConfiguration;
-import org.springframework.web.cors.CorsConfigurationSource;
-import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.List;
 import java.util.stream.Stream;
@@ -34,7 +28,6 @@ public class SecurityConfig {
                         "/security/pin/reset",
                         "/security/pin/reset/complete",
                         "/oauth2/token",
-                        "/public/**",
                         "/login/**");
 
         private static final List<String> OPEN_GET_ENDPOINTS = List.of(
@@ -67,10 +60,6 @@ public class SecurityConfig {
                 // calling disable(): turning Spring CSRF ON for the bearer endpoints would
                 // 403 stateless clients (iOS / web) that hold no server CSRF token.
                 http.csrf(csrf -> csrf.ignoringRequestMatchers("/**"));
-                // CORS is needed only for the public gua.global web forms (cross-origin
-                // browser POSTs). The bean below scopes it to /public/** and the single
-                // configured site origin; every other endpoint stays same-origin.
-                http.cors(Customizer.withDefaults());
                 http.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
                 http.authorizeHttpRequests(authorize -> authorize
                                 .requestMatchers(HttpMethod.POST, OPEN_POST_ENDPOINTS.toArray(String[]::new))
@@ -99,25 +88,5 @@ public class SecurityConfig {
         @Bean
         public PasswordEncoder passwordEncoder() {
                 return new BCryptPasswordEncoder();
-        }
-
-        /**
-         * CORS for the public web-form endpoints only. The allowed origin is the
-         * single gua.global site origin, supplied via configuration (env) so no host
-         * is hard-coded here. When unset, no cross-origin POSTs are permitted.
-         */
-        @Bean
-        public CorsConfigurationSource corsConfigurationSource(IdentityServiceProperties properties) {
-                UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-                String allowedOrigin = properties.getPublicForms().getAllowedOrigin();
-                if (StringUtils.hasText(allowedOrigin)) {
-                        CorsConfiguration cors = new CorsConfiguration();
-                        cors.setAllowedOrigins(List.of(allowedOrigin));
-                        cors.setAllowedMethods(List.of(HttpMethod.POST.name(), HttpMethod.OPTIONS.name()));
-                        cors.setAllowedHeaders(List.of("Content-Type"));
-                        cors.setMaxAge(3600L);
-                        source.registerCorsConfiguration("/public/**", cors);
-                }
-                return source;
         }
 }
