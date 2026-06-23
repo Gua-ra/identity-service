@@ -6,10 +6,10 @@ identity:
     max-requests-per-ip-per-hour: ${IDENTITY_OTP_MAX_IP_PER_HOUR:10}
     sms-template: ${IDENTITY_OTP_SMS_TEMPLATE:Your Gua verification code is %s. Never share this code with anyone. Gua will never ask you for it.}
     localized-sms-templates:
-      en: ${IDENTITY_OTP_SMS_TEMPLATE_EN:Your Gua verification code is %s. Never share this code with anyone. Gua will never ask you for it.}
-      pt-br: ${IDENTITY_OTP_SMS_TEMPLATE_PT_BR:Seu código de verificação Gua é %s. Nunca compartilhe este código com ninguém. A Gua nunca vai pedir esse código.}
-      es: ${IDENTITY_OTP_SMS_TEMPLATE_ES:Tu código de verificación de Gua es %s. Nunca compartas este código con nadie. Gua nunca te lo pedirá.}
-      fr: ${IDENTITY_OTP_SMS_TEMPLATE_FR:Votre code de vérification Gua est %s. Ne partagez jamais ce code. Gua ne vous le demandera jamais.}
+      en: ${IDENTITY_OTP_SMS_TEMPLATE_EN:Your Gua verification code is %s. Never share this code with anyone. Gua support will never ask you for it.}
+      pt-br: ${IDENTITY_OTP_SMS_TEMPLATE_PT_BR:Seu código de verificação Gua é %s. Nunca compartilhe este código com ninguém. O suporte Gua nunca vai pedir esse código.}
+      es: ${IDENTITY_OTP_SMS_TEMPLATE_ES:Tu código de verificación de Gua es %s. Nunca compartas este código con nadie. El equipo de soporte de Gua nunca te lo pedirá.}
+      fr: ${IDENTITY_OTP_SMS_TEMPLATE_FR:Votre code de vérification Gua est %s. Ne partagez jamais ce code. Le support Gua ne vous le demandera jamais.}
   matrix:
     admin-api-base-url: ${IDENTITY_MATRIX_ADMIN_API_BASE_URL}
     client-api-base-url: ${IDENTITY_MATRIX_CLIENT_API_BASE_URL}
