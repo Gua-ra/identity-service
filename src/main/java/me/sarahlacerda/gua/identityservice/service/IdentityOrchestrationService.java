@@ -3,6 +3,9 @@ package me.sarahlacerda.gua.identityservice.service;
 import java.util.List;
 import java.util.Optional;
 
+import com.google.i18n.phonenumbers.NumberParseException;
+import com.google.i18n.phonenumbers.PhoneNumberUtil;
+
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.Nullable;
 import lombok.RequiredArgsConstructor;
@@ -191,8 +194,11 @@ public class IdentityOrchestrationService {
         // to us (best-effort; the local directory above is authoritative for our own users).
         resolverDirectoryClient.registerPhone(phone);
 
-        // gua_identity_signup_total{result} — completed new-account registrations.
-        metrics.counter("gua.identity.signup", "result", "success").increment();
+        // gua_identity_signup_total{result,country} — completed new-account
+        // registrations, tagged with the ISO region of the (E.164) phone for the
+        // Grafana registrations-by-country panel. country is low-cardinality (~200 ISO
+        // codes); never tag with the phone itself or any per-user value.
+        metrics.counter("gua.identity.signup", "result", "success", "country", regionOf(phone)).increment();
         userSecurityService.recordSuccessfulLogin(userId);
         registerDeviceIfPresent(userId, session, deviceMetadata);
 
@@ -232,6 +238,25 @@ public class IdentityOrchestrationService {
             // Concurrent request already bound this digest to a different account; surface
             // a clean conflict.
             throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
+        }
+    }
+
+    /**
+     * Resolves the ISO 3166-1 alpha-2 region of an E.164 phone for the
+     * registrations-by-country metric. Returns {@code "unknown"} when the number
+     * can't be parsed or has no region, keeping the {@code country} tag
+     * low-cardinality (~200 ISO codes) and free of any per-user value.
+     */
+    private static String regionOf(String e164PhoneNumber) {
+        if (!StringUtils.hasText(e164PhoneNumber)) {
+            return "unknown";
+        }
+        try {
+            PhoneNumberUtil util = PhoneNumberUtil.getInstance();
+            String region = util.getRegionCodeForNumber(util.parse(e164PhoneNumber, null));
+            return region != null ? region : "unknown";
+        } catch (NumberParseException ex) {
+            return "unknown";
         }
     }
 

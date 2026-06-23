@@ -79,7 +79,7 @@ class OidcAuthorizationControllerTest {
         confidentialClient = new RegisteredClient("mas", "$2a$10$abc", false,
                 List.of(CALLBACK), Set.of("openid", "profile", "phone"), false);
         publicClient = new RegisteredClient("gua-ios", null, true,
-                List.of("me.sarahlacerda.gua://oidc"), Set.of("openid", "profile", "phone"), true);
+                List.of("global.gua:/oidc"), Set.of("openid", "profile", "phone"), true);
         when(clientService.requireClient("mas")).thenReturn(confidentialClient);
         when(clientService.requireClient("gua-ios")).thenReturn(publicClient);
     }
@@ -120,13 +120,13 @@ class OidcAuthorizationControllerTest {
                 new OidcAuthorizationCode(
                         "code-pkce",
                         new OidcAuthorization("user-x", "+15550009999", null, Set.of("openid"), "gua-ios"),
-                        "me.sarahlacerda.gua://oidc",
+                        "global.gua:/oidc",
                         Optional.of(challenge)));
 
         mockMvc.perform(get("/oauth2/authorize")
                 .param("response_type", "code")
                 .param("client_id", "gua-ios")
-                .param("redirect_uri", "me.sarahlacerda.gua://oidc")
+                .param("redirect_uri", "global.gua:/oidc")
                 .param("phone_number", "+15550009999")
                 .param("otp_code", "654321")
                 .param("code_challenge", challenge)
@@ -245,7 +245,7 @@ class OidcAuthorizationControllerTest {
                 "user-x", "+15550009999", null, Set.of("openid"), "gua-ios");
         when(authorizationService.consumeAuthorizationCode("auth-code"))
                 .thenReturn(Optional.of(new OidcAuthorizationCode("auth-code", authorization,
-                        "me.sarahlacerda.gua://oidc", Optional.of(challenge))));
+                        "global.gua:/oidc", Optional.of(challenge))));
         doThrow(new OidcInvalidRequestException("invalid_grant", "code_verifier does not match"))
                 .when(clientService).verifyPkce(Optional.of(challenge), "wrong-verifier");
 
@@ -253,7 +253,7 @@ class OidcAuthorizationControllerTest {
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                 .param("grant_type", "authorization_code")
                 .param("code", "auth-code")
-                .param("redirect_uri", "me.sarahlacerda.gua://oidc")
+                .param("redirect_uri", "global.gua:/oidc")
                 .param("client_id", "gua-ios")
                 .param("code_verifier", "wrong-verifier"))
                 .andExpect(status().isBadRequest())

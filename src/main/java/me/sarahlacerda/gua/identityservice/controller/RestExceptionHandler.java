@@ -20,6 +20,7 @@ import me.sarahlacerda.gua.identityservice.exception.InvalidPinChallengeExceptio
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinOperationException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidSignupTokenException;
+import me.sarahlacerda.gua.identityservice.exception.InvalidPhoneNumberException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.exception.OidcClientAuthenticationException;
@@ -77,6 +78,12 @@ public class RestExceptionHandler {
         public ResponseEntity<ErrorResponse> handleInvalidUsername(InvalidUsernameException ex) {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                                 .body(new ErrorResponse("invalid_username", ex.getMessage()));
+        }
+
+        @ExceptionHandler(InvalidPhoneNumberException.class)
+        public ResponseEntity<ErrorResponse> handleInvalidPhoneNumber(InvalidPhoneNumberException ex) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .body(new ErrorResponse("invalid_phone_number", ex.getMessage()));
         }
 
         @ExceptionHandler(UsernameTakenException.class)

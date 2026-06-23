@@ -60,22 +60,21 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # AUTOMATIC: every merge to main updates the dev cluster.
+  # AUTOMATIC on merge to main; also manually dispatchable to roll a branch onto dev for QA.
   deploy-dev:
     needs: image
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, dev]
     environment: dev
     steps:
       - name: Roll out ${{ needs.image.outputs.ref }} to dev
         run: |
           IMG="${{ needs.image.outputs.ref }}"
-          # The dev cluster side-loads images (imagePullPolicy: Never), and the runner lives on the host:
-          # pull the immutable sha-tagged image from GHCR, import it into k3s containerd, then set + roll.
-          docker pull "$IMG"
-          docker save "$IMG" | sudo k3s ctr images import -
-          kubectl -n gua set image deployment/identity-service identity-service="$IMG"
-          kubectl -n gua rollout status deployment/identity-service --timeout=180s
+          # k8s pulls the immutable sha-tagged image from GHCR via the ghcr-pull secret
+          # (deployment is imagePullPolicy: IfNotPresent + imagePullSecrets) — no docker needed.
+          # Use k3s' bundled kubectl as root so PATH + kubeconfig are always correct on the node.
+          sudo k3s kubectl -n gua set image deployment/identity-service identity-service="$IMG"
+          sudo k3s kubectl -n gua rollout status deployment/identity-service --timeout=180s
 
   # MANUAL GATE: pauses until a maintainer approves the `production` GitHub Environment.
   deploy-prod:
@@ -87,7 +86,5 @@ jobs:
       - name: Roll out ${{ needs.image.outputs.ref }} to prod
         run: |
           IMG="${{ needs.image.outputs.ref }}"
-          docker pull "$IMG"
-          docker save "$IMG" | sudo k3s ctr images import -
-          kubectl -n gua set image deployment/identity-service identity-service="$IMG"
-          kubectl -n gua rollout status deployment/identity-service --timeout=180s
+          sudo k3s kubectl -n gua set image deployment/identity-service identity-service="$IMG"
+          sudo k3s kubectl -n gua rollout status deployment/identity-service --timeout=180s
