@@ -61,9 +61,9 @@ class AccountReauthServiceTest {
     @Test
     void verifyReauthIssuesTokenAfterOtpVerified() {
         when(matrixAdminClient.getLinkedPhones("@alice:server")).thenReturn(List.of("+12025550123"));
-        when(reauthTokenService.issue("@alice:server")).thenReturn("opaque-token");
+        when(reauthTokenService.issue("@alice:server", ReauthOperation.PHONE_CHANGE)).thenReturn("opaque-token");
 
-        String token = service.verifyReauth("@alice:server", "123456");
+        String token = service.verifyReauth("@alice:server", "123456", ReauthOperation.PHONE_CHANGE);
 
         verify(otpService).verifyOtp("+12025550123", "123456");
         assertThat(token).isEqualTo("opaque-token");
@@ -75,23 +75,24 @@ class AccountReauthServiceTest {
         org.mockito.Mockito.doThrow(new InvalidOtpException("bad"))
                 .when(otpService).verifyOtp(eq("+12025550123"), eq("000000"));
 
-        assertThatThrownBy(() -> service.verifyReauth("@alice:server", "000000"))
+        assertThatThrownBy(() -> service.verifyReauth("@alice:server", "000000", ReauthOperation.DEACTIVATE))
                 .isInstanceOf(InvalidOtpException.class);
         verifyNoInteractions(reauthTokenService);
     }
 
     @Test
     void requireValidReauthDelegatesToTokenService() {
-        when(reauthTokenService.consume("opaque-token", "@alice:server")).thenReturn("@alice:server");
+        when(reauthTokenService.consume("opaque-token", "@alice:server", ReauthOperation.PHONE_CHANGE))
+                .thenReturn("@alice:server");
 
-        service.requireValidReauth("@alice:server", "opaque-token");
+        service.requireValidReauth("@alice:server", "opaque-token", ReauthOperation.PHONE_CHANGE);
 
-        verify(reauthTokenService).consume("opaque-token", "@alice:server");
+        verify(reauthTokenService).consume("opaque-token", "@alice:server", ReauthOperation.PHONE_CHANGE);
     }
 
     @Test
     void requireValidReauthRejectsBlankToken() {
-        assertThatThrownBy(() -> service.requireValidReauth("@alice:server", " "))
+        assertThatThrownBy(() -> service.requireValidReauth("@alice:server", " ", ReauthOperation.PHONE_CHANGE))
                 .isInstanceOf(InvalidReauthTokenException.class);
         verifyNoInteractions(reauthTokenService);
     }

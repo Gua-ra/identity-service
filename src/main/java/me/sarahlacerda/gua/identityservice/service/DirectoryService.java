@@ -120,6 +120,21 @@ public class DirectoryService {
         return repository.save(entry);
     }
 
+    /**
+     * Sets the contact-discovery opt-out flag on the entry for {@code phoneDigest}.
+     * The {@code @Builder} does not carry {@code discoverable}, so a phone change
+     * (which builds a fresh row for the new digest) must call this to preserve a
+     * user's prior discovery opt-out instead of silently re-opting them in.
+     */
+    @Transactional
+    public DirectoryEntry setDiscoverable(String phoneDigest, boolean discoverable) {
+        DirectoryEntry entry = repository.findByPhoneDigest(phoneDigest)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Cannot set discoverable: no directory entry for the given phone digest"));
+        entry.setDiscoverable(discoverable);
+        return repository.save(entry);
+    }
+
     /** True when the (case-insensitive) global username is already taken. */
     @Transactional(readOnly = true)
     public boolean isUsernameTaken(String username) {

@@ -65,4 +65,33 @@ public class ResolverDirectoryClient {
             log.warn("Could not publish to the shared resolver directory (continuing): {}", e.getMessage());
         }
     }
+
+    /**
+     * Remove a phone (E.164) -&gt; this homeserver mapping from the shared directory.
+     * Used when an account's number changes so the OLD number stops resolving to us
+     * at the federation layer. Best-effort and never throws — like
+     * {@link #registerPhone(String)}, the local directory is authoritative and the
+     * resolver re-converges on subsequent writes if this fails.
+     */
+    public void unregisterPhone(String e164Phone) {
+        if (!enabled) {
+            return;
+        }
+        try {
+            // Same canonical-string + signing scheme as registerPhone so the resolver
+            // can authenticate the delete as coming from the hosting homeserver.
+            String canonical = "directory-delete.v1|" + homeserverId + "|" + e164Phone + "|";
+            String signature = Ed25519.sign(signingKey, canonical.getBytes(StandardCharsets.UTF_8));
+            http.method(org.springframework.http.HttpMethod.DELETE).uri("/directory/entries")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("homeserverId", homeserverId, "e164Phone", e164Phone, "signature", signature))
+                    .retrieve()
+                    .toBodilessEntity();
+            log.debug("Unpublished phone (old number) from the shared resolver directory for hs={}", homeserverId);
+        } catch (Exception e) {
+            // Non-fatal: stale old-number routing self-heals once the resolver entry expires
+            // or is overwritten; never block the local swap on a resolver outage.
+            log.warn("Could not unpublish from the shared resolver directory (continuing): {}", e.getMessage());
+        }
+    }
 }

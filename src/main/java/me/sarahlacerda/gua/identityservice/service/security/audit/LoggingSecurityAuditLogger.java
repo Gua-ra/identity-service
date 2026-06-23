@@ -55,4 +55,25 @@ public class LoggingSecurityAuditLogger implements SecurityAuditLogger {
     public void pinChangeCompleted(String userId) {
         log.info("PIN change completed for user {}", userId);
     }
+
+    @Override
+    public void phoneChangeStarted(String userId, String maskedOldPhone, String maskedNewPhone, String requesterIp) {
+        log.info("Phone change started for user {} from IP {} (old={} new={})",
+                userId, requesterIp, maskedOldPhone, maskedNewPhone);
+    }
+
+    @Override
+    public void phoneChangeCompleted(String userId, String maskedNewPhone) {
+        log.info("Phone change completed for user {} (new={})", userId, maskedNewPhone);
+    }
+
+    @Override
+    public void phoneChangeOtpFailed(String userId, int attempt, String requesterIp) {
+        log.warn("Phone change OTP failed for user {} from IP {} (attempt={})", userId, requesterIp, attempt);
+    }
+
+    @Override
+    public void reauthFailed(String userId, String operation, String requesterIp) {
+        log.warn("Reauth/step-up failed for user {} from IP {} (operation={})", userId, requesterIp, operation);
+    }
 }
