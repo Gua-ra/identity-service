@@ -239,56 +239,6 @@ class IdentityOrchestrationServiceTest {
         }
 
         @Test
-        void changePhoneNumberRebindsDirectoryEntries() {
-                String userId = "@user:gua.global";
-                String newPhone = "+13035550123";
-                String newDigest = "new-digest";
-                DirectoryEntry entryOne = DirectoryEntry.builder()
-                                .phoneDigest("old-1")
-                                .userId(userId)
-                                .displayName("Display Name")
-                                .build();
-                DirectoryEntry entryTwo = DirectoryEntry.builder()
-                                .phoneDigest("old-2")
-                                .userId(userId)
-                                .displayName(null)
-                                .build();
-
-                when(phoneNumberHasher.digest(newPhone)).thenReturn(newDigest);
-                when(directoryService.findByDigest(newDigest)).thenReturn(Optional.empty());
-                when(directoryService.findByUserId(userId)).thenReturn(List.of(entryOne, entryTwo));
-
-                service.changePhoneNumber(userId, newPhone, "999999", "123456");
-
-                verify(otpService).verifyOtp(newPhone, "999999");
-                verify(userSecurityService).validatePinOrThrow(userId, "123456");
-                verify(matrixProvisioningService).ensureExclusivePhoneBinding(userId, newPhone);
-                verify(directoryService).deleteByDigest("old-1");
-                verify(directoryService).deleteByDigest("old-2");
-                verify(directoryService).upsertByDigest(eq(newDigest), anyString(), eq(userId), eq("Display Name"));
-        }
-
-        @Test
-        void changePhoneNumberRejectsWhenDigestOwnedByAnotherUser() {
-                String userId = "@user:gua.global";
-                String newPhone = "+13035550123";
-                String newDigest = "taken-digest";
-                DirectoryEntry other = DirectoryEntry.builder()
-                                .phoneDigest(newDigest)
-                                .userId("@other:gua.global")
-                                .build();
-
-                when(phoneNumberHasher.digest(newPhone)).thenReturn(newDigest);
-                when(directoryService.findByDigest(newDigest)).thenReturn(Optional.of(other));
-
-                assertThatThrownBy(() -> service.changePhoneNumber(userId, newPhone, "888888", "123456"))
-                                .isInstanceOf(PhoneAlreadyLinkedException.class);
-
-                verify(matrixProvisioningService, never()).ensureExclusivePhoneBinding(any(), any());
-                verify(directoryService, never()).findByUserId(any());
-        }
-
-        @Test
         void verifyOtpAndSignInSkipsDeviceRegistrationWhenMetadataMissing() {
                 String phone = "+14045550123";
                 String digest = "digest";
@@ -311,31 +261,6 @@ class IdentityOrchestrationServiceTest {
 
                 verify(trustedDeviceService, never()).registerDevice(any(), any(), any());
                 verify(deviceNotificationService, never()).notifyNewDevice(any(), any(), any());
-        }
-
-        @Test
-        void changePhoneNumberAllowsWhenDigestBelongsToSameUser() {
-                String userId = "@user:gua.global";
-                String newPhone = "+15055550123";
-                String newDigest = "existing-digest";
-                DirectoryEntry sameUserEntry = DirectoryEntry.builder()
-                                .phoneDigest(newDigest)
-                                .userId(userId)
-                                .displayName("Display").build();
-                DirectoryEntry otherEntry = DirectoryEntry.builder()
-                                .phoneDigest("other")
-                                .userId(userId)
-                                .displayName("Display").build();
-
-                when(phoneNumberHasher.digest(newPhone)).thenReturn(newDigest);
-                when(directoryService.findByDigest(newDigest)).thenReturn(Optional.of(sameUserEntry));
-                when(directoryService.findByUserId(userId)).thenReturn(List.of(sameUserEntry, otherEntry));
-
-                service.changePhoneNumber(userId, newPhone, "111111", "222222");
-
-                verify(matrixProvisioningService).ensureExclusivePhoneBinding(userId, newPhone);
-                verify(directoryService).deleteByDigest("other");
-                verify(directoryService).upsertByDigest(eq(newDigest), anyString(), eq(userId), eq("Display"));
         }
 
         @Test

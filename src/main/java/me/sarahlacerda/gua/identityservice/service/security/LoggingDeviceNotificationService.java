@@ -18,4 +18,15 @@ public class LoggingDeviceNotificationService implements DeviceNotificationServi
             metadata.appVersion(),
             metadata.deviceName());
     }
+
+    @Override
+    public void notifyPhoneChangeInitiated(String userId, String maskedOldPhone, String maskedNewPhone) {
+        log.info("Phone change initiated for {} (old={} new={}) — alerting old number", userId, maskedOldPhone,
+            maskedNewPhone);
+    }
+
+    @Override
+    public void notifyPhoneChanged(String userId, String maskedNewPhone) {
+        log.info("Phone changed for {} (new={}) — alerting account owner", userId, maskedNewPhone);
+    }
 }
