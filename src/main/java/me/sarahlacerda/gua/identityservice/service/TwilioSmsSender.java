@@ -14,6 +14,7 @@ import com.twilio.type.PhoneNumber;
 
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.SmsProperties.TwilioProperties;
+import me.sarahlacerda.gua.identityservice.exception.SmsRegionNotSupportedException;
 
 @Component
 @Primary
@@ -47,6 +48,12 @@ public class TwilioSmsSender implements SmsSender {
             }
         } catch (ApiException ex) {
             log.error("Failed to send SMS via Twilio to {}: {}", maskPhoneNumber(e164PhoneNumber), ex.getMessage());
+            // 21408 = "Permission to send an SMS has not been enabled for the region indicated by the
+            // 'To' number" (Twilio geo-permissions). Translate to a clean, user-facing error so the UI
+            // can say the country isn't supported yet, rather than surfacing a generic 500.
+            if (ex.getCode() != null && ex.getCode() == 21408) {
+                throw new SmsRegionNotSupportedException("SMS delivery is not enabled for this number's region", ex);
+            }
             throw ex;
         }
     }

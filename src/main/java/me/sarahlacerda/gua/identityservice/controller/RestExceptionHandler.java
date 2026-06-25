@@ -33,6 +33,7 @@ import me.sarahlacerda.gua.identityservice.exception.PinLockedException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetNotRequestedException;
 import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
+import me.sarahlacerda.gua.identityservice.exception.SmsRegionNotSupportedException;
 import me.sarahlacerda.gua.identityservice.exception.UnknownUserException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
 import me.sarahlacerda.gua.identityservice.exception.WeakPinException;
@@ -84,6 +85,12 @@ public class RestExceptionHandler {
         public ResponseEntity<ErrorResponse> handleInvalidPhoneNumber(InvalidPhoneNumberException ex) {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                                 .body(new ErrorResponse("invalid_phone_number", ex.getMessage()));
+        }
+
+        @ExceptionHandler(SmsRegionNotSupportedException.class)
+        public ResponseEntity<ErrorResponse> handleSmsRegionNotSupported(SmsRegionNotSupportedException ex) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .body(new ErrorResponse("phone_region_unsupported", ex.getMessage()));
         }
 
         @ExceptionHandler(UsernameTakenException.class)
