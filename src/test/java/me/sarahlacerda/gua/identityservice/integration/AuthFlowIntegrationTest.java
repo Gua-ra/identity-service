@@ -248,7 +248,7 @@ class AuthFlowIntegrationTest {
         StringBuilder sb = new StringBuilder(baseUrl).append("/oauth2/authorize?");
         appendParam(sb, "response_type", "code");
         appendParam(sb, "client_id", "gua-ios");
-        appendParam(sb, "redirect_uri", "me.sarahlacerda.gua://oidc");
+        appendParam(sb, "redirect_uri", "global.gua:/oidc");
         appendParam(sb, "scope", "openid profile");
         appendParam(sb, "phone_number", phone);
         appendParam(sb, "otp_code", otp);
@@ -268,7 +268,7 @@ class AuthFlowIntegrationTest {
         StringBuilder sb = new StringBuilder(baseUrl).append("/oauth2/authorize?");
         appendParam(sb, "response_type", "code");
         appendParam(sb, "client_id", "no-such-client");
-        appendParam(sb, "redirect_uri", "me.sarahlacerda.gua://oidc");
+        appendParam(sb, "redirect_uri", "global.gua:/oidc");
         appendParam(sb, "scope", "openid");
         appendParam(sb, "phone_number", phone);
         appendParam(sb, "otp_code", otp);
@@ -300,7 +300,7 @@ class AuthFlowIntegrationTest {
         StringBuilder sb = new StringBuilder(baseUrl).append("/oauth2/authorize?");
         appendParam(sb, "response_type", "code");
         appendParam(sb, "client_id", "gua-ios");
-        appendParam(sb, "redirect_uri", "me.sarahlacerda.gua://oidc");
+        appendParam(sb, "redirect_uri", "global.gua:/oidc");
         appendParam(sb, "scope", "openid profile phone");
         appendParam(sb, "phone_number", phone);
         appendParam(sb, "otp_code", otp);
@@ -322,7 +322,7 @@ class AuthFlowIntegrationTest {
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("grant_type", "authorization_code");
         form.add("code", code);
-        form.add("redirect_uri", "me.sarahlacerda.gua://oidc");
+        form.add("redirect_uri", "global.gua:/oidc");
         form.add("client_id", "gua-ios");
         form.add("code_verifier", verifier);
         return restTemplate.exchange(
