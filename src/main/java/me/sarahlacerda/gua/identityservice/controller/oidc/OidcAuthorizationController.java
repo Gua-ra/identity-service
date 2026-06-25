@@ -123,9 +123,11 @@ public class OidcAuthorizationController {
         String normalizedHint = normalizeLoginHint(loginHint);
         session.setPhoneHint(normalizedHint);
         // DIAGNOSTIC (Bug 1): does the OIDC login_hint reach this endpoint + normalize to a phone?
-        // Booleans only — never logs the value (PII). Remove once the iOS->MAS login_hint chain is confirmed.
-        log.info("OIDC authorize: login_hint received={}, phoneHint set={}",
-                loginHint != null && !loginHint.isBlank(), normalizedHint != null);
+        // Digits are masked to '#', so the number is never logged — only its shape (e.g. " ###########"
+        // reveals a '+' that form-decoded to a space). Remove once the login_hint chain is confirmed stable.
+        log.info("OIDC authorize: login_hint received={}, phoneHint set={}, shape={}",
+                loginHint != null && !loginHint.isBlank(), normalizedHint != null,
+                loginHint == null ? "null" : loginHint.replaceAll("[0-9]", "#"));
         // Re-authentication: an already signed-in user re-verifying (prompt=login /
         // id_token_hint). Pin the session to that subject so the flow is LOGIN-ONLY —
         // the phone must already belong to this user and signup can never be reached.
@@ -264,7 +266,8 @@ public class OidcAuthorizationController {
      * {@code "mxid:..."}); we keep only a phone-like value and ignore anything
      * else.
      */
-    private static String normalizeLoginHint(String loginHint) {
+    // package-private for unit testing (see OidcLoginHintNormalizeTest)
+    static String normalizeLoginHint(String loginHint) {
         if (loginHint == null || loginHint.isBlank()) {
             return null;
         }
@@ -277,7 +280,15 @@ public class OidcAuthorizationController {
                 value = value.substring(colon + 1).trim();
             }
         }
-        return value.startsWith("+") ? value : null;
+        if (value.startsWith("+")) {
+            return value;
+        }
+        // A leading '+' in an E.164 login_hint is routinely lost in transit: in an OAuth
+        // query string '+15551234567' form-decodes to a space (already trimmed away above)
+        // or is dropped outright. If what remains is a bare E.164 digit run, restore the '+'
+        // rather than discarding the hint and forcing the user to retype their number.
+        String digits = value.replaceAll("\\s", "");
+        return digits.matches("\\d{6,15}") ? "+" + digits : null;
     }
 
     private record ClientCredentials(String clientId, String clientSecret) {
