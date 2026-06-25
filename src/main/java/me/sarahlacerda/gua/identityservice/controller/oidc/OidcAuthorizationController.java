@@ -10,6 +10,8 @@ import java.util.Set;
 
 import lombok.RequiredArgsConstructor;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -47,6 +49,8 @@ import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
 @RequiredArgsConstructor
 @Tag(name = "OIDC Authorization", description = "OAuth 2.0 authorization code endpoints backing the Matrix Authentication Service")
 public class OidcAuthorizationController {
+
+    private static final Logger log = LoggerFactory.getLogger(OidcAuthorizationController.class);
 
     private final OidcAuthorizationService authorizationService;
     private final OidcTokenService tokenService;
@@ -116,7 +120,12 @@ public class OidcAuthorizationController {
         session.setCodeChallenge(codeChallenge);
         session.setCodeChallengeMethod(codeChallengeMethod);
         session.setPhase(LoginSession.Phase.PHONE);
-        session.setPhoneHint(normalizeLoginHint(loginHint));
+        String normalizedHint = normalizeLoginHint(loginHint);
+        session.setPhoneHint(normalizedHint);
+        // DIAGNOSTIC (Bug 1): does the OIDC login_hint reach this endpoint + normalize to a phone?
+        // Booleans only — never logs the value (PII). Remove once the iOS->MAS login_hint chain is confirmed.
+        log.info("OIDC authorize: login_hint received={}, phoneHint set={}",
+                loginHint != null && !loginHint.isBlank(), normalizedHint != null);
         // Re-authentication: an already signed-in user re-verifying (prompt=login /
         // id_token_hint). Pin the session to that subject so the flow is LOGIN-ONLY —
         // the phone must already belong to this user and signup can never be reached.
