@@ -80,11 +80,39 @@ public class IdentityServiceProperties {
         @NotBlank
         private String homeserverDomain;
 
-        @NotBlank
+        /**
+         * Static Synapse admin access token. Legacy / fallback auth for the admin API:
+         * used only when {@link #tokenUri} is not configured. With MAS delegated auth
+         * (MSC3861) a static token cannot be validated long-term, so prefer the OAuth2
+         * client-credentials flow below.
+         */
         private String adminAccessToken;
 
         @NotBlank
         private String userLocalpartPrefix = "gua";
+
+        /**
+         * MAS OAuth2 token endpoint (e.g. {@code https://account.dev.gua.sarahlacerda.me/oauth2/token}).
+         * When set, the admin client authenticates to the Synapse admin API with a short-lived
+         * client-credentials access token (auto-refreshed) instead of {@link #adminAccessToken}.
+         */
+        private String tokenUri;
+
+        /** OAuth2 confidential client id registered in MAS for this service (client-credentials grant). */
+        private String clientId;
+
+        /** OAuth2 confidential client secret (client_secret_basic). */
+        private String clientSecret;
+
+        /** Scope requested for admin access. Exact MAS string for the Synapse admin API. */
+        private String adminScope = "urn:synapse:admin:*";
+
+        /** Whether MAS client-credentials admin auth is fully configured. */
+        public boolean isClientCredentialsConfigured() {
+            return tokenUri != null && !tokenUri.isBlank()
+                    && clientId != null && !clientId.isBlank()
+                    && clientSecret != null && !clientSecret.isBlank();
+        }
     }
 
     @Getter

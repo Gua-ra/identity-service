@@ -29,18 +29,47 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
     private final WebClient adminClient;
     private final WebClient clientApi;
 
-    public WebClientMatrixAdminClient(WebClient.Builder webClientBuilder, IdentityServiceProperties properties) {
+    public WebClientMatrixAdminClient(WebClient.Builder webClientBuilder,
+                                      IdentityServiceProperties properties,
+                                      MasAdminTokenProvider tokenProvider) {
         IdentityServiceProperties.MatrixProperties matrix = properties.getMatrix();
+        // GUA FORK: authenticate the Synapse admin API with a fresh MAS client-credentials token
+        // (auto-refreshed) when configured; otherwise fall back to the static admin token. The bearer
+        // is injected per-request via a filter rather than a construction-time default header, so the
+        // short-lived MAS token is always current.
         this.adminClient = webClientBuilder.clone()
                 .baseUrl(matrix.getAdminApiBaseUrl())
-                .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + matrix.getAdminAccessToken())
                 .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                .filter(adminAuthFilter(tokenProvider, matrix.getAdminAccessToken()))
                 .filter(maskingRequestLogger())
                 .build();
         this.clientApi = webClientBuilder.clone()
                 .baseUrl(matrix.getClientApiBaseUrl())
                 .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
                 .build();
+    }
+
+    /**
+     * Injects the admin {@code Authorization: Bearer} header on every admin request: a freshly
+     * refreshed MAS client-credentials token when configured, else the legacy static token.
+     */
+    private static ExchangeFilterFunction adminAuthFilter(MasAdminTokenProvider tokenProvider, String staticToken) {
+        return (request, next) -> {
+            if (tokenProvider.isEnabled()) {
+                return tokenProvider.getToken()
+                        .map(token -> ClientRequest.from(request)
+                                .headers(headers -> headers.setBearerAuth(token))
+                                .build())
+                        .flatMap(next::exchange);
+            }
+            if (staticToken != null && !staticToken.isBlank()) {
+                ClientRequest authorized = ClientRequest.from(request)
+                        .headers(headers -> headers.setBearerAuth(staticToken))
+                        .build();
+                return next.exchange(authorized);
+            }
+            return next.exchange(request);
+        };
     }
 
     private static ExchangeFilterFunction maskingRequestLogger() {
