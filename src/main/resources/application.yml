@@ -26,6 +26,9 @@ identity:
     pin-reset-cooldown: ${IDENTITY_SECURITY_PIN_RESET_COOLDOWN:PT168H}
     max-pin-attempts: ${IDENTITY_SECURITY_MAX_PIN_ATTEMPTS:5}
     pin-lock-duration: ${IDENTITY_SECURITY_PIN_LOCK_DURATION:PT15M}
+    phone-change-cooldown: ${IDENTITY_SECURITY_PHONE_CHANGE_COOLDOWN:PT24H}
+    phone-change-challenge-ttl: ${IDENTITY_SECURITY_PHONE_CHANGE_CHALLENGE_TTL:PT10M}
+    max-phone-change-otp-attempts: ${IDENTITY_SECURITY_MAX_PHONE_CHANGE_OTP_ATTEMPTS:5}
   rate-limits:
     enabled: ${IDENTITY_RATE_LIMITS_ENABLED:true}
     default-config:
@@ -53,11 +56,16 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_SIGNIN_VERIFY_PIN_LIMIT:10}
         refresh-period: ${IDENTITY_RATE_LIMIT_SIGNIN_VERIFY_PIN_REFRESH:PT1M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_SIGNIN_VERIFY_PIN_TIMEOUT:PT0S}
-      - path: /otp/change-number
+      - path: /account/phone/change/start
         methods: [POST]
-        limit-for-period: ${IDENTITY_RATE_LIMIT_OTP_CHANGE_NUMBER_LIMIT:3}
-        refresh-period: ${IDENTITY_RATE_LIMIT_OTP_CHANGE_NUMBER_REFRESH:PT1H}
-        timeout-duration: ${IDENTITY_RATE_LIMIT_OTP_CHANGE_NUMBER_TIMEOUT:PT0S}
+        limit-for-period: ${IDENTITY_RATE_LIMIT_PHONE_CHANGE_START_LIMIT:3}
+        refresh-period: ${IDENTITY_RATE_LIMIT_PHONE_CHANGE_START_REFRESH:PT1H}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_PHONE_CHANGE_START_TIMEOUT:PT0S}
+      - path: /account/phone/change/complete
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_PHONE_CHANGE_COMPLETE_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_PHONE_CHANGE_COMPLETE_REFRESH:PT1H}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_PHONE_CHANGE_COMPLETE_TIMEOUT:PT0S}
       - path: /security/pin
         methods: [POST]
         limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_LIMIT:20}

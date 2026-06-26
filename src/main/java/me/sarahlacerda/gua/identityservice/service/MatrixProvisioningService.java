@@ -81,6 +81,17 @@ public class MatrixProvisioningService {
                 .forEach(existing -> matrixAdminClient.unlinkPhone(userId, existing));
     }
 
+    /**
+     * Returns the E.164 numbers currently linked to {@code userId} on the homeserver,
+     * excluding {@code keep}. Read-only — used to capture the old number(s) before a
+     * phone change so they can be de-discovered at the federation (resolver) layer.
+     */
+    public List<String> getLinkedPhonesExcluding(String userId, String keep) {
+        return matrixAdminClient.getLinkedPhones(userId).stream()
+                .filter(existing -> !existing.equals(keep))
+                .toList();
+    }
+
     private String generatePassword() {
         byte[] bytes = new byte[24];
         secureRandom.nextBytes(bytes);

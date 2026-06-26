@@ -31,10 +31,10 @@ class ReauthTokenServiceTest {
     }
 
     @Test
-    void issueStoresUserIdUnderTokenKey() {
+    void issueStoresUserIdAndOperationUnderTokenKey() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
 
-        String token = service.issue("@alice:server");
+        String token = service.issue("@alice:server", ReauthOperation.PHONE_CHANGE);
 
         assertThat(token).isNotBlank();
     }
@@ -42,16 +42,16 @@ class ReauthTokenServiceTest {
     @Test
     void consumeReturnsBoundUserIdAndDeletesToken() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.getAndDelete("reauth:token:abc")).thenReturn("@alice:server");
+        when(valueOperations.getAndDelete("reauth:token:abc")).thenReturn("@alice:server|PHONE_CHANGE");
 
-        String userId = service.consume("abc", "@alice:server");
+        String userId = service.consume("abc", "@alice:server", ReauthOperation.PHONE_CHANGE);
 
         assertThat(userId).isEqualTo("@alice:server");
     }
 
     @Test
     void consumeRejectsBlankToken() {
-        assertThatThrownBy(() -> service.consume("", "@alice:server"))
+        assertThatThrownBy(() -> service.consume("", "@alice:server", ReauthOperation.PHONE_CHANGE))
                 .isInstanceOf(InvalidReauthTokenException.class);
     }
 
@@ -60,16 +60,34 @@ class ReauthTokenServiceTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(valueOperations.getAndDelete("reauth:token:abc")).thenReturn(null);
 
-        assertThatThrownBy(() -> service.consume("abc", "@alice:server"))
+        assertThatThrownBy(() -> service.consume("abc", "@alice:server", ReauthOperation.PHONE_CHANGE))
                 .isInstanceOf(InvalidReauthTokenException.class);
     }
 
     @Test
     void consumeRejectsMismatchedUser() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.getAndDelete("reauth:token:abc")).thenReturn("@bob:server");
+        when(valueOperations.getAndDelete("reauth:token:abc")).thenReturn("@bob:server|PHONE_CHANGE");
 
-        assertThatThrownBy(() -> service.consume("abc", "@alice:server"))
+        assertThatThrownBy(() -> service.consume("abc", "@alice:server", ReauthOperation.PHONE_CHANGE))
+                .isInstanceOf(InvalidReauthTokenException.class);
+    }
+
+    @Test
+    void consumeRejectsMismatchedOperation() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.getAndDelete("reauth:token:abc")).thenReturn("@alice:server|DEACTIVATE");
+
+        assertThatThrownBy(() -> service.consume("abc", "@alice:server", ReauthOperation.PHONE_CHANGE))
+                .isInstanceOf(InvalidReauthTokenException.class);
+    }
+
+    @Test
+    void consumeRejectsUnscopedLegacyToken() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.getAndDelete("reauth:token:abc")).thenReturn("@alice:server");
+
+        assertThatThrownBy(() -> service.consume("abc", "@alice:server", ReauthOperation.PHONE_CHANGE))
                 .isInstanceOf(InvalidReauthTokenException.class);
     }
 }

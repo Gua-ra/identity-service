@@ -1,6 +1,5 @@
 package me.sarahlacerda.gua.identityservice.service;
 
-import java.util.List;
 import java.util.Optional;
 
 import com.google.i18n.phonenumbers.NumberParseException;
@@ -203,42 +202,6 @@ public class IdentityOrchestrationService {
         registerDeviceIfPresent(userId, session, deviceMetadata);
 
         return session;
-    }
-
-    public void changePhoneNumber(String userId, String newPhone, String code, String pin) {
-        otpService.verifyOtp(newPhone, code);
-        userSecurityService.validatePinOrThrow(userId, pin);
-
-        final String newDigest = phoneNumberHasher.digest(newPhone);
-
-        directoryService.findByDigest(newDigest)
-                .filter(entry -> !entry.getUserId().equals(userId))
-                .ifPresent(entry -> {
-                    throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
-                });
-
-        matrixProvisioningService.ensureExclusivePhoneBinding(userId, newPhone);
-
-        List<DirectoryEntry> currentEntries = directoryService.findByUserId(userId);
-
-        final String displayName = currentEntries.stream()
-                .map(DirectoryEntry::getDisplayName)
-                .filter(StringUtils::hasText)
-                .findFirst()
-                .orElse(null);
-
-        currentEntries.stream()
-                .map(DirectoryEntry::getPhoneDigest)
-                .filter(digest -> !digest.equals(newDigest))
-                .forEach(directoryService::deleteByDigest);
-
-        try {
-            directoryService.upsertByDigest(newDigest, phoneNumberMasker.mask(newPhone), userId, displayName);
-        } catch (DataIntegrityViolationException ex) {
-            // Concurrent request already bound this digest to a different account; surface
-            // a clean conflict.
-            throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
-        }
     }
 
     /**

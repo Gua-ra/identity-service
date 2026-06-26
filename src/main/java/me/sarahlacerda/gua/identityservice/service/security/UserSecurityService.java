@@ -15,6 +15,7 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.domain.IdentityUser;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinOperationException;
+import me.sarahlacerda.gua.identityservice.exception.PhoneChangeCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinChangeChallengeNotFoundException;
 import me.sarahlacerda.gua.identityservice.exception.PinChangeCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinLockedException;
@@ -134,6 +135,38 @@ public class UserSecurityService {
         user.setLastPinChangeAt(Instant.now());
         redisTemplate.delete(key);
         auditLogger.pinChangeCompleted(userId);
+    }
+
+    /**
+     * Enforces the per-account phone-change cooldown. No-op for accounts that have
+     * never changed their number. Throws {@link PhoneChangeCooldownException} (425 +
+     * Retry-After) while the cooldown window from the last change is still open.
+     */
+    @Transactional(readOnly = true)
+    public void enforcePhoneChangeCooldown(String userId) {
+        IdentityUser user = requireExistingUser(userId);
+        Instant lastChange = user.getLastPhoneChangeAt();
+        if (lastChange == null) {
+            return;
+        }
+        Duration cooldown = properties.getSecurity().getPhoneChangeCooldown();
+        Duration since = Duration.between(lastChange, Instant.now());
+        if (since.compareTo(cooldown) < 0) {
+            long remaining = cooldown.minus(since).toSeconds();
+            throw new PhoneChangeCooldownException("Phone change cooldown active", remaining);
+        }
+    }
+
+    /**
+     * Stamps the time of a successful phone-number change. Called inside the swap
+     * transaction so the cooldown clock starts atomically with the mapping switch.
+     * Uses {@link #ensureUser(String)} because a token-only account may not yet have
+     * an identity_users row.
+     */
+    @Transactional
+    public void stampPhoneChange(String userId) {
+        IdentityUser user = ensureUser(userId);
+        user.setLastPhoneChangeAt(Instant.now());
     }
 
     private void enforcePinChangeCooldown(IdentityUser user) {

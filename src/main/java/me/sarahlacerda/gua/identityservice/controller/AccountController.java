@@ -19,6 +19,7 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
 import lombok.RequiredArgsConstructor;
@@ -28,9 +29,14 @@ import me.sarahlacerda.gua.identityservice.controller.dto.AccountReauthTokenResp
 import me.sarahlacerda.gua.identityservice.controller.dto.AccountReauthVerifyRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.IdentityResetCredentialsRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.IdentityResetCredentialsResponse;
+import me.sarahlacerda.gua.identityservice.controller.dto.PhoneChangeCompleteRequest;
+import me.sarahlacerda.gua.identityservice.controller.dto.PhoneChangeStartRequest;
+import me.sarahlacerda.gua.identityservice.controller.dto.PhoneChangeStartResponse;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.security.AccountReauthService;
+import me.sarahlacerda.gua.identityservice.service.security.PhoneChangeService;
+import me.sarahlacerda.gua.identityservice.service.security.ReauthOperation;
 import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
 
 /**
@@ -57,6 +63,7 @@ public class AccountController {
         private final MatrixAdminClient matrixAdminClient;
         private final TokenRevocationService tokenRevocationService;
         private final DirectoryService directoryService;
+        private final PhoneChangeService phoneChangeService;
 
         @PostMapping("/reauth/start")
         @Operation(summary = "Send a fresh OTP for account reauthentication", description = "Sends an OTP via SMS to the phone linked to the authenticated user.")
@@ -82,7 +89,7 @@ public class AccountController {
         public ResponseEntity<AccountReauthTokenResponse> verifyReauth(
                         @RequestBody @Valid AccountReauthVerifyRequest request) {
                 String userId = authenticatedUserAccessor.requireCurrentUserId();
-                String token = reauthService.verifyReauth(userId, request.getCode());
+                String token = reauthService.verifyReauth(userId, request.getCode(), request.getOperation());
                 return ResponseEntity.ok(new AccountReauthTokenResponse(token, REAUTH_TOKEN_TTL_SECONDS));
         }
 
@@ -94,7 +101,7 @@ public class AccountController {
         })
         public ResponseEntity<Void> deactivateAccount(@RequestBody @Valid AccountDeactivateRequest request) {
                 String userId = authenticatedUserAccessor.requireCurrentUserId();
-                reauthService.requireValidReauth(userId, request.getReauthToken());
+                reauthService.requireValidReauth(userId, request.getReauthToken(), ReauthOperation.DEACTIVATE);
                 matrixAdminClient.deactivateUser(userId, request.isEraseData());
                 tokenRevocationService.revokeAllTokens(userId);
                 log.info("Account deactivated for {} (erase={})", userId, request.isEraseData());
@@ -110,7 +117,7 @@ public class AccountController {
         public ResponseEntity<IdentityResetCredentialsResponse> resetIdentityCredentials(
                         @RequestBody @Valid IdentityResetCredentialsRequest request) {
                 String userId = authenticatedUserAccessor.requireCurrentUserId();
-                reauthService.requireValidReauth(userId, request.getReauthToken());
+                reauthService.requireValidReauth(userId, request.getReauthToken(), ReauthOperation.IDENTITY_RESET);
 
                 // Reset rotates the homeserver credential for the SAME existing account; it
                 // must never mint a new MXID or a new directory row. Pin the operation to the
@@ -131,5 +138,49 @@ public class AccountController {
                 tokenRevocationService.revokeAllTokens(existingUserId);
                 log.info("Issued identity-reset UIA credentials for {} (existing MXID reused)", existingUserId);
                 return ResponseEntity.ok(new IdentityResetCredentialsResponse(existingUserId, password));
+        }
+
+        @PostMapping("/phone/change/start")
+        @Operation(summary = "Start a phone-number change", description = "Spends a PHONE_CHANGE-scoped reauth token and a step-up factor (account PIN when set, and/or a passkey assertion), then sends an OTP to the NEW number and returns a challenge to redeem at /account/phone/change/complete. The OLD number is alerted out of band.", security = @SecurityRequirement(name = "oidcAccessToken"))
+        @ApiResponses({
+                        @ApiResponse(responseCode = "200", description = "Challenge created and OTP sent to the new number", content = @Content(schema = @Schema(implementation = PhoneChangeStartResponse.class))),
+                        @ApiResponse(responseCode = "400", description = "Validation failed, PIN invalid, invalid/equal phone number", content = @Content),
+                        @ApiResponse(responseCode = "401", description = "Authentication or reauth/step-up failed", content = @Content),
+                        @ApiResponse(responseCode = "409", description = "New number already linked to another account", content = @Content),
+                        @ApiResponse(responseCode = "425", description = "Phone-change cooldown still active", content = @Content),
+                        @ApiResponse(responseCode = "429", description = "Too many attempts (rate limited or PIN locked)", content = @Content)
+        })
+        public ResponseEntity<PhoneChangeStartResponse> startPhoneChange(
+                        @RequestBody @Valid PhoneChangeStartRequest request,
+                        @RequestHeader(value = "Accept-Language", required = false) String acceptLanguage,
+                        @Parameter(hidden = true) HttpServletRequest servletRequest) {
+                String userId = authenticatedUserAccessor.requireCurrentUserId();
+                PhoneChangeService.PhoneChangeStart start = phoneChangeService.startPhoneNumberChange(
+                                userId,
+                                request.getReauthToken(),
+                                request.getNewPhone(),
+                                request.getPin(),
+                                request.getPasskeyAuthSessionId(),
+                                request.getPasskeyCredential(),
+                                servletRequest.getRemoteAddr(),
+                                acceptLanguage);
+                return ResponseEntity.ok(new PhoneChangeStartResponse(start.challengeId(), start.otpExpiresInSeconds()));
+        }
+
+        @PostMapping("/phone/change/complete")
+        @Operation(summary = "Complete a phone-number change", description = "Redeems a challenge from /account/phone/change/start with the OTP delivered to the new number. On success the account's phone mapping is atomically switched, outstanding sessions are revoked, and the new number is alerted.", security = @SecurityRequirement(name = "oidcAccessToken"))
+        @ApiResponses({
+                        @ApiResponse(responseCode = "204", description = "Phone number changed"),
+                        @ApiResponse(responseCode = "400", description = "Validation failed or OTP invalid", content = @Content),
+                        @ApiResponse(responseCode = "401", description = "Authentication required or challenge missing/expired", content = @Content),
+                        @ApiResponse(responseCode = "409", description = "New number already linked to another account", content = @Content)
+        })
+        public ResponseEntity<Void> completePhoneChange(
+                        @RequestBody @Valid PhoneChangeCompleteRequest request,
+                        @Parameter(hidden = true) HttpServletRequest servletRequest) {
+                String userId = authenticatedUserAccessor.requireCurrentUserId();
+                phoneChangeService.completePhoneNumberChange(userId, request.getChallengeId(), request.getCode(),
+                                servletRequest.getRemoteAddr());
+                return ResponseEntity.noContent().build();
         }
 }

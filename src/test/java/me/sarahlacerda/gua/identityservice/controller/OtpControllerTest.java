@@ -3,7 +3,6 @@ package me.sarahlacerda.gua.identityservice.controller;
 import static org.hamcrest.Matchers.is;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -19,7 +18,6 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import me.sarahlacerda.gua.identityservice.controller.dto.OtpChangeNumberRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.OtpSendRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.OtpVerifyRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.OtpVerifyRequest.DeviceInfo;
@@ -111,21 +109,4 @@ class OtpControllerTest {
                         is("signup-token-abc")));
     }
 
-    @Test
-    void changeNumberRequiresMatchingUser() throws Exception {
-        OtpChangeNumberRequest request = new OtpChangeNumberRequest();
-        request.setUserId("@user:domain");
-        request.setNewPhone("+19999999999");
-        request.setCode("123456");
-        request.setPin("999999");
-
-        doNothing().when(authenticatedUserAccessor).requireUserIdMatches("@user:domain");
-
-        mockMvc.perform(MockMvcRequestBuilders.post("/otp/change-number")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsBytes(request)))
-                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNoContent());
-
-        verify(orchestrationService).changePhoneNumber("@user:domain", "+19999999999", "123456", "999999");
-    }
 }
