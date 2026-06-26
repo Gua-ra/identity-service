@@ -12,8 +12,16 @@ identity:
     admin-api-base-url: ${IDENTITY_MATRIX_ADMIN_API_BASE_URL}
     client-api-base-url: ${IDENTITY_MATRIX_CLIENT_API_BASE_URL}
     homeserver-domain: ${IDENTITY_MATRIX_HOME_DOMAIN}
-    admin-access-token: ${IDENTITY_MATRIX_ADMIN_TOKEN}
+    # Legacy/fallback static admin token; ignored when the MAS client-credentials block below is set.
+    admin-access-token: ${IDENTITY_MATRIX_ADMIN_TOKEN:}
     user-localpart-prefix: ${IDENTITY_MATRIX_LOCALPART_PREFIX}
+    # MAS OAuth2 client-credentials for the Synapse admin API (preferred under MSC3861 delegated auth).
+    # When token-uri + client-id + client-secret are set, the admin client uses short-lived,
+    # auto-refreshed MAS tokens instead of the static admin-access-token above.
+    token-uri: ${IDENTITY_MATRIX_TOKEN_URI:}
+    client-id: ${IDENTITY_MATRIX_CLIENT_ID:}
+    client-secret: ${IDENTITY_MATRIX_CLIENT_SECRET:}
+    admin-scope: ${IDENTITY_MATRIX_ADMIN_SCOPE:urn:synapse:admin:*}
   directory:
     pepper: ${IDENTITY_DIRECTORY_PEPPER}
     # Optional integrity pin for the pepper. A non-reversible fingerprint of the

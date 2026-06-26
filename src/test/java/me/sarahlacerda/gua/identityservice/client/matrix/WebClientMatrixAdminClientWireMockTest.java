@@ -47,7 +47,9 @@ class WebClientMatrixAdminClientWireMockTest {
         matrix.setAdminAccessToken("admin-token-abc");
         matrix.setUserLocalpartPrefix("gua");
 
-        client = new WebClientMatrixAdminClient(WebClient.builder(), properties);
+        // No MAS client-credentials config -> provider disabled -> static admin token fallback.
+        MasAdminTokenProvider tokenProvider = new MasAdminTokenProvider(WebClient.builder(), properties);
+        client = new WebClientMatrixAdminClient(WebClient.builder(), properties, tokenProvider);
     }
 
     @AfterEach
