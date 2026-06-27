@@ -203,6 +203,15 @@ public class IdentityServiceProperties {
 
         @NotNull
         private Duration pinChangeChallengeTtl = Duration.ofMinutes(5);
+
+        /**
+         * Belt-and-suspenders cooldown after any PIN write (create/change/reset) before
+         * the PIN can be used to step up a change-phone request. Stops a SIM-swapper who
+         * just set a PIN from getting instant trust. Default 7 days; dev/QA may set 0
+         * (PT0S) via {@code IDENTITY_CHANGE_PHONE_2FA_COOLDOWN_SECONDS}.
+         */
+        @NotNull
+        private Duration changePhone2faCooldown = Duration.ofDays(7);
     }
 
     @Getter

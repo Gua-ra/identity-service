@@ -13,6 +13,7 @@ import me.sarahlacerda.gua.identityservice.client.matrix.MatrixAdminClient;
 import me.sarahlacerda.gua.identityservice.domain.MatrixSession;
 import me.sarahlacerda.gua.identityservice.domain.VerifyOtpResult;
 import me.sarahlacerda.gua.identityservice.exception.PhoneAlreadyLinkedException;
+import me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -215,6 +216,14 @@ public class IdentityOrchestrationService {
     public void requestPhoneChangeOtp(String userId, String newPhone, String reauthToken, String ip,
             String language) {
         reauthTokenService.validate(reauthToken, userId);
+        // Defense-in-depth: even with a valid reauth token, refuse to send the new-number OTP
+        // while the post-PIN-write 2FA cooldown is active, so a SIM-swapper who just set a PIN
+        // can't get instant trust. The client also pre-checks this via /security/pin/status.
+        long cooldownRemaining = userSecurityService.changePhoneCooldownRemainingSeconds(userId);
+        if (cooldownRemaining > 0) {
+            throw new TwoFactorCooldownException(
+                    "Change-phone two-factor cooldown active", cooldownRemaining);
+        }
         sendOtp(newPhone, ip, language);
     }
 

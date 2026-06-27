@@ -420,4 +420,29 @@ class IdentityOrchestrationServiceTest {
                 verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(),
                                 any(Boolean.class));
         }
+
+        @Test
+        void requestPhoneChangeOtpSendsWhenNoCooldown() {
+                when(userSecurityService.changePhoneCooldownRemainingSeconds("@alice:gua.global")).thenReturn(0L);
+
+                service.requestPhoneChangeOtp("@alice:gua.global", "+12025550199", "reauth-tok", "1.2.3.4", "en");
+
+                verify(reauthTokenService).validate("reauth-tok", "@alice:gua.global");
+                verify(otpService).sendOtp("+12025550199", "1.2.3.4", "en");
+        }
+
+        @Test
+        void requestPhoneChangeOtpRejectedWithinCooldown() {
+                when(userSecurityService.changePhoneCooldownRemainingSeconds("@alice:gua.global")).thenReturn(3600L);
+
+                assertThatThrownBy(() -> service.requestPhoneChangeOtp(
+                                "@alice:gua.global", "+12025550199", "reauth-tok", "1.2.3.4", "en"))
+                                .isInstanceOf(me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException.class)
+                                .extracting(ex -> ((me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException) ex)
+                                                .getRetryAfterSeconds())
+                                .isEqualTo(3600L);
+
+                verify(reauthTokenService).validate("reauth-tok", "@alice:gua.global");
+                verify(otpService, never()).sendOtp(anyString(), anyString(), any());
+        }
 }

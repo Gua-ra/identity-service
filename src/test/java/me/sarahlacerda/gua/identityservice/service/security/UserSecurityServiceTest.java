@@ -236,4 +236,74 @@ class UserSecurityServiceTest {
                 .isInstanceOf(PinChangeChallengeNotFoundException.class);
         verify(redisTemplate).delete("pin:change:chal-1");
     }
+
+    @Test
+    void changePhoneCooldownRemainingWithinWindowReturnsRemainingSeconds() {
+        properties.getSecurity().setChangePhone2faCooldown(Duration.ofDays(7));
+        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
+        user.setPinHash(passwordEncoder.encode("123456"));
+        user.setPinSetAt(Instant.now().minus(Duration.ofDays(2)));
+
+        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
+
+        long remaining = service.changePhoneCooldownRemainingSeconds("@user:gua.global");
+
+        // ~5 days left of a 7-day window; allow slack for execution time.
+        assertThat(remaining).isBetween(Duration.ofDays(5).toSeconds() - 5, Duration.ofDays(5).toSeconds());
+    }
+
+    @Test
+    void changePhoneCooldownRemainingOutsideWindowReturnsZero() {
+        properties.getSecurity().setChangePhone2faCooldown(Duration.ofDays(7));
+        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
+        user.setPinHash(passwordEncoder.encode("123456"));
+        user.setPinSetAt(Instant.now().minus(Duration.ofDays(8)));
+
+        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
+
+        assertThat(service.changePhoneCooldownRemainingSeconds("@user:gua.global")).isZero();
+    }
+
+    @Test
+    void changePhoneCooldownRemainingWithZeroWindowReturnsZero() {
+        properties.getSecurity().setChangePhone2faCooldown(Duration.ZERO);
+        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
+        user.setPinHash(passwordEncoder.encode("123456"));
+        user.setPinSetAt(Instant.now());
+
+        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
+
+        assertThat(service.changePhoneCooldownRemainingSeconds("@user:gua.global")).isZero();
+    }
+
+    @Test
+    void changePhoneCooldownRemainingForUnknownUserReturnsZero() {
+        when(repository.findByUserId("@ghost:gua.global")).thenReturn(Optional.empty());
+
+        assertThat(service.changePhoneCooldownRemainingSeconds("@ghost:gua.global")).isZero();
+    }
+
+    @Test
+    void validatePinForReauthWithNoPinThrowsPinSetupRequired() {
+        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
+        // No PIN hash set -> hasPin() == false.
+        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> service.validatePinForReauthOrThrow("@user:gua.global", "123456"))
+                .isInstanceOf(me.sarahlacerda.gua.identityservice.exception.PinSetupRequiredException.class);
+        // Must not proceed into the for-update validation path.
+        verify(repository, org.mockito.Mockito.never()).findByUserIdForUpdate(any());
+    }
+
+    @Test
+    void validatePinForReauthWithWrongPinThrowsInvalidPin() {
+        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
+        user.setPinHash(passwordEncoder.encode("123456"));
+
+        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
+        when(repository.findByUserIdForUpdate("@user:gua.global")).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> service.validatePinForReauthOrThrow("@user:gua.global", "000000"))
+                .isInstanceOf(InvalidPinException.class);
+    }
 }

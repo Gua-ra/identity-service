@@ -107,7 +107,61 @@ class SecurityControllerTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .jsonPath("$.expiresInSeconds").value(300));
 
-        verify(userSecurityService).validatePinOrThrow("@user:domain", "123456");
+        verify(userSecurityService).validatePinForReauthOrThrow("@user:domain", "123456");
+    }
+
+    @Test
+    void pinReauthWithoutPinReturnsPinSetupRequired() throws Exception {
+        me.sarahlacerda.gua.identityservice.controller.dto.PinReauthRequest request =
+                new me.sarahlacerda.gua.identityservice.controller.dto.PinReauthRequest();
+        request.setUserId("@user:domain");
+        request.setPin("123456");
+
+        doNothing().when(authenticatedUserAccessor).requireUserIdMatches("@user:domain");
+        org.mockito.Mockito.doThrow(
+                new me.sarahlacerda.gua.identityservice.exception.PinSetupRequiredException("PIN not set for user"))
+                .when(userSecurityService).validatePinForReauthOrThrow("@user:domain", "123456");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/reauth")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(request)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code")
+                        .value("pin_setup_required"));
+
+        org.mockito.Mockito.verify(reauthTokenService, org.mockito.Mockito.never())
+                .issue(org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void pinStatusReturnsHasPinAndCooldownRemaining() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
+        org.mockito.Mockito.when(userSecurityService.hasPin("@user:domain")).thenReturn(true);
+        org.mockito.Mockito.when(userSecurityService.changePhoneCooldownRemainingSeconds("@user:domain"))
+                .thenReturn(3600L);
+
+        mockMvc.perform(MockMvcRequestBuilders.get("/security/pin/status"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.hasPin")
+                        .value(true))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.changePhoneCooldownRemainingSeconds").value(3600));
+    }
+
+    @Test
+    void pinStatusReportsZeroCooldownWhenNoPin() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
+        org.mockito.Mockito.when(userSecurityService.hasPin("@user:domain")).thenReturn(false);
+
+        mockMvc.perform(MockMvcRequestBuilders.get("/security/pin/status"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.hasPin")
+                        .value(false))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.changePhoneCooldownRemainingSeconds").value(0));
+
+        org.mockito.Mockito.verify(userSecurityService, org.mockito.Mockito.never())
+                .changePhoneCooldownRemainingSeconds(org.mockito.ArgumentMatchers.anyString());
     }
 
     @Test

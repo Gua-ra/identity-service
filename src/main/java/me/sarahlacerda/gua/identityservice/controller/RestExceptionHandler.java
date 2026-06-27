@@ -32,7 +32,9 @@ import me.sarahlacerda.gua.identityservice.exception.PinChangeCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinLockedException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetNotRequestedException;
+import me.sarahlacerda.gua.identityservice.exception.PinSetupRequiredException;
 import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
+import me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.SmsRegionNotSupportedException;
 import me.sarahlacerda.gua.identityservice.exception.UnknownUserException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
@@ -122,6 +124,20 @@ public class RestExceptionHandler {
         public ResponseEntity<ErrorResponse> handlePinOperation(InvalidPinOperationException ex) {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                                 .body(new ErrorResponse("pin_error", ex.getMessage()));
+        }
+
+        @ExceptionHandler(PinSetupRequiredException.class)
+        public ResponseEntity<ErrorResponse> handlePinSetupRequired(PinSetupRequiredException ex) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .body(new ErrorResponse("pin_setup_required", ex.getMessage()));
+        }
+
+        @ExceptionHandler(TwoFactorCooldownException.class)
+        public ResponseEntity<CooldownErrorResponse> handleTwoFactorCooldown(TwoFactorCooldownException ex) {
+                long retryAfter = Math.max(ex.getRetryAfterSeconds(), 0);
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .header("Retry-After", String.valueOf(Math.max(retryAfter, 1)))
+                                .body(new CooldownErrorResponse("twofa_cooldown_active", ex.getMessage(), retryAfter));
         }
 
         @ExceptionHandler(InvalidPinChallengeException.class)
@@ -228,6 +244,17 @@ public class RestExceptionHandler {
         public record ErrorResponse(String code, String message, Instant timestamp) {
                 public ErrorResponse(String code, String message) {
                         this(code, message, Instant.now());
+                }
+        }
+
+        /**
+         * Error body carrying the seconds the caller must wait before retrying. Used by the
+         * change-phone 2FA cooldown so the client can render an exact "you can change your
+         * number in &lt;duration&gt;" message.
+         */
+        public record CooldownErrorResponse(String code, String message, long retryAfterSeconds, Instant timestamp) {
+                public CooldownErrorResponse(String code, String message, long retryAfterSeconds) {
+                        this(code, message, retryAfterSeconds, Instant.now());
                 }
         }
 }

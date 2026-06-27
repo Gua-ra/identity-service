@@ -20,6 +20,7 @@ import me.sarahlacerda.gua.identityservice.exception.PinChangeCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinLockedException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetNotRequestedException;
+import me.sarahlacerda.gua.identityservice.exception.PinSetupRequiredException;
 import me.sarahlacerda.gua.identityservice.exception.UnknownUserException;
 import me.sarahlacerda.gua.identityservice.repository.IdentityUserRepository;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
@@ -159,6 +160,44 @@ public class UserSecurityService {
         return repository.findByUserId(userId)
                 .map(IdentityUser::hasPin)
                 .orElse(false);
+    }
+
+    /**
+     * Seconds remaining on the post-PIN-write cooldown that gates using the PIN to step up a
+     * change-phone request. The PIN's last-write timestamp ({@code pinSetAt}, stamped on
+     * create/change/reset) plus the configurable window defines when the PIN becomes trusted.
+     * Returns 0 when the user has no PIN, has never written one, or the window has elapsed.
+     */
+    @Transactional(readOnly = true)
+    public long changePhoneCooldownRemainingSeconds(String userId) {
+        return repository.findByUserId(userId)
+                .map(this::computeChangePhoneCooldownRemaining)
+                .orElse(0L);
+    }
+
+    private long computeChangePhoneCooldownRemaining(IdentityUser user) {
+        if (!user.hasPin() || user.getPinSetAt() == null) {
+            return 0L;
+        }
+        Duration window = properties.getSecurity().getChangePhone2faCooldown();
+        Duration elapsed = Duration.between(user.getPinSetAt(), Instant.now());
+        long remaining = window.minus(elapsed).toSeconds();
+        return Math.max(0L, remaining);
+    }
+
+    /**
+     * PIN validation for the change-phone step-up. Behaves like
+     * {@link #validatePinOrThrow(String, String)} but distinguishes the "user has no PIN yet"
+     * case: it raises {@link PinSetupRequiredException} (mapped to {@code pin_setup_required})
+     * instead of the generic {@code pin_error}, so the client can route to PIN setup rather
+     * than show an invalid-PIN error. A wrong PIN still surfaces as {@code invalid_pin}.
+     */
+    @Transactional(noRollbackFor = { InvalidPinException.class, PinLockedException.class })
+    public void validatePinForReauthOrThrow(String userId, String providedPin) {
+        if (!hasPin(userId)) {
+            throw new PinSetupRequiredException("PIN not set for user");
+        }
+        validatePinOrThrow(userId, providedPin);
     }
 
     @Transactional(noRollbackFor = { InvalidPinException.class, PinLockedException.class })

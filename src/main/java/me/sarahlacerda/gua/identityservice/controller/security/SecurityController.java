@@ -72,21 +72,23 @@ public class SecurityController {
     })
     public ResponseEntity<PinStatusResponse> pinStatus() {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
-        return ResponseEntity.ok(new PinStatusResponse(userSecurityService.hasPin(userId)));
+        boolean hasPin = userSecurityService.hasPin(userId);
+        long cooldownRemaining = hasPin ? userSecurityService.changePhoneCooldownRemainingSeconds(userId) : 0L;
+        return ResponseEntity.ok(new PinStatusResponse(hasPin, cooldownRemaining));
     }
 
     @PostMapping("/pin/reauth")
     @Operation(summary = "Step up with the account PIN and obtain a single-use reauth token", description = "Validates the caller's PIN and, on success, issues a short-lived single-use reauth token that gates the change-phone flow (the new-number OTP is only sent once a valid token exists).", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "PIN accepted; reauth token issued", content = @Content(schema = @Schema(implementation = AccountReauthTokenResponse.class))),
-            @ApiResponse(responseCode = "400", description = "Invalid PIN", content = @Content),
+            @ApiResponse(responseCode = "400", description = "Invalid PIN (invalid_pin) or no PIN configured yet (pin_setup_required)", content = @Content),
             @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content),
             @ApiResponse(responseCode = "429", description = "PIN locked after too many attempts", content = @Content)
     })
     public ResponseEntity<AccountReauthTokenResponse> reauthWithPin(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "User identifier and account PIN to step up", required = true, content = @Content(schema = @Schema(implementation = PinReauthRequest.class))) @RequestBody @Valid PinReauthRequest request) {
         authenticatedUserAccessor.requireUserIdMatches(request.getUserId());
-        userSecurityService.validatePinOrThrow(request.getUserId(), request.getPin());
+        userSecurityService.validatePinForReauthOrThrow(request.getUserId(), request.getPin());
         String token = reauthTokenService.issue(request.getUserId());
         return ResponseEntity.ok(new AccountReauthTokenResponse(token, REAUTH_TOKEN_TTL_SECONDS));
     }

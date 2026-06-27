@@ -34,6 +34,9 @@ identity:
     pin-reset-cooldown: ${IDENTITY_SECURITY_PIN_RESET_COOLDOWN:PT168H}
     max-pin-attempts: ${IDENTITY_SECURITY_MAX_PIN_ATTEMPTS:5}
     pin-lock-duration: ${IDENTITY_SECURITY_PIN_LOCK_DURATION:PT15M}
+    # Cooldown (seconds) after any PIN write before the PIN can step up a change-phone
+    # request. Default 604800 = 7 days. Dev/QA set 0 to disable.
+    change-phone2fa-cooldown: ${IDENTITY_CHANGE_PHONE_2FA_COOLDOWN_SECONDS:604800}s
   rate-limits:
     enabled: ${IDENTITY_RATE_LIMITS_ENABLED:true}
     default-config:

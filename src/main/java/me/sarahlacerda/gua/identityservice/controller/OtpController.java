@@ -89,7 +89,7 @@ public class OtpController {
     @Operation(summary = "Send an OTP to the new phone after a PIN step-up", description = "Step two of the change-phone flow: validates the single-use reauth token from /security/pin/reauth (without consuming it) and only then dispatches the OTP SMS to the new number. The SMS never fires before a valid PIN step-up token exists.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "202", description = "OTP accepted and dispatched to the new phone"),
-            @ApiResponse(responseCode = "400", description = "Validation failed or phone region unsupported", content = @Content),
+            @ApiResponse(responseCode = "400", description = "Validation failed, phone region unsupported, or 2FA cooldown active (twofa_cooldown_active)", content = @Content),
             @ApiResponse(responseCode = "401", description = "Authentication required or reauth token invalid/expired", content = @Content),
             @ApiResponse(responseCode = "429", description = "Rate limit exceeded", content = @Content)
     })
