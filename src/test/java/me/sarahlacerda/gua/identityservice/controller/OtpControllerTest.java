@@ -20,6 +20,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import me.sarahlacerda.gua.identityservice.controller.dto.OtpChangeNumberRequest;
+import me.sarahlacerda.gua.identityservice.controller.dto.OtpChangeNumberStartRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.OtpSendRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.OtpVerifyRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.OtpVerifyRequest.DeviceInfo;
@@ -117,7 +118,7 @@ class OtpControllerTest {
         request.setUserId("@user:domain");
         request.setNewPhone("+19999999999");
         request.setCode("123456");
-        request.setPin("999999");
+        request.setReauthToken("reauth-tok");
 
         doNothing().when(authenticatedUserAccessor).requireUserIdMatches("@user:domain");
 
@@ -126,6 +127,25 @@ class OtpControllerTest {
                 .content(objectMapper.writeValueAsBytes(request)))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNoContent());
 
-        verify(orchestrationService).changePhoneNumber("@user:domain", "+19999999999", "123456", "999999");
+        verify(orchestrationService).changePhoneNumber("@user:domain", "+19999999999", "123456", "reauth-tok");
+    }
+
+    @Test
+    void requestChangeNumberSendsOtpAfterStepUp() throws Exception {
+        OtpChangeNumberStartRequest request = new OtpChangeNumberStartRequest();
+        request.setUserId("@user:domain");
+        request.setNewPhone("+19999999999");
+        request.setReauthToken("reauth-tok");
+        request.setLanguage("pt-BR");
+
+        doNothing().when(authenticatedUserAccessor).requireUserIdMatches("@user:domain");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/otp/change-number/request")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(request)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isAccepted());
+
+        verify(orchestrationService).requestPhoneChangeOtp("@user:domain", "+19999999999", "reauth-tok", "127.0.0.1",
+                "pt-BR");
     }
 }

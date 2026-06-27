@@ -52,6 +52,8 @@ class IdentityOrchestrationServiceTest {
         @Mock
         private UserSecurityService userSecurityService;
         @Mock
+        private me.sarahlacerda.gua.identityservice.service.security.ReauthTokenService reauthTokenService;
+        @Mock
         private TrustedDeviceService trustedDeviceService;
         @Mock
         private DeviceNotificationService deviceNotificationService;
@@ -76,6 +78,7 @@ class IdentityOrchestrationServiceTest {
                                 phoneNumberHasher,
                                 new PhoneNumberMasker(),
                                 userSecurityService,
+                                reauthTokenService,
                                 trustedDeviceService,
                                 deviceNotificationService,
                                 usernamePolicy,
@@ -258,10 +261,10 @@ class IdentityOrchestrationServiceTest {
                 when(directoryService.findByDigest(newDigest)).thenReturn(Optional.empty());
                 when(directoryService.findByUserId(userId)).thenReturn(List.of(entryOne, entryTwo));
 
-                service.changePhoneNumber(userId, newPhone, "999999", "123456");
+                service.changePhoneNumber(userId, newPhone, "999999", "reauth-tok");
 
                 verify(otpService).verifyOtp(newPhone, "999999");
-                verify(userSecurityService).validatePinOrThrow(userId, "123456");
+                verify(reauthTokenService).consume("reauth-tok", userId);
                 verify(matrixProvisioningService).ensureExclusivePhoneBinding(userId, newPhone);
                 verify(directoryService).deleteByDigest("old-1");
                 verify(directoryService).deleteByDigest("old-2");
@@ -281,7 +284,7 @@ class IdentityOrchestrationServiceTest {
                 when(phoneNumberHasher.digest(newPhone)).thenReturn(newDigest);
                 when(directoryService.findByDigest(newDigest)).thenReturn(Optional.of(other));
 
-                assertThatThrownBy(() -> service.changePhoneNumber(userId, newPhone, "888888", "123456"))
+                assertThatThrownBy(() -> service.changePhoneNumber(userId, newPhone, "888888", "reauth-tok"))
                                 .isInstanceOf(PhoneAlreadyLinkedException.class);
 
                 verify(matrixProvisioningService, never()).ensureExclusivePhoneBinding(any(), any());
@@ -331,8 +334,9 @@ class IdentityOrchestrationServiceTest {
                 when(directoryService.findByDigest(newDigest)).thenReturn(Optional.of(sameUserEntry));
                 when(directoryService.findByUserId(userId)).thenReturn(List.of(sameUserEntry, otherEntry));
 
-                service.changePhoneNumber(userId, newPhone, "111111", "222222");
+                service.changePhoneNumber(userId, newPhone, "111111", "reauth-tok");
 
+                verify(reauthTokenService).consume("reauth-tok", userId);
                 verify(matrixProvisioningService).ensureExclusivePhoneBinding(userId, newPhone);
                 verify(directoryService).deleteByDigest("other");
                 verify(directoryService).upsertByDigest(eq(newDigest), anyString(), eq(userId), eq("Display"));

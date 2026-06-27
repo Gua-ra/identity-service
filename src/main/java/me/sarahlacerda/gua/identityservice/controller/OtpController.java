@@ -22,6 +22,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
 import me.sarahlacerda.gua.identityservice.controller.dto.OtpChangeNumberRequest;
+import me.sarahlacerda.gua.identityservice.controller.dto.OtpChangeNumberStartRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.OtpSendRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.OtpVerifyRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.OtpVerifyResponse;
@@ -84,21 +85,37 @@ public class OtpController {
                 session.accessToken(), session.userId(), session.deviceId(), session.homeserverBaseUrl()));
     }
 
+    @PostMapping("/change-number/request")
+    @Operation(summary = "Send an OTP to the new phone after a PIN step-up", description = "Step two of the change-phone flow: validates the single-use reauth token from /security/pin/reauth (without consuming it) and only then dispatches the OTP SMS to the new number. The SMS never fires before a valid PIN step-up token exists.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @ApiResponses({
+            @ApiResponse(responseCode = "202", description = "OTP accepted and dispatched to the new phone"),
+            @ApiResponse(responseCode = "400", description = "Validation failed or phone region unsupported", content = @Content),
+            @ApiResponse(responseCode = "401", description = "Authentication required or reauth token invalid/expired", content = @Content),
+            @ApiResponse(responseCode = "429", description = "Rate limit exceeded", content = @Content)
+    })
+    public ResponseEntity<Void> requestChangeNumberOtp(
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "New phone, reauth token, and optional language preference", required = true, content = @Content(schema = @Schema(implementation = OtpChangeNumberStartRequest.class))) @RequestBody @Valid OtpChangeNumberStartRequest request,
+            @Parameter(hidden = true) HttpServletRequest servletRequest) {
+        authenticatedUserAccessor.requireUserIdMatches(request.getUserId());
+        orchestrationService.requestPhoneChangeOtp(request.getUserId(), request.getNewPhone(),
+                request.getReauthToken(), servletRequest.getRemoteAddr(), request.getLanguage());
+        return ResponseEntity.accepted().build();
+    }
+
     @PostMapping("/change-number")
-    @Operation(summary = "Change the verified phone number of an existing user", description = "After validating the caller's authentication token, verifies the new phone number via OTP and binds it to the Matrix account while preserving existing directory data.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @Operation(summary = "Change the verified phone number of an existing user", description = "Final step of the change-phone flow: verifies the new phone number via OTP, consumes the single-use reauth token from the PIN step-up, and binds the new number to the Matrix account while preserving existing directory data.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "204", description = "Phone number updated"),
-            @ApiResponse(responseCode = "400", description = "Validation failed", content = @Content),
-            @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content),
-            @ApiResponse(responseCode = "403", description = "PIN invalid", content = @Content),
+            @ApiResponse(responseCode = "400", description = "Validation failed or OTP invalid", content = @Content),
+            @ApiResponse(responseCode = "401", description = "Authentication required or reauth token invalid/expired", content = @Content),
             @ApiResponse(responseCode = "409", description = "Phone already linked to another user", content = @Content),
             @ApiResponse(responseCode = "429", description = "Too many change-number attempts", content = @Content)
     })
     public ResponseEntity<Void> changeNumber(
-            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "OTP and PIN payload for re-binding a user's phone number", required = true, content = @Content(schema = @Schema(implementation = OtpChangeNumberRequest.class))) @RequestBody @Valid OtpChangeNumberRequest request) {
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "OTP and reauth-token payload for re-binding a user's phone number", required = true, content = @Content(schema = @Schema(implementation = OtpChangeNumberRequest.class))) @RequestBody @Valid OtpChangeNumberRequest request) {
         authenticatedUserAccessor.requireUserIdMatches(request.getUserId());
         orchestrationService.changePhoneNumber(request.getUserId(), request.getNewPhone(), request.getCode(),
-                request.getPin());
+                request.getReauthToken());
         return ResponseEntity.noContent().build();
     }
 

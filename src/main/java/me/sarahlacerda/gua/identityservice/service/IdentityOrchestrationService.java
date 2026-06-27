@@ -21,6 +21,7 @@ import org.springframework.util.StringUtils;
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.service.routing.ResolverDirectoryClient;
 import me.sarahlacerda.gua.identityservice.service.security.DeviceNotificationService;
+import me.sarahlacerda.gua.identityservice.service.security.ReauthTokenService;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService.DeviceMetadata;
@@ -38,6 +39,7 @@ public class IdentityOrchestrationService {
     private final PhoneNumberHasher phoneNumberHasher;
     private final PhoneNumberMasker phoneNumberMasker;
     private final UserSecurityService userSecurityService;
+    private final ReauthTokenService reauthTokenService;
     private final TrustedDeviceService trustedDeviceService;
     private final DeviceNotificationService deviceNotificationService;
     private final UsernamePolicy usernamePolicy;
@@ -205,9 +207,20 @@ public class IdentityOrchestrationService {
         return session;
     }
 
-    public void changePhoneNumber(String userId, String newPhone, String code, String pin) {
+    /**
+     * Step two of the change-phone flow: validates the single-use reauth token from the PIN
+     * step-up WITHOUT consuming it, then dispatches the OTP SMS to the new number. Gating the
+     * SMS on a live token guarantees no message fires before a successful PIN step-up.
+     */
+    public void requestPhoneChangeOtp(String userId, String newPhone, String reauthToken, String ip,
+            String language) {
+        reauthTokenService.validate(reauthToken, userId);
+        sendOtp(newPhone, ip, language);
+    }
+
+    public void changePhoneNumber(String userId, String newPhone, String code, String reauthToken) {
         otpService.verifyOtp(newPhone, code);
-        userSecurityService.validatePinOrThrow(userId, pin);
+        reauthTokenService.consume(reauthToken, userId);
 
         final String newDigest = phoneNumberHasher.digest(newPhone);
 

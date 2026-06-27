@@ -47,6 +47,9 @@ class SecurityControllerTest {
     @Mock
     private LoginSessionService loginSessionService;
 
+    @Mock
+    private me.sarahlacerda.gua.identityservice.service.security.ReauthTokenService reauthTokenService;
+
     private MockMvc mockMvc;
     private ObjectMapper objectMapper;
     private IdentityServiceProperties properties;
@@ -61,7 +64,8 @@ class SecurityControllerTest {
         oidcProperties = new OidcProperties();
         oidcProperties.setIssuer("https://auth.example.com");
         SecurityController controller = new SecurityController(userSecurityService, authenticatedUserAccessor,
-                properties, directoryService, loginSessionService, loginProperties, oidcProperties);
+                properties, directoryService, loginSessionService, loginProperties, oidcProperties,
+                reauthTokenService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new RestExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter())
@@ -82,6 +86,28 @@ class SecurityControllerTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNoContent());
 
         verify(userSecurityService).setInitialPin("@user:domain", "123456");
+    }
+
+    @Test
+    void pinReauthValidatesPinAndIssuesReauthToken() throws Exception {
+        me.sarahlacerda.gua.identityservice.controller.dto.PinReauthRequest request =
+                new me.sarahlacerda.gua.identityservice.controller.dto.PinReauthRequest();
+        request.setUserId("@user:domain");
+        request.setPin("123456");
+
+        doNothing().when(authenticatedUserAccessor).requireUserIdMatches("@user:domain");
+        org.mockito.Mockito.when(reauthTokenService.issue("@user:domain")).thenReturn("reauth-tok");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/reauth")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(request)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.reauthToken")
+                        .value("reauth-tok"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.expiresInSeconds").value(300));
+
+        verify(userSecurityService).validatePinOrThrow("@user:domain", "123456");
     }
 
     @Test

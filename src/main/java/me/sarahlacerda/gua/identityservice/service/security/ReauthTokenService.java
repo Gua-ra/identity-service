@@ -63,4 +63,23 @@ public class ReauthTokenService {
         }
         return boundUserId;
     }
+
+    /**
+     * Validates the token WITHOUT consuming it (a "peek"), for multi-step flows that need to gate an
+     * intermediate side-effect — e.g. sending the new-number OTP only after the PIN step-up — while
+     * keeping the token alive to be {@link #consume(String, String) consumed} on the final operation.
+     * Throws if the token is unknown, expired, or does not match {@code expectedUserId}.
+     */
+    public void validate(String token, String expectedUserId) {
+        if (!StringUtils.hasText(token)) {
+            throw new InvalidReauthTokenException("Reauth token invalid or expired");
+        }
+        String boundUserId = redisTemplate.opsForValue().get(KEY_PREFIX + token);
+        if (!StringUtils.hasText(boundUserId)) {
+            throw new InvalidReauthTokenException("Reauth token invalid or expired");
+        }
+        if (!boundUserId.equals(expectedUserId)) {
+            throw new InvalidReauthTokenException("Reauth token does not match caller");
+        }
+    }
 }

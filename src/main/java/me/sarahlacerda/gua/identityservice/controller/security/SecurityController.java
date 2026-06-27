@@ -23,7 +23,9 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
+import me.sarahlacerda.gua.identityservice.controller.dto.AccountReauthTokenResponse;
 import me.sarahlacerda.gua.identityservice.controller.dto.PasskeyEnrollStartResponse;
+import me.sarahlacerda.gua.identityservice.controller.dto.PinReauthRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeCompleteRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeStartRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeStartResponse;
@@ -41,6 +43,7 @@ import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.Phase;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
+import me.sarahlacerda.gua.identityservice.service.security.ReauthTokenService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 
 @RestController
@@ -57,6 +60,9 @@ public class SecurityController {
     private final LoginSessionService loginSessionService;
     private final LoginFlowProperties loginProperties;
     private final OidcProperties oidcProperties;
+    private final ReauthTokenService reauthTokenService;
+
+    private static final long REAUTH_TOKEN_TTL_SECONDS = 300L;
 
     @GetMapping("/pin/status")
     @Operation(summary = "Check whether the authenticated user has a PIN set", description = "Returns hasPin=true once the user has configured a security PIN. Used by clients to drive the 'set up two-step verification' nudge.", security = @SecurityRequirement(name = "oidcAccessToken"))
@@ -67,6 +73,22 @@ public class SecurityController {
     public ResponseEntity<PinStatusResponse> pinStatus() {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
         return ResponseEntity.ok(new PinStatusResponse(userSecurityService.hasPin(userId)));
+    }
+
+    @PostMapping("/pin/reauth")
+    @Operation(summary = "Step up with the account PIN and obtain a single-use reauth token", description = "Validates the caller's PIN and, on success, issues a short-lived single-use reauth token that gates the change-phone flow (the new-number OTP is only sent once a valid token exists).", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "PIN accepted; reauth token issued", content = @Content(schema = @Schema(implementation = AccountReauthTokenResponse.class))),
+            @ApiResponse(responseCode = "400", description = "Invalid PIN", content = @Content),
+            @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content),
+            @ApiResponse(responseCode = "429", description = "PIN locked after too many attempts", content = @Content)
+    })
+    public ResponseEntity<AccountReauthTokenResponse> reauthWithPin(
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "User identifier and account PIN to step up", required = true, content = @Content(schema = @Schema(implementation = PinReauthRequest.class))) @RequestBody @Valid PinReauthRequest request) {
+        authenticatedUserAccessor.requireUserIdMatches(request.getUserId());
+        userSecurityService.validatePinOrThrow(request.getUserId(), request.getPin());
+        String token = reauthTokenService.issue(request.getUserId());
+        return ResponseEntity.ok(new AccountReauthTokenResponse(token, REAUTH_TOKEN_TTL_SECONDS));
     }
 
     @PostMapping("/pin")
