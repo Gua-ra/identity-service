@@ -21,11 +21,13 @@ import org.springframework.util.StringUtils;
 
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.service.routing.ResolverDirectoryClient;
+import me.sarahlacerda.gua.identityservice.service.security.ChangeNumberSecurityNotifier;
 import me.sarahlacerda.gua.identityservice.service.security.DeviceNotificationService;
 import me.sarahlacerda.gua.identityservice.service.security.ReauthTokenService;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService.DeviceMetadata;
+import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditLogger;
 
 @Service
 @RequiredArgsConstructor
@@ -45,6 +47,8 @@ public class IdentityOrchestrationService {
     private final DeviceNotificationService deviceNotificationService;
     private final UsernamePolicy usernamePolicy;
     private final ResolverDirectoryClient resolverDirectoryClient;
+    private final ChangeNumberSecurityNotifier changeNumberSecurityNotifier;
+    private final SecurityAuditLogger securityAuditLogger;
     private final MeterRegistry metrics;
 
     public void sendOtp(String e164PhoneNumber, String requesterIp, String language) {
@@ -221,10 +225,14 @@ public class IdentityOrchestrationService {
         // can't get instant trust. The client also pre-checks this via /security/pin/status.
         long cooldownRemaining = userSecurityService.changePhoneCooldownRemainingSeconds(userId);
         if (cooldownRemaining > 0) {
+            // Audit + (deduped) notify every connected device before refusing, so a SIM-swap
+            // attempt that's racing the cooldown leaves a trail and warns the real owner.
+            changeNumberSecurityNotifier.onChangeBlockedByCooldown(userId, newPhone, cooldownRemaining, ip);
             throw new TwoFactorCooldownException(
                     "Change-phone two-factor cooldown active", cooldownRemaining);
         }
         sendOtp(newPhone, ip, language);
+        securityAuditLogger.phoneChangeRequested(userId, phoneNumberMasker.mask(newPhone), ip);
     }
 
     public void changePhoneNumber(String userId, String newPhone, String code, String reauthToken) {
@@ -249,6 +257,15 @@ public class IdentityOrchestrationService {
                 .findFirst()
                 .orElse(null);
 
+        // The old number is hash-only; the only display-safe form we ever keep is the
+        // pre-computed mask on the directory row being unbound. Never reconstruct plaintext.
+        final String maskedOldPhone = currentEntries.stream()
+                .filter(entry -> !entry.getPhoneDigest().equals(newDigest))
+                .map(DirectoryEntry::getPhoneMasked)
+                .filter(StringUtils::hasText)
+                .findFirst()
+                .orElse(null);
+
         currentEntries.stream()
                 .map(DirectoryEntry::getPhoneDigest)
                 .filter(digest -> !digest.equals(newDigest))
@@ -261,6 +278,8 @@ public class IdentityOrchestrationService {
             // a clean conflict.
             throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
         }
+
+        securityAuditLogger.phoneChangeCompleted(userId, maskedOldPhone, phoneNumberMasker.mask(newPhone));
     }
 
     /**

@@ -262,6 +262,34 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
         }
     }
 
+    @Override
+    public void sendServerNotice(String userId, String message) {
+        // Fail-safe by design: a server notice is a best-effort security alert. If the
+        // homeserver has server notices disabled (no server_notices config), returns a
+        // 4xx, or is unreachable, we log a warning and swallow it so the calling flow
+        // (e.g. the cooldown block) is never broken.
+        if (userId == null || userId.isBlank() || message == null || message.isBlank()) {
+            return;
+        }
+        try {
+            adminClient.post()
+                    .uri("/_synapse/admin/v1/send_server_notice")
+                    .bodyValue(Map.of(
+                            "user_id", userId,
+                            "content", Map.of("msgtype", "m.text", "body", message)))
+                    .retrieve()
+                    .bodyToMono(Void.class)
+                    .doOnSuccess(unused -> log.debug("Sent server notice to {}", userId))
+                    .onErrorResume(ex -> {
+                        log.warn("Failed to send server notice to {}: {}", userId, ex.getMessage());
+                        return Mono.empty();
+                    })
+                    .block();
+        } catch (Exception ex) {
+            log.warn("Failed to send server notice to {}: {}", userId, ex.getMessage());
+        }
+    }
+
     private String encode(String value) {
         return UriUtils.encodePathSegment(value, StandardCharsets.UTF_8);
     }

@@ -59,6 +59,10 @@ class IdentityOrchestrationServiceTest {
         private DeviceNotificationService deviceNotificationService;
         @Mock
         private me.sarahlacerda.gua.identityservice.service.routing.ResolverDirectoryClient resolverDirectoryClient;
+        @Mock
+        private me.sarahlacerda.gua.identityservice.service.security.ChangeNumberSecurityNotifier changeNumberSecurityNotifier;
+        @Mock
+        private me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditLogger securityAuditLogger;
 
         private final UsernamePolicy usernamePolicy = new UsernamePolicy();
         private final io.micrometer.core.instrument.MeterRegistry meterRegistry =
@@ -83,6 +87,8 @@ class IdentityOrchestrationServiceTest {
                                 deviceNotificationService,
                                 usernamePolicy,
                                 resolverDirectoryClient,
+                                changeNumberSecurityNotifier,
+                                securityAuditLogger,
                                 meterRegistry);
         }
 
@@ -248,6 +254,7 @@ class IdentityOrchestrationServiceTest {
                 String newDigest = "new-digest";
                 DirectoryEntry entryOne = DirectoryEntry.builder()
                                 .phoneDigest("old-1")
+                                .phoneMasked("••••1111")
                                 .userId(userId)
                                 .displayName("Display Name")
                                 .build();
@@ -269,6 +276,9 @@ class IdentityOrchestrationServiceTest {
                 verify(directoryService).deleteByDigest("old-1");
                 verify(directoryService).deleteByDigest("old-2");
                 verify(directoryService).upsertByDigest(eq(newDigest), anyString(), eq(userId), eq("Display Name"));
+                // Completed audit carries only masked phones — the masked old number comes from the
+                // unbound directory row, the masked new number from the masker (never plaintext E.164).
+                verify(securityAuditLogger).phoneChangeCompleted(userId, "••••1111", "••••0123");
         }
 
         @Test
@@ -429,6 +439,11 @@ class IdentityOrchestrationServiceTest {
 
                 verify(reauthTokenService).validate("reauth-tok", "@alice:gua.global");
                 verify(otpService).sendOtp("+12025550199", "1.2.3.4", "en");
+                // Success audit uses the masked number, never the plaintext E.164.
+                verify(securityAuditLogger).phoneChangeRequested("@alice:gua.global", "••••0199",
+                                "1.2.3.4");
+                verify(changeNumberSecurityNotifier, never()).onChangeBlockedByCooldown(anyString(), anyString(),
+                                org.mockito.ArgumentMatchers.anyLong(), anyString());
         }
 
         @Test
@@ -443,6 +458,11 @@ class IdentityOrchestrationServiceTest {
                                 .isEqualTo(3600L);
 
                 verify(reauthTokenService).validate("reauth-tok", "@alice:gua.global");
+                // Notifier (audit + deduped device notice) fires before the throw; the plaintext
+                // new number is passed to the notifier, which masks it internally.
+                verify(changeNumberSecurityNotifier).onChangeBlockedByCooldown("@alice:gua.global", "+12025550199",
+                                3600L, "1.2.3.4");
                 verify(otpService, never()).sendOtp(anyString(), anyString(), any());
+                verify(securityAuditLogger, never()).phoneChangeRequested(anyString(), anyString(), anyString());
         }
 }

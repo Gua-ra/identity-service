@@ -55,4 +55,21 @@ public class LoggingSecurityAuditLogger implements SecurityAuditLogger {
     public void pinChangeCompleted(String userId) {
         log.info("PIN change completed for user {}", userId);
     }
+
+    @Override
+    public void phoneChangeRequested(String userId, String maskedNewPhone, String ip) {
+        log.info("Change-number requested for user {} from IP {} (newPhone={})", userId, ip, maskedNewPhone);
+    }
+
+    @Override
+    public void phoneChangeCooldownBlocked(String userId, String maskedNewPhone, long cooldownSeconds, String ip) {
+        log.warn("Change-number BLOCKED by fresh-2FA cooldown for user {} from IP {} (newPhone={}, cooldownSeconds={})",
+                userId, ip, maskedNewPhone, cooldownSeconds);
+    }
+
+    @Override
+    public void phoneChangeCompleted(String userId, String maskedOldPhone, String maskedNewPhone) {
+        log.info("Change-number completed for user {} (oldPhone={}, newPhone={})", userId, maskedOldPhone,
+                maskedNewPhone);
+    }
 }

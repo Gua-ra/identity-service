@@ -56,4 +56,16 @@ public interface MatrixAdminClient {
      * Returns empty if the token is invalid, expired or the homeserver rejects it.
      */
     java.util.Optional<String> whoami(String userAccessToken);
+
+    /**
+     * Sends a server notice ({@code POST /_synapse/admin/v1/send_server_notice}) to
+     * the given user. The notice is delivered into the user's server-notices room and
+     * syncs to every connected device, which makes it our channel for out-of-band
+     * security alerts (e.g. a blocked change-number attempt).
+     * <p>
+     * Fail-safe: implementations must never throw out of this method. If the
+     * homeserver has server notices disabled, returns a 4xx, or is unreachable, the
+     * failure is logged at WARN and swallowed so the caller's flow is never broken.
+     */
+    void sendServerNotice(String userId, String message);
 }

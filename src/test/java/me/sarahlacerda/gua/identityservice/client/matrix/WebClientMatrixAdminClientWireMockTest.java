@@ -237,6 +237,37 @@ class WebClientMatrixAdminClientWireMockTest {
     }
 
     @Test
+    void sendServerNoticePostsTextContentWithAdminAuth() {
+        wireMock.stubFor(post(urlEqualTo("/_synapse/admin/v1/send_server_notice"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"event_id\": \"$evt:example.com\"}")));
+
+        client.sendServerNotice("@user:example.com", "Security alert: ••••0199");
+
+        wireMock.verify(postRequestedFor(urlEqualTo("/_synapse/admin/v1/send_server_notice"))
+            .withHeader("Authorization", equalTo("Bearer admin-token-abc"))
+            .withRequestBody(matchingJsonPath("$.user_id", equalTo("@user:example.com")))
+            .withRequestBody(matchingJsonPath("$.content.msgtype", equalTo("m.text")))
+            .withRequestBody(matchingJsonPath("$.content.body", equalTo("Security alert: ••••0199"))));
+    }
+
+    @Test
+    void sendServerNoticeSwallowsErrorsAndNeverThrows() {
+        // Server notices not configured on the homeserver -> 400. Must not propagate.
+        wireMock.stubFor(post(urlEqualTo("/_synapse/admin/v1/send_server_notice"))
+            .willReturn(aResponse()
+                .withStatus(400)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"errcode\": \"M_UNKNOWN\", \"error\": \"Server notices are not enabled\"}")));
+
+        client.sendServerNotice("@user:example.com", "Security alert");
+
+        wireMock.verify(postRequestedFor(urlEqualTo("/_synapse/admin/v1/send_server_notice")));
+    }
+
+    @Test
     void loginPostsCredentialsAndParsesAccessToken() {
         wireMock.stubFor(post(urlEqualTo("/_matrix/client/v3/login"))
             .willReturn(aResponse()
