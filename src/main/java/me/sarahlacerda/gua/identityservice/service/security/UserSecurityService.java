@@ -163,10 +163,18 @@ public class UserSecurityService {
     }
 
     /**
-     * Seconds remaining on the post-PIN-write cooldown that gates using the PIN to step up a
-     * change-phone request. The PIN's last-write timestamp ({@code pinSetAt}, stamped on
-     * create/change/reset) plus the configurable window defines when the PIN becomes trusted.
-     * Returns 0 when the user has no PIN, has never written one, or the window has elapsed.
+     * Seconds remaining before a change-phone request is allowed. This is the MAX of two
+     * independent cooldowns, so the existing "Not just yet" screen + the
+     * {@code twofa_cooldown_active} gate cover both with no client change:
+     * <ul>
+     *   <li><b>fresh-2FA</b>: the post-PIN-write window. The PIN's last-write timestamp
+     *       ({@code pinSetAt}, stamped on create/change/reset) plus
+     *       {@code changePhone2faCooldown} defines when the PIN becomes trusted.</li>
+     *   <li><b>post-change</b>: after a successful phone change, {@code phoneChangedAt} plus
+     *       {@code phoneChangeCooldown} blocks changing the number again too soon.</li>
+     * </ul>
+     * Returns 0 when neither window is active (and the post-change window applies even to a
+     * user with no PIN).
      */
     @Transactional(readOnly = true)
     public long changePhoneCooldownRemainingSeconds(String userId) {
@@ -176,13 +184,38 @@ public class UserSecurityService {
     }
 
     private long computeChangePhoneCooldownRemaining(IdentityUser user) {
+        return Math.max(computeFresh2faRemaining(user), computePostChangeRemaining(user));
+    }
+
+    private long computeFresh2faRemaining(IdentityUser user) {
         if (!user.hasPin() || user.getPinSetAt() == null) {
             return 0L;
         }
         Duration window = properties.getSecurity().getChangePhone2faCooldown();
         Duration elapsed = Duration.between(user.getPinSetAt(), Instant.now());
-        long remaining = window.minus(elapsed).toSeconds();
-        return Math.max(0L, remaining);
+        return Math.max(0L, window.minus(elapsed).toSeconds());
+    }
+
+    private long computePostChangeRemaining(IdentityUser user) {
+        if (user.getPhoneChangedAt() == null) {
+            return 0L;
+        }
+        Duration window = properties.getSecurity().getPhoneChangeCooldown();
+        Duration elapsed = Duration.between(user.getPhoneChangedAt(), Instant.now());
+        return Math.max(0L, window.minus(elapsed).toSeconds());
+    }
+
+    /**
+     * Stamps the post-change cooldown: records that the user's phone number was just
+     * successfully (re)bound. Mirrors how {@code pinSetAt} is stamped on a PIN write — called
+     * by the change-phone orchestration right after the atomic directory rebind, alongside the
+     * audit. The next {@link #changePhoneCooldownRemainingSeconds(String)} folds this into the
+     * cooldown the status endpoint + OTP-request gate already consume.
+     */
+    @Transactional
+    public void markPhoneChanged(String userId) {
+        IdentityUser user = requireExistingUser(userId);
+        user.setPhoneChangedAt(Instant.now());
     }
 
     /**

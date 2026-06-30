@@ -288,6 +288,11 @@ public class IdentityOrchestrationService {
             throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
         }
 
+        // Open the post-change cooldown: block changing the number again until the configured
+        // window elapses. Folded into changePhoneCooldownRemainingSeconds, so the existing
+        // status screen + OTP-request gate cover it with no client change.
+        userSecurityService.markPhoneChanged(userId);
+
         securityAuditLogger.phoneChangeCompleted(userId, maskedOldPhone, phoneNumberMasker.mask(newPhone));
     }
 

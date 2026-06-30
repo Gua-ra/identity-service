@@ -276,6 +276,8 @@ class IdentityOrchestrationServiceTest {
                 verify(directoryService).deleteByDigest("old-1");
                 verify(directoryService).deleteByDigest("old-2");
                 verify(directoryService).upsertByDigest(eq(newDigest), anyString(), eq(userId), eq("Display Name"));
+                // Post-change cooldown is opened on the successful rebind, alongside the audit.
+                verify(userSecurityService).markPhoneChanged(userId);
                 // Completed audit carries only masked phones — the masked old number comes from the
                 // unbound directory row, the masked new number from the masker (never plaintext E.164).
                 verify(securityAuditLogger).phoneChangeCompleted(userId, "••••1111", "••••0123");
@@ -462,6 +464,24 @@ class IdentityOrchestrationServiceTest {
                 // new number is passed to the notifier, which masks it internally.
                 verify(changeNumberSecurityNotifier).onChangeBlockedByCooldown("@alice:gua.global", "+12025550199",
                                 3600L, "1.2.3.4");
+                verify(otpService, never()).sendOtp(anyString(), anyString(), any());
+                verify(securityAuditLogger, never()).phoneChangeRequested(anyString(), anyString(), anyString());
+        }
+
+        @Test
+        void requestPhoneChangeOtpRejectedWithinPostChangeCooldown() {
+                // Simulates a user who just changed their number: the post-change cooldown (surfaced
+                // through changePhoneCooldownRemainingSeconds) blocks a second change. No OTP is sent.
+                when(userSecurityService.changePhoneCooldownRemainingSeconds("@alice:gua.global"))
+                                .thenReturn(604800L);
+
+                assertThatThrownBy(() -> service.requestPhoneChangeOtp(
+                                "@alice:gua.global", "+12025550199", "reauth-tok", "1.2.3.4", "en"))
+                                .isInstanceOf(me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException.class)
+                                .extracting(ex -> ((me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException) ex)
+                                                .getRetryAfterSeconds())
+                                .isEqualTo(604800L);
+
                 verify(otpService, never()).sendOtp(anyString(), anyString(), any());
                 verify(securityAuditLogger, never()).phoneChangeRequested(anyString(), anyString(), anyString());
         }

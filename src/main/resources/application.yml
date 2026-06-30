@@ -37,6 +37,10 @@ identity:
     # Cooldown (seconds) after any PIN write before the PIN can step up a change-phone
     # request. Default 604800 = 7 days. Dev/QA set 0 to disable.
     change-phone2fa-cooldown: ${IDENTITY_CHANGE_PHONE_2FA_COOLDOWN_SECONDS:604800}s
+    # Post-change cooldown (seconds): after a successful phone-number change, block any
+    # further change for this window. Reuses the change-phone cooldown plumbing (no client
+    # change). Default 604800 = 7 days. Dev/QA set 0 to disable.
+    phone-change-cooldown: ${IDENTITY_PHONE_CHANGE_COOLDOWN_SECONDS:604800}s
   rate-limits:
     enabled: ${IDENTITY_RATE_LIMITS_ENABLED:true}
     default-config:

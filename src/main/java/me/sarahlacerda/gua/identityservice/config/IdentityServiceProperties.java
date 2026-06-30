@@ -212,6 +212,16 @@ public class IdentityServiceProperties {
          */
         @NotNull
         private Duration changePhone2faCooldown = Duration.ofDays(7);
+
+        /**
+         * Post-change cooldown: after a successful phone-number change, block any further
+         * change for this window. Reuses the change-phone cooldown plumbing (folded into the
+         * remaining-seconds the /security/pin/status response and the OTP-request gate already
+         * consume), so no client change is needed. Default 604800s = 7 days; dev/QA may set 0
+         * (PT0S) via {@code IDENTITY_PHONE_CHANGE_COOLDOWN_SECONDS}.
+         */
+        @NotNull
+        private Duration phoneChangeCooldown = Duration.ofSeconds(604800);
     }
 
     @Getter

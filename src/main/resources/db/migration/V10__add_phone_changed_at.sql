@@ -1,0 +1,2 @@
+ALTER TABLE identity_users
+    ADD COLUMN IF NOT EXISTS phone_changed_at TIMESTAMP WITH TIME ZONE;

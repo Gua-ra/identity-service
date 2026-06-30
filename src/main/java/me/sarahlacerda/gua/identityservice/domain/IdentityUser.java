@@ -52,6 +52,9 @@ public class IdentityUser {
     @Column(name = "last_pin_change_at")
     private Instant lastPinChangeAt;
 
+    @Column(name = "phone_changed_at")
+    private Instant phoneChangedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

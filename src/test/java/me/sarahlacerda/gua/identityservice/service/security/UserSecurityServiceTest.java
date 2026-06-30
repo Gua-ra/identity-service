@@ -277,6 +277,67 @@ class UserSecurityServiceTest {
     }
 
     @Test
+    void changePhoneCooldownRemainingReflectsPostChangeWindowAfterPhoneChange() {
+        // No PIN at all, so the only active cooldown is the post-change window: a user who just
+        // changed their number must not be able to change it again.
+        properties.getSecurity().setChangePhone2faCooldown(Duration.ZERO);
+        properties.getSecurity().setPhoneChangeCooldown(Duration.ofDays(7));
+        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
+        user.setPhoneChangedAt(Instant.now().minus(Duration.ofDays(2)));
+
+        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
+
+        long remaining = service.changePhoneCooldownRemainingSeconds("@user:gua.global");
+
+        assertThat(remaining).isPositive();
+        // ~5 days left of a 7-day window; allow slack for execution time.
+        assertThat(remaining).isBetween(Duration.ofDays(5).toSeconds() - 5, Duration.ofDays(5).toSeconds());
+    }
+
+    @Test
+    void changePhoneCooldownRemainingTakesMaxOfFresh2faAndPostChange() {
+        // Fresh-2FA has ~5 days left; post-change has ~6 days left -> MAX is the post-change one.
+        properties.getSecurity().setChangePhone2faCooldown(Duration.ofDays(7));
+        properties.getSecurity().setPhoneChangeCooldown(Duration.ofDays(7));
+        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
+        user.setPinHash(passwordEncoder.encode("123456"));
+        user.setPinSetAt(Instant.now().minus(Duration.ofDays(2)));
+        user.setPhoneChangedAt(Instant.now().minus(Duration.ofDays(1)));
+
+        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
+
+        long remaining = service.changePhoneCooldownRemainingSeconds("@user:gua.global");
+
+        assertThat(remaining).isBetween(Duration.ofDays(6).toSeconds() - 5, Duration.ofDays(6).toSeconds());
+    }
+
+    @Test
+    void changePhoneCooldownRemainingPostChangeOutsideWindowReturnsZero() {
+        properties.getSecurity().setChangePhone2faCooldown(Duration.ZERO);
+        properties.getSecurity().setPhoneChangeCooldown(Duration.ofDays(7));
+        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
+        user.setPhoneChangedAt(Instant.now().minus(Duration.ofDays(8)));
+
+        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
+
+        assertThat(service.changePhoneCooldownRemainingSeconds("@user:gua.global")).isZero();
+    }
+
+    @Test
+    void markPhoneChangedStampsPhoneChangedAtAndOpensCooldown() {
+        properties.getSecurity().setChangePhone2faCooldown(Duration.ZERO);
+        properties.getSecurity().setPhoneChangeCooldown(Duration.ofDays(7));
+        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
+        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
+
+        service.markPhoneChanged("@user:gua.global");
+
+        assertThat(user.getPhoneChangedAt()).isNotNull();
+        // The freshly-stamped change opens the post-change cooldown immediately.
+        assertThat(service.changePhoneCooldownRemainingSeconds("@user:gua.global")).isPositive();
+    }
+
+    @Test
     void changePhoneCooldownRemainingForUnknownUserReturnsZero() {
         when(repository.findByUserId("@ghost:gua.global")).thenReturn(Optional.empty());
 
