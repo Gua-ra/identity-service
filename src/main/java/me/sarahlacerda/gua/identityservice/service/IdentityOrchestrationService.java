@@ -231,6 +231,15 @@ public class IdentityOrchestrationService {
             throw new TwoFactorCooldownException(
                     "Change-phone two-factor cooldown active", cooldownRemaining);
         }
+        // Reject up front when the new number is already linked to ANOTHER account, so we never
+        // dispatch an OTP SMS to a number we can't bind. Mirrors the check in changePhoneNumber
+        // (kept there too for defense-in-depth against races at commit time).
+        final String newDigest = phoneNumberHasher.digest(newPhone);
+        directoryService.findByDigest(newDigest)
+                .filter(entry -> !entry.getUserId().equals(userId))
+                .ifPresent(entry -> {
+                    throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
+                });
         sendOtp(newPhone, ip, language);
         securityAuditLogger.phoneChangeRequested(userId, phoneNumberMasker.mask(newPhone), ip);
     }

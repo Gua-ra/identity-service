@@ -465,4 +465,28 @@ class IdentityOrchestrationServiceTest {
                 verify(otpService, never()).sendOtp(anyString(), anyString(), any());
                 verify(securityAuditLogger, never()).phoneChangeRequested(anyString(), anyString(), anyString());
         }
+
+        @Test
+        void requestPhoneChangeOtpRejectedWhenNewPhoneLinkedToAnotherAccount() {
+                String userId = "@alice:gua.global";
+                String newPhone = "+12025550199";
+                String newDigest = "taken-digest";
+                DirectoryEntry other = DirectoryEntry.builder()
+                                .phoneDigest(newDigest)
+                                .userId("@bob:gua.global")
+                                .build();
+
+                when(userSecurityService.changePhoneCooldownRemainingSeconds(userId)).thenReturn(0L);
+                when(phoneNumberHasher.digest(newPhone)).thenReturn(newDigest);
+                when(directoryService.findByDigest(newDigest)).thenReturn(Optional.of(other));
+
+                assertThatThrownBy(() -> service.requestPhoneChangeOtp(
+                                userId, newPhone, "reauth-tok", "1.2.3.4", "en"))
+                                .isInstanceOf(PhoneAlreadyLinkedException.class);
+
+                // The collision is caught at the request step: no SMS is ever dispatched.
+                verify(reauthTokenService).validate("reauth-tok", userId);
+                verify(otpService, never()).sendOtp(anyString(), anyString(), any());
+                verify(securityAuditLogger, never()).phoneChangeRequested(anyString(), anyString(), anyString());
+        }
 }
