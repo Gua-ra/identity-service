@@ -18,6 +18,7 @@ import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPhoneChangeChallengeException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneAlreadyLinkedException;
+import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.MatrixProvisioningService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
@@ -33,9 +34,12 @@ import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditL
  * Security posture (see {@code FINAL DESIGN}):
  * <ul>
  * <li><b>/start</b> is gated by a {@code PHONE_CHANGE}-scoped, single-use reauth
- * token <em>and</em> a non-phone step-up factor (account PIN when set and/or a
- * passkey assertion). The reauth token alone proves only a current-phone OTP,
- * which a SIM-swap attacker could control — hence the extra factor.</li>
+ * token <em>and</em> a mandatory non-phone step-up factor (account PIN when set
+ * and/or a passkey assertion). The reauth token alone proves only a
+ * current-phone OTP, which a SIM-swap attacker could control — hence the extra
+ * factor. Accounts with neither factor are rejected with
+ * {@code step_up_required} (403) and must set up two-step verification first;
+ * there is no token-only fallback.</li>
  * <li>The new-number OTP is namespaced per challenge
  * ({@link PhoneChangeOtpService}) so the public {@code /otp/send} cannot
  * overwrite or race it.</li>
@@ -96,6 +100,7 @@ public class PhoneChangeService {
 
         // 2) Non-phone step-up: PIN when the account has one, and/or passkey assertion.
         //    SIM-swap defense — the reauth OTP went to the current (possibly hijacked) number.
+        //    Accounts with neither factor are hard-blocked (step_up_required).
         enforceStepUp(userId, pin, passkeyAuthSessionId, passkeyCredential, requesterIp);
 
         // 3) Cooldown between successive changes.
@@ -237,10 +242,13 @@ public class PhoneChangeService {
             return;
         }
 
-        // Neither a PIN nor a passkey could be asserted. Token-only fallback: residual
-        // SIM-swap risk, flagged for security sign-off. We allow it so accounts without
-        // either factor are not bricked out of changing their number, but it is logged.
-        log.warn("Phone change for {} proceeded with reauth token only (no PIN/passkey step-up available)", userId);
+        // Neither a PIN nor a passkey could be asserted. Hard block (product decision,
+        // 2026-07-02): the reauth token alone only proves a current-phone OTP, which a
+        // SIM-swap attacker may control, so there is NO token-only fallback. The client
+        // routes `step_up_required` to two-step verification setup.
+        auditLogger.reauthFailed(userId, ReauthOperation.PHONE_CHANGE.name(), requesterIp);
+        throw new StepUpRequiredException(
+                "Two-step verification (account PIN or passkey) is required to change the phone number");
     }
 
     private static int parseAttempts(String raw) {

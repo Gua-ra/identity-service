@@ -35,6 +35,7 @@ import me.sarahlacerda.gua.identityservice.exception.PinLockedException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetNotRequestedException;
 import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
+import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
 import me.sarahlacerda.gua.identityservice.exception.UnknownUserException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
 import me.sarahlacerda.gua.identityservice.exception.WeakPinException;
@@ -186,6 +187,12 @@ public class RestExceptionHandler {
         public ResponseEntity<ErrorResponse> handlePinResetNotRequested(PinResetNotRequestedException ex) {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                                 .body(new ErrorResponse("pin_reset_not_requested", ex.getMessage()));
+        }
+
+        @ExceptionHandler(StepUpRequiredException.class)
+        public ResponseEntity<ErrorResponse> handleStepUpRequired(StepUpRequiredException ex) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                                .body(new ErrorResponse("step_up_required", ex.getMessage()));
         }
 
         @ExceptionHandler(UnknownUserException.class)

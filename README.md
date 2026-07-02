@@ -171,7 +171,6 @@ Interactive docs: **`/swagger-ui.html`** (OpenAPI JSON at `/api-docs`). Endpoint
 | --- | --- | --- |
 | `POST /otp/send` | Public | Generate and dispatch an OTP to a phone number (rate-limited, localized SMS). |
 | `POST /otp/verify` | Public | Verify an OTP. Returns one of: an existing-user Matrix session, a `signupToken` (new user), or a `pinChallengeToken` (returning user with two-step verification). |
-| `POST /otp/change-number` | Bearer | Re-bind a verified phone number to an existing account (OTP + PIN). |
 | `GET /signup/check-username` | Public | Real-time username availability check (format/reserved rules + Matrix lookup). Does not mutate state. |
 | `POST /signup/complete` | Public¹ | Exchange a `signupToken` for a provisioned Matrix user with chosen username/display name. |
 | `POST /signin/verify-pin` | Public¹ | Exchange a `pinChallengeToken` + PIN for a Matrix session (second leg of 2SV sign-in). |
@@ -205,6 +204,10 @@ Each privileged operation requires a fresh **reauth token** proving phone posses
 | `POST /account/reauth/verify` | Bearer | Exchange the OTP for a single-use, short-lived reauth token. |
 | `POST /account/deactivate` | Bearer + reauth | Deactivate the user's Matrix account (optionally erasing data). |
 | `POST /account/reset-identity-credentials` | Bearer + reauth | Rotate the homeserver password and return one-time UIA credentials for `client.resetIdentity`. |
+| `POST /account/phone/change/start` | Bearer + reauth + 2SV | Start a phone-number change: spends a `PHONE_CHANGE`-scoped reauth token **plus a second factor** (account PIN and/or passkey assertion), sends an OTP to the new number, and alerts the old number out of band. Returns a challenge id. |
+| `POST /account/phone/change/complete` | Bearer | Redeem the challenge + new-number OTP to atomically re-bind the account's phone mapping; all outstanding sessions are revoked. |
+
+**Phone changes require two-step verification.** Because the reauth OTP goes to the *current* number — which a SIM-swap attacker may control — `/account/phone/change/start` additionally demands a non-phone factor: the account PIN (always, when one is set) and/or a passkey assertion. Accounts with **neither** a PIN nor a passkey are hard-blocked with `403 step_up_required` and must set up two-step verification (a PIN via `/security/pin`, or a passkey) before they can change their number. There is no token-only fallback.
 
 ### Directory
 
@@ -297,7 +300,8 @@ Every public endpoint is protected by a **Resilience4j**-based rate limiter, so 
 | --- | --- | --- |
 | `POST /otp/send` | 5 | 1 min |
 | `POST /otp/verify` | 10 | 1 min |
-| `POST /otp/change-number` | 3 | 1 hour |
+| `POST /account/phone/change/start` | 3 | 1 hour |
+| `POST /account/phone/change/complete` | 10 | 1 hour |
 | `POST /signup/complete` | 10 | 1 min |
 | `POST /signin/verify-pin` | 10 | 1 min |
 | `POST /security/pin` | 20 | 5 min |

@@ -23,12 +23,16 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.exception.InvalidOtpException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPhoneChangeChallengeException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneAlreadyLinkedException;
+import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.MatrixProvisioningService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
@@ -159,16 +163,63 @@ class PhoneChangeServiceTest {
 
     @Test
     void startRejectsEqualsCurrentBeforeSendingOtp() {
-        when(userSecurityService.hasPin(USER)).thenReturn(false);
+        when(userSecurityService.hasPin(USER)).thenReturn(true);
         when(phoneNumberNormalizer.toE164(NEW_RAW)).thenReturn(NEW_E164);
         when(phoneNumberHasher.digest(NEW_E164)).thenReturn("same-digest");
         when(directoryService.findByUserId(USER)).thenReturn(List.of(
                 DirectoryEntry.builder().phoneDigest("same-digest").userId(USER).build()));
 
-        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, null, null, null, "1.2.3.4", "en"))
+        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, "123456", null, null, "1.2.3.4",
+                "en"))
                 .isInstanceOf(PhoneAlreadyLinkedException.class);
 
         verifyNoInteractions(phoneChangeOtpService);
+    }
+
+    // -------------------- /start: step-up hard requirement --------------------
+
+    @Test
+    void startBlocksAccountWithNeitherPinNorPasskey() {
+        when(userSecurityService.hasPin(USER)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, null, null, null, "1.2.3.4",
+                "en"))
+                .isInstanceOf(StepUpRequiredException.class);
+
+        // Hard block per product decision (2026-07-02): no token-only fallback. The
+        // reauth token is still spent, the failure is audited, and nothing else runs.
+        verify(auditLogger).reauthFailed(USER, ReauthOperation.PHONE_CHANGE.name(), "1.2.3.4");
+        verify(userSecurityService, never()).enforcePhoneChangeCooldown(anyString());
+        verify(phoneNumberNormalizer, never()).toE164(anyString());
+        verifyNoInteractions(phoneChangeOtpService);
+        verifyNoInteractions(deviceNotificationService);
+    }
+
+    @Test
+    void startAllowsPinOnlyAccount() {
+        when(userSecurityService.hasPin(USER)).thenReturn(true);
+        primeSuccessfulStart();
+
+        PhoneChangeService.PhoneChangeStart start = service.startPhoneNumberChange(USER, "tok", NEW_RAW, "123456",
+                null, null, "1.2.3.4", "en");
+
+        verify(userSecurityService).validatePinOrThrow(USER, "123456");
+        verify(phoneChangeOtpService).send(start.challengeId(), NEW_E164, "1.2.3.4", "en");
+    }
+
+    @Test
+    void startAllowsPasskeyOnlyAccount() {
+        when(userSecurityService.hasPin(USER)).thenReturn(false);
+        JsonNode credential = JsonNodeFactory.instance.objectNode();
+        when(passkeyService.finishAuthentication("pk-sess", credential))
+                .thenReturn(new PasskeyService.PasskeyAuthentication(USER));
+        primeSuccessfulStart();
+
+        PhoneChangeService.PhoneChangeStart start = service.startPhoneNumberChange(USER, "tok", NEW_RAW, null,
+                "pk-sess", credential, "1.2.3.4", "en");
+
+        verify(passkeyService).finishAuthentication("pk-sess", credential);
+        verify(phoneChangeOtpService).send(start.challengeId(), NEW_E164, "1.2.3.4", "en");
     }
 
     // -------------------- /complete: brute-force cap --------------------
@@ -293,6 +344,16 @@ class PhoneChangeServiceTest {
         // Swap rolled back -> no post-commit side effects, challenge not spent.
         verify(tokenRevocationService, never()).revokeAllTokens(anyString());
         verify(redisTemplate, never()).delete(CHALLENGE_KEY);
+    }
+
+    /** Shared stubs for a /start that passes step-up and reaches the OTP send. */
+    private void primeSuccessfulStart() {
+        when(phoneNumberNormalizer.toE164(NEW_RAW)).thenReturn(NEW_E164);
+        when(phoneNumberHasher.digest(NEW_E164)).thenReturn("new-digest");
+        when(directoryService.findByUserId(USER)).thenReturn(List.of(
+                DirectoryEntry.builder().phoneDigest("old-digest").userId(USER).build()));
+        when(directoryService.findMaskedPhoneByUserId(USER)).thenReturn(java.util.Optional.of("••••9999"));
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
     }
 
     /**

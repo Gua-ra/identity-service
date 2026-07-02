@@ -26,6 +26,7 @@ import me.sarahlacerda.gua.identityservice.controller.dto.PhoneChangeCompleteReq
 import me.sarahlacerda.gua.identityservice.controller.dto.PhoneChangeStartRequest;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPhoneChangeChallengeException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneChangeCooldownException;
+import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.security.AccountReauthService;
@@ -150,6 +151,24 @@ class AccountControllerTest {
                 .andExpect(MockMvcResultMatchers.status().isTooEarly())
                 .andExpect(MockMvcResultMatchers.header().string("Retry-After", "3600"))
                 .andExpect(MockMvcResultMatchers.jsonPath("$.code", is("phone_change_cooldown")));
+    }
+
+    @Test
+    void startMapsMissingStepUpTo403WithStepUpRequiredCode() throws Exception {
+        when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn(USER);
+        doThrow(new StepUpRequiredException("Two-step verification (account PIN or passkey) is required"))
+                .when(phoneChangeService).startPhoneNumberChange(eq(USER), any(), any(), any(), any(), any(), any(),
+                        any());
+
+        PhoneChangeStartRequest request = new PhoneChangeStartRequest();
+        request.setReauthToken("reauth-tok");
+        request.setNewPhone("+14155550123");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/account/phone/change/start")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(request)))
+                .andExpect(MockMvcResultMatchers.status().isForbidden())
+                .andExpect(MockMvcResultMatchers.jsonPath("$.code", is("step_up_required")));
     }
 
     @Test

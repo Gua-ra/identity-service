@@ -141,11 +141,12 @@ public class AccountController {
         }
 
         @PostMapping("/phone/change/start")
-        @Operation(summary = "Start a phone-number change", description = "Spends a PHONE_CHANGE-scoped reauth token and a step-up factor (account PIN when set, and/or a passkey assertion), then sends an OTP to the NEW number and returns a challenge to redeem at /account/phone/change/complete. The OLD number is alerted out of band.", security = @SecurityRequirement(name = "oidcAccessToken"))
+        @Operation(summary = "Start a phone-number change", description = "Spends a PHONE_CHANGE-scoped reauth token and a mandatory step-up factor (account PIN when set, and/or a passkey assertion), then sends an OTP to the NEW number and returns a challenge to redeem at /account/phone/change/complete. Accounts with neither a PIN nor a passkey receive step_up_required and must set up two-step verification first. The OLD number is alerted out of band.", security = @SecurityRequirement(name = "oidcAccessToken"))
         @ApiResponses({
                         @ApiResponse(responseCode = "200", description = "Challenge created and OTP sent to the new number", content = @Content(schema = @Schema(implementation = PhoneChangeStartResponse.class))),
                         @ApiResponse(responseCode = "400", description = "Validation failed, PIN invalid, invalid/equal phone number", content = @Content),
                         @ApiResponse(responseCode = "401", description = "Authentication or reauth/step-up failed", content = @Content),
+                        @ApiResponse(responseCode = "403", description = "step_up_required — account has neither a PIN nor a passkey; two-step verification must be set up first", content = @Content),
                         @ApiResponse(responseCode = "409", description = "New number already linked to another account", content = @Content),
                         @ApiResponse(responseCode = "425", description = "Phone-change cooldown still active", content = @Content),
                         @ApiResponse(responseCode = "429", description = "Too many attempts (rate limited or PIN locked)", content = @Content)
