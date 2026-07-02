@@ -44,8 +44,7 @@ public class OtpService {
         this.metrics = metrics;
         // e.g. TwilioSmsSender -> "twilio", LoggingSmsSender -> "logging". Lets the SMS-usage metric
         // distinguish the real provider from the dev logger once real SMS is wired.
-        this.smsProvider = smsSender.getClass().getSimpleName()
-            .replace("SmsSender", "").toLowerCase(java.util.Locale.ROOT);
+        this.smsProvider = SmsSender.providerTag(smsSender);
     }
 
     public void sendOtp(String e164PhoneNumber, String requesterIp, String language) {
