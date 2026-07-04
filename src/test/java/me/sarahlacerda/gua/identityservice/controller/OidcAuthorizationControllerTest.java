@@ -140,6 +140,55 @@ class OidcAuthorizationControllerTest {
     }
 
     @Test
+    void authorizeInteractiveFlowStoresDownstreamClientOnSession() throws Exception {
+        when(loginFlowProperties.getCookieName()).thenReturn("gua_login");
+        when(loginFlowProperties.isCookieSecure()).thenReturn(true);
+        when(loginFlowProperties.getSessionTtl()).thenReturn(java.time.Duration.ofMinutes(10));
+        when(loginFlowProperties.getUiUrl()).thenReturn("/signin");
+        when(loginSessionService.newToken()).thenReturn("csrf-1");
+        when(loginSessionService.create(any())).thenReturn("sid-1");
+
+        // Interactive flow: omit phone_number/otp_code so the session-parking branch runs.
+        mockMvc.perform(get("/oauth2/authorize")
+                .param("response_type", "code")
+                .param("client_id", "mas")
+                .param("redirect_uri", CALLBACK)
+                .param("scope", "openid profile")
+                .param("gua_downstream", "web"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin"));
+
+        ArgumentCaptor<me.sarahlacerda.gua.identityservice.service.oidc.LoginSession> captor =
+                ArgumentCaptor.forClass(me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.class);
+        verify(loginSessionService).create(captor.capture());
+        assertThat(captor.getValue().getDownstreamClient()).isEqualTo("web");
+
+        verifyNoInteractions(authorizationService);
+    }
+
+    @Test
+    void authorizeInteractiveFlowLeavesDownstreamClientNullWhenSignalAbsent() throws Exception {
+        when(loginFlowProperties.getCookieName()).thenReturn("gua_login");
+        when(loginFlowProperties.isCookieSecure()).thenReturn(true);
+        when(loginFlowProperties.getSessionTtl()).thenReturn(java.time.Duration.ofMinutes(10));
+        when(loginFlowProperties.getUiUrl()).thenReturn("/signin");
+        when(loginSessionService.newToken()).thenReturn("csrf-1");
+        when(loginSessionService.create(any())).thenReturn("sid-1");
+
+        mockMvc.perform(get("/oauth2/authorize")
+                .param("response_type", "code")
+                .param("client_id", "mas")
+                .param("redirect_uri", CALLBACK)
+                .param("scope", "openid profile"))
+                .andExpect(status().isFound());
+
+        ArgumentCaptor<me.sarahlacerda.gua.identityservice.service.oidc.LoginSession> captor =
+                ArgumentCaptor.forClass(me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.class);
+        verify(loginSessionService).create(captor.capture());
+        assertThat(captor.getValue().getDownstreamClient()).isNull();
+    }
+
+    @Test
     void authorizeRejectsNonCodeResponseType() throws Exception {
         mockMvc.perform(get("/oauth2/authorize")
                 .param("response_type", "token")

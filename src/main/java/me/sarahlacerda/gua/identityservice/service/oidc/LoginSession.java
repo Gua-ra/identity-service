@@ -82,6 +82,15 @@ public class LoginSession {
     private String reauthUserId;
 
     /**
+     * The downstream client MAS is authenticating on behalf of, forwarded on the
+     * upstream authorize request as {@code gua_downstream} (e.g. {@code web} for the
+     * web client, {@code native} for the mobile apps). Used only to gate new-account
+     * signup behind the web registration allowlist; {@code null} when MAS did not
+     * forward the signal, which the guard treats as a web signup (fail closed).
+     */
+    private String downstreamClient;
+
+    /**
      * Double-submit CSRF token bound to this session and required on state-changing
      * calls.
      */

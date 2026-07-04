@@ -77,7 +77,8 @@ public class OidcAuthorizationController {
             @Parameter(description = "OIDC id_token_hint: a previously issued ID token identifying the already-authenticated user for re-authentication.") @RequestParam(value = "id_token_hint", required = false) String idTokenHint,
             @Parameter(description = "Deprecated: direct phone number for the non-interactive flow. Omit to use the interactive login UI.") @RequestParam(value = "phone_number", required = false) String phoneNumber,
             @Parameter(description = "Deprecated: OTP for the non-interactive flow. Omit to use the interactive login UI.") @RequestParam(value = "otp_code", required = false) String otpCode,
-            @Parameter(description = "Optional display name (non-interactive flow only).") @RequestParam(value = "display_name", required = false) String displayName) {
+            @Parameter(description = "Optional display name (non-interactive flow only).") @RequestParam(value = "display_name", required = false) String displayName,
+            @Parameter(description = "Downstream client MAS is authenticating for (`web` for the web client, `native` for the apps). Forwarded by MAS and used to gate web signups behind the registration allowlist.") @RequestParam(value = "gua_downstream", required = false) String guaDownstream) {
         if (!"code".equals(responseType)) {
             throw new OidcInvalidRequestException("unsupported_response_type", "Only response_type=code is supported");
         }
@@ -117,6 +118,9 @@ public class OidcAuthorizationController {
         session.setCodeChallengeMethod(codeChallengeMethod);
         session.setPhase(LoginSession.Phase.PHONE);
         session.setPhoneHint(normalizeLoginHint(loginHint));
+        // Which downstream client this login is for (web vs native), forwarded by MAS.
+        // Parked on the session so the registration guard can gate web signups only.
+        session.setDownstreamClient(guaDownstream);
         // Re-authentication: an already signed-in user re-verifying (prompt=login /
         // id_token_hint). Pin the session to that subject so the flow is LOGIN-ONLY —
         // the phone must already belong to this user and signup can never be reached.

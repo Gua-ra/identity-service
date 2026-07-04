@@ -77,6 +77,40 @@ public class LoginFlowProperties {
     }
 
     /**
+     * New-account registration controls. Used to gate web signups behind an
+     * allowlist during a limited/invite-only rollout; native (app) signups and
+     * existing-user logins are never affected.
+     */
+    @NotNull
+    private Registration registration = new Registration();
+
+    @Getter
+    @Setter
+    public static class Registration {
+        /**
+         * When {@code true}, a brand-new account created through the web client may
+         * only be provisioned if its phone number is in {@link #webAllowlist}. Kept
+         * {@code false} by default so the guard is inert until deliberately enabled.
+         */
+        private boolean webAllowlistEnabled = false;
+
+        /**
+         * Phone numbers (E.164) permitted to create a new web account while
+         * {@link #webAllowlistEnabled} is on. Normalized before comparison, so entries
+         * lacking a country code are interpreted against the default region.
+         */
+        private List<String> webAllowlist = new ArrayList<>();
+
+        /**
+         * Value of the forwarded downstream-client marker that identifies the web
+         * client. A session whose downstream marker equals this (or is absent, which
+         * fails closed) is treated as a web signup and subject to the allowlist.
+         */
+        @NotBlank
+        private String webClientMarker = "web";
+    }
+
+    /**
      * Passkey / WebAuthn settings for the browser login flow.
      */
     @NotNull

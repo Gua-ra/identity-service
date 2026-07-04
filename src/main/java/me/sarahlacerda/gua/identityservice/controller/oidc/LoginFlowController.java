@@ -46,6 +46,7 @@ import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
+import me.sarahlacerda.gua.identityservice.service.RegistrationGuard;
 import me.sarahlacerda.gua.identityservice.service.routing.AccountPlacementContext;
 import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRouter;
 import me.sarahlacerda.gua.identityservice.service.UsernamePolicy;
@@ -97,6 +98,7 @@ public class LoginFlowController {
     private final UsernamePolicy usernamePolicy;
     private final OidcAuthorizationService authorizationService;
     private final PasskeyService passkeyService;
+    private final RegistrationGuard registrationGuard;
 
     @GetMapping("/context")
     @Operation(summary = "Fetch the current login state", description = "Returns the current step, a CSRF token to echo on subsequent calls, and the masked phone when known.")
@@ -273,6 +275,10 @@ public class LoginFlowController {
         LoginSession session = requireSession(sessionId);
         requireCsrf(session, csrf);
         requirePhase(session, Phase.PROFILE_REQUIRED);
+        // Invite-only gate for web signups (inert unless enabled). Runs before any
+        // account is provisioned; only the new-user branch reaches here, so existing
+        // users, re-auth, change-phone and passkey paths are never affected.
+        registrationGuard.assertAllowedForNewUser(session);
 
         String localpart = usernamePolicy.normalizeAndValidate(request.username());
         // Global-username uniqueness across the Gua federation is authoritative here
