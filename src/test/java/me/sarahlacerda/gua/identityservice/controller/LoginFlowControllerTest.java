@@ -39,6 +39,7 @@ import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
+import me.sarahlacerda.gua.identityservice.service.RegistrationGuard;
 import me.sarahlacerda.gua.identityservice.service.UsernamePolicy;
 import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRouter;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
@@ -54,7 +55,19 @@ import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 @WebMvcTest(LoginFlowController.class)
 @AutoConfigureMockMvc(addFilters = false)
 @AutoConfigureObservability   // provide a MeterRegistry in the slice (micrometer-prometheus is on the classpath)
+@org.springframework.context.annotation.Import(LoginFlowControllerTest.GuardConfig.class)
 class LoginFlowControllerTest {
+
+    // Use the real RegistrationGuard so the allowlist behaviour is exercised
+    // end-to-end; it is driven through the mocked LoginFlowProperties and
+    // PhoneNumberNormalizer beans in the slice.
+    @org.springframework.boot.test.context.TestConfiguration
+    static class GuardConfig {
+        @org.springframework.context.annotation.Bean
+        RegistrationGuard registrationGuard(LoginFlowProperties properties, PhoneNumberNormalizer normalizer) {
+            return new RegistrationGuard(properties, normalizer);
+        }
+    }
 
     private static final String SID = "session-id";
     private static final String CSRF = "csrf-token";
@@ -98,6 +111,8 @@ class LoginFlowControllerTest {
     @BeforeEach
     void setUp() {
         when(properties.getCookieName()).thenReturn("gua_login");
+        // Default: registration allowlist disabled, so the guard is a no-op (open).
+        when(properties.getRegistration()).thenReturn(new LoginFlowProperties.Registration());
         when(phoneNumberNormalizer.toE164(PHONE)).thenReturn(PHONE);
         when(homeserverRouter.selectForNewAccount(any()))
                 .thenReturn(new me.sarahlacerda.gua.identityservice.domain.Homeserver(
@@ -577,6 +592,163 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.code").value("reauth_user_mismatch"));
 
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    // --- Web registration allowlist guard ---------------------------------
+
+    /** Registration config with the allowlist enabled for the given E.164 entries. */
+    private LoginFlowProperties.Registration enabledAllowlist(String... entries) {
+        LoginFlowProperties.Registration registration = new LoginFlowProperties.Registration();
+        registration.setWebAllowlistEnabled(true);
+        registration.setWebAllowlist(List.of(entries));
+        return registration;
+    }
+
+    private void stubNewSignupWith(LoginSession session) {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(usernamePolicy.normalizeAndValidate("Alice")).thenReturn("alice");
+        when(directoryService.isUsernameTaken("alice")).thenReturn(false);
+        when(matrixProvisioningService.buildUserId(eq("alice"), any())).thenReturn("@alice:gua.local");
+        when(matrixAdminClient.userExists("@alice:gua.local")).thenReturn(false);
+    }
+
+    private org.springframework.test.web.servlet.ResultActions performProfile() throws Exception {
+        return mockMvc.perform(post("/login/profile")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"Alice\",\"displayName\":\"Alice A\"}"));
+    }
+
+    @Test
+    void newWebSignupNotAllowlistedIsRejectedAndCreatesNoAccount() throws Exception {
+        when(properties.getRegistration()).thenReturn(enabledAllowlist("+15559999999"));
+        LoginSession session = session(Phase.PROFILE_REQUIRED);
+        session.setDownstreamClient("web");
+        stubNewSignupWith(session);
+
+        performProfile()
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("registration_not_approved"));
+
+        verify(directoryService, org.mockito.Mockito.never()).upsertByDigest(any(), any(), any(), any());
+    }
+
+    @Test
+    void newWebSignupAllowlistedIsCreated() throws Exception {
+        when(properties.getRegistration()).thenReturn(enabledAllowlist(PHONE));
+        LoginSession session = session(Phase.PROFILE_REQUIRED);
+        session.setDownstreamClient("web");
+        stubNewSignupWith(session);
+
+        performProfile()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+
+        verify(directoryService).upsertByDigest(any(), any(), eq("@alice:gua.local"), eq("Alice A"));
+    }
+
+    @Test
+    void newNativeSignupIsCreatedRegardlessOfAllowlist() throws Exception {
+        when(properties.getRegistration()).thenReturn(enabledAllowlist("+15559999999"));
+        LoginSession session = session(Phase.PROFILE_REQUIRED);
+        session.setDownstreamClient("native");
+        stubNewSignupWith(session);
+
+        performProfile()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+
+        verify(directoryService).upsertByDigest(any(), any(), eq("@alice:gua.local"), eq("Alice A"));
+    }
+
+    @Test
+    void newSignupWithAbsentDownstreamSignalFailsClosedWhenEnabled() throws Exception {
+        when(properties.getRegistration()).thenReturn(enabledAllowlist("+15559999999"));
+        LoginSession session = session(Phase.PROFILE_REQUIRED);
+        // downstreamClient left null: fail closed, treated as a web signup.
+        stubNewSignupWith(session);
+
+        performProfile()
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("registration_not_approved"));
+
+        verify(directoryService, org.mockito.Mockito.never()).upsertByDigest(any(), any(), any(), any());
+    }
+
+    @Test
+    void newSignupWithAbsentDownstreamSignalIsCreatedWhenAllowlisted() throws Exception {
+        when(properties.getRegistration()).thenReturn(enabledAllowlist(PHONE));
+        LoginSession session = session(Phase.PROFILE_REQUIRED);
+        // downstreamClient null but the phone is allowlisted: created.
+        stubNewSignupWith(session);
+
+        performProfile()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+
+        verify(directoryService).upsertByDigest(any(), any(), eq("@alice:gua.local"), eq("Alice A"));
+    }
+
+    @Test
+    void newWebSignupIsCreatedWhenAllowlistDisabled() throws Exception {
+        // Default registration (disabled) from setUp(): guard is open regardless of phone.
+        LoginSession session = session(Phase.PROFILE_REQUIRED);
+        session.setDownstreamClient("web");
+        stubNewSignupWith(session);
+
+        performProfile()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+
+        verify(directoryService).upsertByDigest(any(), any(), eq("@alice:gua.local"), eq("Alice A"));
+    }
+
+    @Test
+    void existingWebUserNotAllowlistedStillLogsIn() throws Exception {
+        // The guard must never touch an existing user: even with the allowlist on and
+        // this user's phone absent from it, a returning web login succeeds because it
+        // resolves in submitOtp (routeExistingUser), never reaching the profile branch.
+        when(properties.getRegistration()).thenReturn(enabledAllowlist("+15559999999"));
+        LoginSession session = session(Phase.OTP_SENT);
+        session.setDownstreamClient("web");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").displayName("Alice").build();
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
+        when(userSecurityService.hasPin("u1")).thenReturn(false);
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"))
+                .andExpect(jsonPath("$.newUser").value(false));
+    }
+
+    @Test
+    void reauthUnregisteredWebPhoneGivesReauthMismatchNotRegistrationNotApproved() throws Exception {
+        // A re-auth on an unregistered phone must be rejected as a reauth mismatch in
+        // submitOtp, before (and instead of) the signup/profile branch, even with the
+        // web allowlist enabled and this phone absent from it.
+        when(properties.getRegistration()).thenReturn(enabledAllowlist("+15559999999"));
+        LoginSession session = session(Phase.OTP_SENT);
+        session.setDownstreamClient("web");
+        session.setReauthUserId("u1");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
+        when(matrixAdminClient.findUserIdByPhone(PHONE)).thenReturn(Optional.empty());
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("reauth_user_mismatch"));
     }
 
     @Test
