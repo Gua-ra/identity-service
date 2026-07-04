@@ -91,6 +91,17 @@ public class LoginSession {
     private String downstreamClient;
 
     /**
+     * Set when this session is an in-app passkey enrollment handoff for an
+     * already-signed-in user (created by {@code POST /security/passkey/enroll/start}),
+     * rather than an OIDC authorization login. Such a session carries no
+     * {@code clientId} / scope / PKCE, so its passkey-setup completion must NOT issue an
+     * authorization code; it only redirects the web view back to the app scheme. Kept
+     * distinct from {@link #reauthUserId} (also set here) because a re-authentication is
+     * still a real OIDC authorize with a client, whereas an enrollment is not.
+     */
+    private boolean enroll;
+
+    /**
      * Double-submit CSRF token bound to this session and required on state-changing
      * calls.
      */
