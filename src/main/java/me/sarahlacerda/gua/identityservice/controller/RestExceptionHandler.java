@@ -25,14 +25,17 @@ import me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.exception.OidcClientAuthenticationException;
 import me.sarahlacerda.gua.identityservice.exception.OidcInvalidRequestException;
+import me.sarahlacerda.gua.identityservice.exception.InvalidPhoneChangeChallengeException;
 import me.sarahlacerda.gua.identityservice.exception.OtpRateLimitedException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneAlreadyLinkedException;
+import me.sarahlacerda.gua.identityservice.exception.PhoneChangeCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinChangeChallengeNotFoundException;
 import me.sarahlacerda.gua.identityservice.exception.PinChangeCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinLockedException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetNotRequestedException;
 import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
+import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
 import me.sarahlacerda.gua.identityservice.exception.UnknownUserException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
 import me.sarahlacerda.gua.identityservice.exception.WeakPinException;
@@ -164,10 +167,32 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("pin_change_challenge_invalid", ex.getMessage()));
         }
 
+        @ExceptionHandler(InvalidPhoneChangeChallengeException.class)
+        public ResponseEntity<ErrorResponse> handlePhoneChangeChallenge(InvalidPhoneChangeChallengeException ex) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                                .body(new ErrorResponse("phone_change_challenge_invalid", ex.getMessage()));
+        }
+
+        @ExceptionHandler(PhoneChangeCooldownException.class)
+        public ResponseEntity<ErrorResponse> handlePhoneChangeCooldown(PhoneChangeCooldownException ex) {
+                String message = ex.getRemainingSeconds() > 0
+                                ? ex.getMessage() + " (retry in " + ex.getRemainingSeconds() + "s)"
+                                : ex.getMessage();
+                return ResponseEntity.status(HttpStatus.TOO_EARLY)
+                                .header("Retry-After", String.valueOf(Math.max(ex.getRemainingSeconds(), 1)))
+                                .body(new ErrorResponse("phone_change_cooldown", message));
+        }
+
         @ExceptionHandler(PinResetNotRequestedException.class)
         public ResponseEntity<ErrorResponse> handlePinResetNotRequested(PinResetNotRequestedException ex) {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                                 .body(new ErrorResponse("pin_reset_not_requested", ex.getMessage()));
+        }
+
+        @ExceptionHandler(StepUpRequiredException.class)
+        public ResponseEntity<ErrorResponse> handleStepUpRequired(StepUpRequiredException ex) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                                .body(new ErrorResponse("step_up_required", ex.getMessage()));
         }
 
         @ExceptionHandler(UnknownUserException.class)

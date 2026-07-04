@@ -21,4 +21,12 @@ public interface SecurityAuditLogger {
     void pinChangeStarted(String userId, String maskedPhone, String requesterIp);
 
     void pinChangeCompleted(String userId);
+
+    void phoneChangeStarted(String userId, String maskedOldPhone, String maskedNewPhone, String requesterIp);
+
+    void phoneChangeCompleted(String userId, String maskedNewPhone);
+
+    void phoneChangeOtpFailed(String userId, int attempt, String requesterIp);
+
+    void reauthFailed(String userId, String operation, String requesterIp);
 }

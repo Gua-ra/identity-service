@@ -175,6 +175,30 @@ public class IdentityServiceProperties {
 
         @NotNull
         private Duration pinChangeChallengeTtl = Duration.ofMinutes(5);
+
+        /**
+         * Minimum time between successful phone-number changes for one account. A
+         * fresh session + reauth proof should not let an attacker rapidly re-point the
+         * account; the cooldown bounds how often the linked number can churn.
+         */
+        @NotNull
+        private Duration phoneChangeCooldown = Duration.ofHours(24);
+
+        /**
+         * Lifetime of a phone-change challenge (Redis-only). The new-number OTP itself
+         * has the shorter {@code identity.otp.ttl}; this is the window in which the
+         * caller must submit it at {@code /account/phone/change/complete}.
+         */
+        @NotNull
+        private Duration phoneChangeChallengeTtl = Duration.ofMinutes(10);
+
+        /**
+         * Per-challenge wrong-OTP cap for the new-number verification. Once reached,
+         * both the OTP key and the challenge are destroyed (IP-independent), closing
+         * the per-IP endpoint-limiter rotation bypass.
+         */
+        @Min(1)
+        private int maxPhoneChangeOtpAttempts = 5;
     }
 
     @Getter

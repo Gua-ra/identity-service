@@ -50,19 +50,19 @@ public class AccountReauthService {
         log.info("Issued reauth OTP for {}", userId);
     }
 
-    public String verifyReauth(String userId, String code) {
+    public String verifyReauth(String userId, String code, ReauthOperation operation) {
         String phone = resolveLinkedPhone(userId);
         otpService.verifyOtp(phone, code);
-        String token = reauthTokenService.issue(userId);
-        log.info("Issued reauth token for {}", userId);
+        String token = reauthTokenService.issue(userId, operation);
+        log.info("Issued {} reauth token for {}", operation, userId);
         return token;
     }
 
-    public void requireValidReauth(String userId, String reauthToken) {
+    public void requireValidReauth(String userId, String reauthToken, ReauthOperation operation) {
         if (reauthToken == null || reauthToken.isBlank()) {
             throw new InvalidReauthTokenException("Reauth token required");
         }
-        reauthTokenService.consume(reauthToken, userId);
+        reauthTokenService.consume(reauthToken, userId, operation);
     }
 
     /**

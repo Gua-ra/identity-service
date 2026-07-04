@@ -5,7 +5,7 @@
 
 # Gua Identity Service
 
-The **Gua Identity Service** is a Spring Boot–based microservice that handles **user identity and authentication** for the Gua messaging platform. It owns phone-number sign-up and sign-in, OTP delivery, the account PIN (two-step verification), privileged account operations (deactivate / identity reset), encrypted directory lookup, and a self-contained **OpenID Connect provider** that issues the access tokens used to authenticate calls back into this service and to bridge login into Matrix Authentication Service (MAS) / Synapse.
+The **Gua Identity Service** is a Spring Boot–based microservice that handles **user identity and authentication** for the Gua messaging platform. It owns phone-number sign-up and sign-in, OTP delivery, the account PIN (two-step verification), privileged account operations (deactivate / identity reset / phone-number change), encrypted directory lookup, and a self-contained **OpenID Connect provider** that issues the access tokens used to authenticate calls back into this service and to bridge login into Matrix Authentication Service (MAS) / Synapse.
 
 ---
 
@@ -14,9 +14,9 @@ The **Gua Identity Service** is a Spring Boot–based microservice that handles 
 - 📱 **Phone sign-up & sign-in** — request OTP → verify OTP → either provision a new Matrix user, resume an existing session, or fall through to a PIN challenge for users with two-step verification enabled.
 - 🔐 **OTP management** — Redis-backed codes with TTL, per-phone and per-IP hourly caps, localized SMS templates (en / pt-BR), optional Twilio delivery.
 - 🔢 **Account PIN (two-step verification)** — set, OTP-protected change with a 24h cooldown, recovery reset, 5-attempt lockout with a 15-minute lock, and audit logging. A NIST-aligned strength policy rejects non-6-digit, all-repeated, sequential, and common PINs.
-- 🛡️ **Privileged account operations** — fresh phone-OTP reauthentication gates account deactivation and identity-credential reset (modeled on Matrix UIA `m.login.msisdn`).
+- 🛡️ **Privileged account operations** — fresh, operation-scoped phone-OTP reauthentication gates account deactivation, identity-credential reset, and phone-number change (modeled on Matrix UIA `m.login.msisdn`). Phone changes additionally hard-require a second factor (PIN or passkey), verify the **new** number by OTP, and enforce a per-account cooldown.
 - 🔑 **OpenID Connect provider** — RS256 authorization-code + PKCE flow with an **interactive browser login** (phone → OTP → PIN/profile) that MAS redirects into, discovery/JWKS endpoints, and seeded clients for MAS (confidential) and the Gua apps (public, PKCE-required).
-- 🪪 **Passkeys (WebAuthn)** — after phone verification, the user can optionally **register a passkey** and later **sign in with it** instead of an SMS code. Built on Yubico `webauthn-server-core`; credentials are persisted (`passkey_credentials`) and the login flow gains a `PASSKEY_SETUP` step.
+- 🪪 **Passkeys (WebAuthn)** — after phone verification, the user can optionally **register a passkey** (during onboarding, or later from settings via `/security/passkey/enroll/start`) and later **sign in with it** instead of an SMS code. Built on Yubico `webauthn-server-core`; credentials are persisted (`passkey_credentials`) and the login flow gains a `PASSKEY_SETUP` step.
 - 🌐 **Federation directory publishing** — at account provisioning, publishes `phone → this homeserver` to the **gua-resolver** shared directory (`POST /directory/entries`), signed with the homeserver's Ed25519 membership credential. Best-effort: a resolver outage never blocks sign-up/sign-in.
 - 📇 **Directory lookup** — privacy-preserving phone-hash search using a server-side pepper. The raw phone number is never stored; only an irreversible HMAC digest plus a display-only masked form (e.g. `••••4567`).
 - 📊 **Prometheus metrics** — Micrometer at `/actuator/prometheus` (HTTP/JVM/DB-pool) plus domain counters (`gua_identity_signup_total`, `gua_identity_login_total`, `gua_identity_otp_verify_total`, `gua_identity_sms_send_total{provider,result}`).
@@ -33,7 +33,7 @@ The **Gua Identity Service** is a Spring Boot–based microservice that handles 
 - **Spring Web** (MVC REST controllers) + **Spring WebFlux** (`WebClient` for the Matrix admin API)
 - **Spring Security** — stateless bearer-token auth validated locally against this service's own JWKS
 - **Spring Data JPA / Hibernate** (PostgreSQL dialect) + **Flyway** for migrations
-- **Spring Data Redis** — OTP codes, PIN-change challenges, reauth tokens, signup tokens, authorization codes
+- **Spring Data Redis** — OTP codes, PIN-change and phone-change challenges, reauth tokens, signup tokens, authorization codes
 - **Nimbus JOSE + JWT** — RS256 token signing & verification
 - **Resilience4j** — per-endpoint rate limiting
 - **Twilio SDK** — SMS delivery (disabled by default)
@@ -171,12 +171,15 @@ Interactive docs: **`/swagger-ui.html`** (OpenAPI JSON at `/api-docs`). Endpoint
 | --- | --- | --- |
 | `POST /otp/send` | Public | Generate and dispatch an OTP to a phone number (rate-limited, localized SMS). |
 | `POST /otp/verify` | Public | Verify an OTP. Returns one of: an existing-user Matrix session, a `signupToken` (new user), or a `pinChallengeToken` (returning user with two-step verification). |
-| `POST /otp/change-number` | Bearer | Re-bind a verified phone number to an existing account (OTP + PIN). |
 | `GET /signup/check-username` | Public | Real-time username availability check (format/reserved rules + Matrix lookup). Does not mutate state. |
 | `POST /signup/complete` | Public¹ | Exchange a `signupToken` for a provisioned Matrix user with chosen username/display name. |
 | `POST /signin/verify-pin` | Public¹ | Exchange a `pinChallengeToken` + PIN for a Matrix session (second leg of 2SV sign-in). |
+| `POST /login/passkey/auth/options` | Session² | Start **passkey sign-in** for a returning user: WebAuthn assertion options, offered at the start of the login flow before OTP verification. |
+| `POST /login/passkey/auth/verify` | Session² | Verify the passkey assertion and complete sign-in without an SMS code. Only ever resolves to an existing account — never creates one. |
 
 ¹ No bearer token, but gated by the single-use token issued from `/otp/verify`.
+
+² Part of the interactive OIDC login session: requires the login-session cookie plus the CSRF token from `GET /login/context` (see [Interactive login flow](#interactive-login-flow)).
 
 ### Account PIN (two-step verification)
 
@@ -195,16 +198,33 @@ PIN policy is configurable under `identity.security`: `pin-change-cooldown` (def
 
 **Username policy** (`UsernamePolicy`, shared by `/signup/check-username`, `/signup/complete`, and the interactive `/login/profile` step): 3–30 chars of lowercase letters, digits, dot, underscore or dash; not reserved; and — matching MAS's registration policy — not all-numeric (so a bare phone number can't become a handle).
 
+### Passkeys
+
+Passkey **registration** is normally offered during onboarding (see [Interactive login flow](#interactive-login-flow)); an already-signed-in user can also add one later from settings:
+
+| Method & path | Auth | Purpose |
+| --- | --- | --- |
+| `POST /security/passkey/enroll/start` | Bearer | Start in-app passkey enrollment: creates a login session pinned to the authenticated user and returns a one-time `enrollUrl`. |
+| `GET /login/passkey/enroll/{token}` | Public (one-time token) | Redeems the `enrollUrl` in a web view: sets the first-party login cookie and redirects into the sign-in UI at the passkey setup step (`410 enroll_link_expired` once used or expired). |
+
+The pinned session can only reach the passkey-setup step — it can never degrade into an open login or signup. Passkey **sign-in** happens inside the interactive login flow via `POST /login/passkey/auth/options` / `…/verify` (see the quick reference above).
+
 ### Privileged account operations
 
-Each privileged operation requires a fresh **reauth token** proving phone possession, in addition to the bearer token.
+Each privileged operation requires a fresh **reauth token** proving phone possession, in addition to the bearer token. Reauth tokens are **operation-scoped**: `/account/reauth/verify` takes an `operation` field (`DEACTIVATE` | `IDENTITY_RESET` | `PHONE_CHANGE`; defaults to `DEACTIVATE` for backwards compatibility) and the issued token can only be spent on the matching endpoint — a token minted to authorize a deactivation is not valid for an identity reset or a phone change, and vice versa.
 
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
 | `POST /account/reauth/start` | Bearer | Send a fresh OTP to the user's linked phone. |
-| `POST /account/reauth/verify` | Bearer | Exchange the OTP for a single-use, short-lived reauth token. |
-| `POST /account/deactivate` | Bearer + reauth | Deactivate the user's Matrix account (optionally erasing data). |
-| `POST /account/reset-identity-credentials` | Bearer + reauth | Rotate the homeserver password and return one-time UIA credentials for `client.resetIdentity`. |
+| `POST /account/reauth/verify` | Bearer | Exchange the OTP for a single-use reauth token (5-minute TTL) scoped to the requested `operation`. |
+| `POST /account/deactivate` | Bearer + reauth (`DEACTIVATE`) | Deactivate the user's Matrix account (optionally erasing data). |
+| `POST /account/reset-identity-credentials` | Bearer + reauth (`IDENTITY_RESET`) | Rotate the homeserver password and return one-time UIA credentials for `client.resetIdentity`. |
+| `POST /account/phone/change/start` | Bearer + reauth (`PHONE_CHANGE`) + 2SV | Start a phone-number change: spends the reauth token **plus a second factor** (account PIN and/or passkey assertion), sends an OTP to the new number, and alerts the old number out of band. Returns a challenge id (`425` while the per-account change cooldown is active). |
+| `POST /account/phone/change/complete` | Bearer | Redeem the challenge + new-number OTP to atomically re-bind the account's phone mapping; all outstanding sessions are revoked. |
+
+**Phone changes require two-step verification.** Because the reauth OTP goes to the *current* number — which a SIM-swap attacker may control — `/account/phone/change/start` additionally demands a non-phone factor: the account PIN (always, when one is set) and/or a passkey assertion. Accounts with **neither** a PIN nor a passkey are hard-blocked with `403 step_up_required` and must set up two-step verification (a PIN via `/security/pin`, or a passkey) before they can change their number. There is no token-only fallback.
+
+**Phone-change cooldown & challenge limits** (configurable under `identity.security`): successful changes are separated by `phone-change-cooldown` (default **24h**) — while it is active `/account/phone/change/start` returns `425` with a `phone_change_cooldown` error code and a `Retry-After` header. Each challenge lives for `phone-change-challenge-ttl` (default **10m**) and allows `max-phone-change-otp-attempts` wrong OTPs (default **5**); at the cap both the challenge and its OTP are destroyed and the flow must restart from `/start`.
 
 ### Directory
 
@@ -260,11 +280,13 @@ For browser-based login (the path used by MAS and the Gua apps), the identity se
 | `POST /login/otp` | Verify the OTP; routes to the PIN step (returning two-step user), the profile step (new user), or completes login. |
 | `POST /login/pin` | Verify the account PIN (returning two-step user). |
 | `POST /login/profile` | Choose username + display name (new user). |
+| `POST /login/pin-setup` | Offer a new user two-step verification: send a `pin` to enable it, or `skip: true` to continue without one. |
 | `POST /login/passkey/register/options` · `…/register/verify` | Register a passkey for the account (WebAuthn create). |
 | `POST /login/passkey/setup-skip` | Decline passkey setup and complete login. |
 | `POST /login/passkey/auth/options` · `…/auth/verify` | Sign in with an existing passkey (WebAuthn get). |
+| `GET /login/passkey/enroll/{token}` | One-time web-view handoff for in-app passkey enrollment started at `POST /security/passkey/enroll/start` (see [Passkeys](#passkeys)). |
 
-Once phone (and any PIN) verification completes, the flow may enter the `PASSKEY_SETUP` step, offering passkey registration before finishing; the user can skip it. A returning user may instead authenticate with a passkey via the `…/auth/*` endpoints.
+New users are walked through profile → `PIN_SETUP` (optional two-step verification) → `PASSKEY_SETUP`; returning users reach `PASSKEY_SETUP` once phone (and any PIN) verification completes, unless the account already has a passkey. Both setup steps can be skipped. A returning user may instead authenticate with a passkey via the `…/auth/*` endpoints.
 
 On success an authorization code is issued, the login session is consumed (and its cookie cleared), and the response carries `redirectUrl` for the UI to navigate back to the client, which exchanges the code at `/oauth2/token`. For new users the chosen handle is emitted as the `preferred_username` claim so MAS uses it as the Matrix localpart on first provisioning; the OIDC `sub` is an opaque, stable identifier.
 
@@ -285,7 +307,7 @@ Additional first-party app clients (web today, Android in future) are registered
 
 ### API authentication
 
-Client-facing REST endpoints require an access token in the `Authorization: Bearer <token>` header. `OidcAccessTokenValidator` first tries to verify the token locally against the published JWKS — checking the RS256 signature, the issuer, that the audience matches a registered client, and that the token has not expired or been revoked. If the token is not one of this service's own JWTs, it falls back to Synapse's `/whoami` endpoint so a native client can reuse its Matrix SDK session token (these tokens are granted no OIDC scopes). Access tokens carry a `jti` and can be invalidated ahead of expiry via a per-user revoke-before cutoff in Redis, which `/account/deactivate` and `/account/reset-identity-credentials` set. Authorization codes and other short-lived tokens are stored in Redis to keep the service horizontally scalable.
+Client-facing REST endpoints require an access token in the `Authorization: Bearer <token>` header. `OidcAccessTokenValidator` first tries to verify the token locally against the published JWKS — checking the RS256 signature, the issuer, that the audience matches a registered client, and that the token has not expired or been revoked. If the token is not one of this service's own JWTs, it falls back to Synapse's `/whoami` endpoint so a native client can reuse its Matrix SDK session token (these tokens are granted no OIDC scopes). Access tokens carry a `jti` and can be invalidated ahead of expiry via a per-user revoke-before cutoff in Redis, which `/account/deactivate`, `/account/reset-identity-credentials`, and `/account/phone/change/complete` set. Authorization codes and other short-lived tokens are stored in Redis to keep the service horizontally scalable.
 
 ---
 
@@ -297,7 +319,8 @@ Every public endpoint is protected by a **Resilience4j**-based rate limiter, so 
 | --- | --- | --- |
 | `POST /otp/send` | 5 | 1 min |
 | `POST /otp/verify` | 10 | 1 min |
-| `POST /otp/change-number` | 3 | 1 hour |
+| `POST /account/phone/change/start` | 3 | 1 hour |
+| `POST /account/phone/change/complete` | 10 | 1 hour |
 | `POST /signup/complete` | 10 | 1 min |
 | `POST /signin/verify-pin` | 10 | 1 min |
 | `POST /security/pin` | 20 | 5 min |
