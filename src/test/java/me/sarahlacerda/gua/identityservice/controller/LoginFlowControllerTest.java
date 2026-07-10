@@ -72,6 +72,7 @@ class LoginFlowControllerTest {
     private static final String SID = "session-id";
     private static final String CSRF = "csrf-token";
     private static final String CALLBACK = "https://mas.example.com/callback";
+    private static final String ENROLL_APP_SCHEME = "global.gua:/oidc";
     private static final String PHONE = "+15551234567";
 
     @Autowired
@@ -509,6 +510,59 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phase").value("COMPLETED"))
                 .andExpect(jsonPath("$.redirectUrl").value(CALLBACK + "?code=auth-code&state=xyz"));
+    }
+
+    /**
+     * An in-app passkey enrollment (already-signed-in user adding a passkey from settings) has
+     * no OIDC authorization in flight, so its session carries no client id. Completing it must
+     * redirect the web view back to the app scheme WITHOUT issuing an authorization code —
+     * previously this ran the login completion and threw {@code clientId must not be null}.
+     */
+    @Test
+    void passkeyEnrollmentVerifyRedirectsToAppSchemeAndIssuesNoCode() throws Exception {
+        LoginSession session = enrollSession();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(post("/login/passkey/register/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.redirectUrl").value(ENROLL_APP_SCHEME));
+
+        verify(passkeyService).finishRegistration(eq(SID), eq(session), any());
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    @Test
+    void passkeyEnrollmentSkipRedirectsToAppSchemeAndIssuesNoCode() throws Exception {
+        LoginSession session = enrollSession();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(post("/login/passkey/setup-skip")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.redirectUrl").value(ENROLL_APP_SCHEME));
+
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    /** Mirrors SecurityController.startPasskeyEnrollment: an enrollment session has no OIDC client. */
+    private LoginSession enrollSession() {
+        LoginSession session = new LoginSession();
+        session.setEnroll(true);
+        session.setUserId("@alice:gua.local");
+        session.setReauthUserId("@alice:gua.local");
+        session.setRedirectUri(ENROLL_APP_SCHEME);
+        session.setCsrfToken(CSRF);
+        session.setPhase(Phase.PASSKEY_SETUP);
+        return session;
     }
 
     @Test

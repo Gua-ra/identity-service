@@ -358,7 +358,7 @@ public class LoginFlowController {
         requirePhase(session, Phase.PASSKEY_SETUP);
 
         passkeyService.finishRegistration(sessionId, session, request.credential());
-        return complete(sessionId, session);
+        return session.isEnroll() ? completeEnrollment(sessionId, session) : complete(sessionId, session);
     }
 
     @PostMapping("/passkey/setup-skip")
@@ -370,7 +370,7 @@ public class LoginFlowController {
         requireCsrf(session, csrf);
         requirePhase(session, Phase.PASSKEY_SETUP);
 
-        return complete(sessionId, session);
+        return session.isEnroll() ? completeEnrollment(sessionId, session) : complete(sessionId, session);
     }
 
     @PostMapping("/passkey/auth/options")
@@ -468,6 +468,34 @@ public class LoginFlowController {
         return ResponseEntity.ok()
                 .header(HttpHeaders.SET_COOKIE, expired.toString())
                 .body(state(session, redirect.toUriString()));
+    }
+
+    /**
+     * Terminal step for the in-app passkey enrollment handoff (an already-signed-in user
+     * adding a passkey from settings, entered via {@code POST /security/passkey/enroll/start}).
+     * Unlike {@link #complete}, there is no OIDC authorization in flight: the session carries
+     * no {@code clientId} / scope / PKCE and nothing is exchanged for a token, so this issues
+     * NO authorization code (attempting to would throw on the null client id). It finalizes the
+     * session, clears the cookie, and hands the web view the app-scheme redirect it was opened
+     * against, so the client's {@code ASWebAuthenticationSession} closes and returns to the app.
+     */
+    private ResponseEntity<LoginStateResponse> completeEnrollment(String sessionId, LoginSession session) {
+        session.setPhase(Phase.COMPLETED);
+        loginSessionService.delete(sessionId);
+
+        ResponseCookie expired = ResponseCookie.from(properties.getCookieName(), "")
+                .httpOnly(true)
+                .secure(properties.isCookieSecure())
+                .sameSite("Lax")
+                .path("/")
+                .maxAge(0)
+                .build();
+
+        // No code/state query params: an app-scheme redirect carrying no OIDC `error` is the
+        // client's success signal for enrollment (see PasskeyEnrollmentPresenter on iOS).
+        return ResponseEntity.ok()
+                .header(HttpHeaders.SET_COOKIE, expired.toString())
+                .body(state(session, session.getRedirectUri()));
     }
 
     private ResponseEntity<LoginStateResponse> advanceToPasskeySetup(String sessionId, LoginSession session) {

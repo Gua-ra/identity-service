@@ -162,6 +162,10 @@ public class SecurityController {
 
         LoginSession session = new LoginSession();
         session.setUserId(userId);
+        // Mark this as an enrollment (not an OIDC login): there is no authorize request,
+        // so passkey-setup completion redirects back to the app scheme instead of issuing
+        // an authorization code (which would NPE on the absent client id).
+        session.setEnroll(true);
         // Pin the session to the authenticated subject. This forces the LOGIN-ONLY
         // contract in LoginFlowController so the enroll flow can never degrade into an
         // open signup/login even though the user is dropped straight at passkey setup.
