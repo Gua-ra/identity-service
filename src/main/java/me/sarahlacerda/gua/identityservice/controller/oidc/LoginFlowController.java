@@ -147,6 +147,11 @@ public class LoginFlowController {
         // country code can never key the OTP / phone digest under a different value and
         // silently mint a duplicate account. Rejects anything that isn't a valid number.
         String phone = phoneNumberNormalizer.toE164(request.phoneNumber());
+        // Beta gate (inert unless enabled): a web flow may only trigger an OTP for a
+        // number that already has an account or is explicitly allowlisted, so an open
+        // deployment cannot be used to burn SMS credits or self-register. Native app
+        // flows are exempt. Runs before the SMS is dispatched.
+        registrationGuard.assertOtpAllowed(session, phone);
         otpService.sendOtp(phone, servletRequest.getRemoteAddr(), request.locale());
 
         session.setPhoneNumber(phone);

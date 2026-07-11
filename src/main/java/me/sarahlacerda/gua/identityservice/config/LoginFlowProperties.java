@@ -77,9 +77,11 @@ public class LoginFlowProperties {
     }
 
     /**
-     * New-account registration controls. Used to gate web signups behind an
-     * allowlist during a limited/invite-only rollout; native (app) signups and
-     * existing-user logins are never affected.
+     * Beta-rollout gate for the web login surface (see {@code RegistrationGuard}).
+     * Used to stop an internet-exposed deployment from being used to burn SMS credits
+     * or self-register open accounts; native (app) flows and every returning user are
+     * never affected. The whole gate is one flag flip ({@link Registration#webAllowlistEnabled})
+     * away from the fully-open behaviour.
      */
     @NotNull
     private Registration registration = new Registration();
@@ -88,16 +90,21 @@ public class LoginFlowProperties {
     @Setter
     public static class Registration {
         /**
-         * When {@code true}, a brand-new account created through the web client may
-         * only be provisioned if its phone number is in {@link #webAllowlist}. Kept
-         * {@code false} by default so the guard is inert until deliberately enabled.
+         * Master switch for the beta gate. When {@code true}, a web flow may only (a)
+         * trigger an OTP and (b) create a brand-new account for a phone that already
+         * has an account or is listed in {@link #webAllowlist}; unknown web numbers are
+         * refused before any SMS is sent. Kept {@code false} by default so the gate is
+         * inert until deliberately enabled, and flipping it back off restores the fully
+         * open flow with no code change.
          */
         private boolean webAllowlistEnabled = false;
 
         /**
-         * Phone numbers (E.164) permitted to create a new web account while
-         * {@link #webAllowlistEnabled} is on. Normalized before comparison, so entries
-         * lacking a country code are interpreted against the default region.
+         * Phone numbers (E.164) permitted to start a new web signup while
+         * {@link #webAllowlistEnabled} is on. Numbers that already have an account do
+         * not need to be listed — they are recognised automatically, which is how an
+         * app-registered number can also log in on the web. Normalized before
+         * comparison, so entries lacking a country code use the default region.
          */
         private List<String> webAllowlist = new ArrayList<>();
 
