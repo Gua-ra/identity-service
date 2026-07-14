@@ -26,6 +26,7 @@ import me.sarahlacerda.gua.identityservice.controller.dto.OtpVerifyResponse;
 import me.sarahlacerda.gua.identityservice.domain.VerifyOtpResult;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.IdentityOrchestrationService;
+import me.sarahlacerda.gua.identityservice.service.RegistrationGuard;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService.DeviceMetadata;
 
 @RestController
@@ -39,6 +40,7 @@ public class OtpController {
 
     private final IdentityOrchestrationService orchestrationService;
     private final AuthenticatedUserAccessor authenticatedUserAccessor;
+    private final RegistrationGuard registrationGuard;
 
     @PostMapping("/send")
     @Operation(summary = "Send an OTP to a user's phone", description = "Creates a one-time password for the supplied phone number, applies rate limits, and dispatches the SMS using the client's preferred language when provided.", security = {})
@@ -50,6 +52,10 @@ public class OtpController {
     public ResponseEntity<Void> sendOtp(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Phone number to receive the OTP and optional language preference", required = true, content = @Content(schema = @Schema(implementation = OtpSendRequest.class))) @RequestBody @Valid OtpSendRequest request,
             @Parameter(hidden = true) HttpServletRequest servletRequest) {
+        // Beta gate (inert unless enabled): this legacy REST endpoint has no login
+        // session, so it is always treated as a web flow — an OTP is dispatched only
+        // for a known or allowlisted number, before any SMS is sent.
+        registrationGuard.assertOtpAllowed(request.getPhone());
         orchestrationService.sendOtp(request.getPhone(), servletRequest.getRemoteAddr(), request.getLanguage());
         return ResponseEntity.accepted().build();
     }

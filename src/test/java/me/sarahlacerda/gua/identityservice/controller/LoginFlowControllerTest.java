@@ -58,14 +58,17 @@ import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 @org.springframework.context.annotation.Import(LoginFlowControllerTest.GuardConfig.class)
 class LoginFlowControllerTest {
 
-    // Use the real RegistrationGuard so the allowlist behaviour is exercised
-    // end-to-end; it is driven through the mocked LoginFlowProperties and
-    // PhoneNumberNormalizer beans in the slice.
+    // Use the real RegistrationGuard so the gate behaviour is exercised end-to-end;
+    // it is driven through the mocked LoginFlowProperties / PhoneNumberNormalizer /
+    // DirectoryService / PhoneNumberHasher / MatrixAdminClient beans in the slice.
     @org.springframework.boot.test.context.TestConfiguration
     static class GuardConfig {
         @org.springframework.context.annotation.Bean
-        RegistrationGuard registrationGuard(LoginFlowProperties properties, PhoneNumberNormalizer normalizer) {
-            return new RegistrationGuard(properties, normalizer);
+        RegistrationGuard registrationGuard(LoginFlowProperties properties, PhoneNumberNormalizer normalizer,
+                DirectoryService directoryService, PhoneNumberHasher phoneNumberHasher,
+                MatrixAdminClient matrixAdminClient) {
+            return new RegistrationGuard(properties, normalizer, directoryService, phoneNumberHasher,
+                    matrixAdminClient);
         }
     }
 
@@ -803,6 +806,118 @@ class LoginFlowControllerTest {
                 .content("{\"code\":\"123456\"}"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("reauth_user_mismatch"));
+    }
+
+    // --- OTP-send gate (before any SMS is dispatched) ---------------------
+
+    /** Performs POST /login/phone for the standard PHONE with the given session. */
+    private org.springframework.test.web.servlet.ResultActions performPhone(LoginSession session) throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        return mockMvc.perform(post("/login/phone")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phoneNumber\":\"" + PHONE + "\",\"locale\":\"pt-BR\"}"));
+    }
+
+    /** Makes the standard PHONE resolve to no account anywhere (unknown number). */
+    private void stubPhoneUnknown() {
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
+        when(matrixAdminClient.findUserIdByPhone(PHONE)).thenReturn(Optional.empty());
+    }
+
+    @Test
+    void otpSendBlockedForUnknownWebNumberBeforeAnySms() throws Exception {
+        when(properties.getRegistration()).thenReturn(enabledAllowlist("+15559999999"));
+        LoginSession session = session(Phase.PHONE);
+        session.setDownstreamClient("web");
+        stubPhoneUnknown();
+
+        performPhone(session)
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("registration_not_approved"));
+
+        // The credit-burn protection: no SMS is ever dispatched for a blocked number.
+        verify(otpService, org.mockito.Mockito.never()).sendOtp(any(), any(), any());
+    }
+
+    @Test
+    void otpSendAllowedForExistingAccountEvenWhenNotAllowlisted() throws Exception {
+        // The "app registers, then the web works too" case: a number already in the
+        // directory (e.g. registered via the mobile app) is recognised automatically
+        // and may receive a login OTP on the web, without being on the allowlist.
+        when(properties.getRegistration()).thenReturn(enabledAllowlist("+15559999999"));
+        LoginSession session = session(Phase.PHONE);
+        session.setDownstreamClient("web");
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(
+                DirectoryEntry.builder().phoneDigest("digest").userId("u1").build()));
+
+        performPhone(session)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("OTP_SENT"));
+
+        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+    }
+
+    @Test
+    void otpSendAllowedForAllowlistedWebNumber() throws Exception {
+        when(properties.getRegistration()).thenReturn(enabledAllowlist(PHONE));
+        LoginSession session = session(Phase.PHONE);
+        session.setDownstreamClient("web");
+
+        performPhone(session)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("OTP_SENT"));
+
+        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+    }
+
+    @Test
+    void otpSendAllowedForNativeFlowRegardlessOfAllowlist() throws Exception {
+        when(properties.getRegistration()).thenReturn(enabledAllowlist("+15559999999"));
+        LoginSession session = session(Phase.PHONE);
+        session.setDownstreamClient("native");
+        stubPhoneUnknown();
+
+        performPhone(session)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("OTP_SENT"));
+
+        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+    }
+
+    @Test
+    void otpSendRecognizesExistingAccountViaHomeserverBindingFallback() throws Exception {
+        // Directory digest misses (pepper drift) but the homeserver phone binding
+        // resolves the returning account: the OTP is still allowed.
+        when(properties.getRegistration()).thenReturn(enabledAllowlist("+15559999999"));
+        LoginSession session = session(Phase.PHONE);
+        session.setDownstreamClient("web");
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
+        when(matrixAdminClient.findUserIdByPhone(PHONE)).thenReturn(Optional.of("@alice:dev.local"));
+
+        performPhone(session)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("OTP_SENT"));
+
+        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+    }
+
+    @Test
+    void otpSendAllowedForUnknownWebNumberWhenGateDisabled() throws Exception {
+        // Default registration (disabled) from setUp(): unknown web numbers still get
+        // an OTP, i.e. flipping the flag off restores the fully-open flow.
+        LoginSession session = session(Phase.PHONE);
+        session.setDownstreamClient("web");
+
+        performPhone(session)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("OTP_SENT"));
+
+        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
     }
 
     @Test

@@ -24,10 +24,13 @@ import me.sarahlacerda.gua.identityservice.controller.dto.OtpVerifyRequest.Devic
 import me.sarahlacerda.gua.identityservice.controller.dto.OtpVerifyResponse;
 import me.sarahlacerda.gua.identityservice.domain.MatrixSession;
 import me.sarahlacerda.gua.identityservice.domain.VerifyOtpResult;
+import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.IdentityOrchestrationService;
+import me.sarahlacerda.gua.identityservice.service.RegistrationGuard;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService.DeviceMetadata;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.http.HttpStatus;
 
 @ExtendWith(MockitoExtension.class)
 class OtpControllerTest {
@@ -38,14 +41,19 @@ class OtpControllerTest {
     @Mock
     private AuthenticatedUserAccessor authenticatedUserAccessor;
 
+    @Mock
+    private RegistrationGuard registrationGuard;
+
     private MockMvc mockMvc;
     private ObjectMapper objectMapper;
 
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
-        OtpController controller = new OtpController(orchestrationService, authenticatedUserAccessor);
+        OtpController controller = new OtpController(orchestrationService, authenticatedUserAccessor,
+                registrationGuard);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
+                .setControllerAdvice(new RestExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter())
                 .build();
     }
@@ -62,6 +70,25 @@ class OtpControllerTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isAccepted());
 
         verify(orchestrationService).sendOtp("+12025550123", "127.0.0.1", "pt-BR");
+    }
+
+    @Test
+    void sendOtpBlockedWhenGateRejectsNumberBeforeDispatch() throws Exception {
+        OtpSendRequest request = new OtpSendRequest();
+        request.setPhone("+12025550123");
+
+        org.mockito.Mockito.doThrow(new LoginFlowException(HttpStatus.FORBIDDEN, "registration_not_approved",
+                "New account sign-ups are currently invite-only. This phone number is not on the list yet."))
+                .when(registrationGuard).assertOtpAllowed("+12025550123");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/otp/send")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(request)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code",
+                        is("registration_not_approved")));
+
+        verify(orchestrationService, org.mockito.Mockito.never()).sendOtp(any(), any(), any());
     }
 
     @Test
