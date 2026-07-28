@@ -75,11 +75,15 @@ jobs:
           sudo k3s kubectl -n gua set image deployment/identity-service identity-service="$IMG"
           sudo k3s kubectl -n gua rollout status deployment/identity-service --timeout=180s
 
-  # MANUAL GATE: only via workflow_dispatch with environment=prod; pauses until a
-  # maintainer approves the `production` GitHub Environment (required reviewer: Sarah).
+  # APPROVAL GATE: fires on every merge to main and on workflow_dispatch with
+  # environment=prod. A merge deploys dev automatically (deploy-dev above) and also
+  # stages this prod deployment, which pauses until a maintainer approves the
+  # `production` GitHub Environment (required reviewer).
   deploy-prod:
     needs: build
-    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'prod'
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod')
     runs-on: [self-hosted, prod]
     environment: production
     steps:
