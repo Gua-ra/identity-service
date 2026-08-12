@@ -836,7 +836,9 @@ class LoginFlowControllerTest {
 
         performPhone(session)
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("registration_not_approved"));
+                .andExpect(jsonPath("$.code").value("registration_not_approved"))
+                .andExpect(jsonPath("$.message").value(
+                        "This number is not approved for web sign-up yet. Gua Web is available to Gua beta testers only."));
 
         // The credit-burn protection: no SMS is ever dispatched for a blocked number.
         verify(otpService, org.mockito.Mockito.never()).sendOtp(any(), any(), any());
