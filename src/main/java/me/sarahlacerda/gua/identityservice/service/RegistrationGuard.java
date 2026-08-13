@@ -16,7 +16,7 @@ import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 
 /**
  * Beta-rollout gate that keeps an internet-exposed deployment from being used to
- * burn SMS credits or self-register open accounts, while leaving the invited
+ * burn SMS credits or self-register open accounts, while leaving the beta
  * mobile apps and every returning user unaffected.
  *
  * <p>
@@ -81,8 +81,8 @@ public class RegistrationGuard {
         if (!isEnabled()) {
             return;
         }
-        // Native app flows are exempt: the apps are distributed to invited testers
-        // only, so they may register brand-new numbers. Everything else (web, or an
+        // Native app flows are exempt: beta testers may register brand-new numbers
+        // through the apps. Everything else (web, or an
         // absent marker) is gated.
         if (session != null && !isWebFlow(session)) {
             return;
@@ -174,6 +174,6 @@ public class RegistrationGuard {
 
     private static LoginFlowException notApproved() {
         return new LoginFlowException(HttpStatus.FORBIDDEN, "registration_not_approved",
-                "New account sign-ups are currently invite-only. This phone number is not on the list yet.");
+                "This number is not approved for web sign-up yet. Gua Web is available to Gua beta testers only.");
     }
 }

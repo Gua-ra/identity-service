@@ -78,7 +78,7 @@ class OtpControllerTest {
         request.setPhone("+12025550123");
 
         org.mockito.Mockito.doThrow(new LoginFlowException(HttpStatus.FORBIDDEN, "registration_not_approved",
-                "New account sign-ups are currently invite-only. This phone number is not on the list yet."))
+                "This number is not approved for web sign-up yet. Gua Web is available to Gua beta testers only."))
                 .when(registrationGuard).assertOtpAllowed("+12025550123");
 
         mockMvc.perform(MockMvcRequestBuilders.post("/otp/send")
