@@ -143,11 +143,18 @@ jobs:
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod')
-    runs-on: [self-hosted, prod]
+    # Scoped in-cluster runner (k8s/cicd/identity-service-deploy-runner-prod.yaml in
+    # gua-deploy), not the shared host runner. Its label is unique on purpose: `prod` was
+    # never carried by anything, so this job used to queue forever instead of failing,
+    # and `dev` is a root runner with cluster-admin that a deploy must never route to.
+    runs-on: [self-hosted, identity-service-incluster-prod]
     environment: production
     steps:
       - name: Roll out ${{ needs.build.outputs.ref }} to prod
         run: |
           IMG="${{ needs.build.outputs.ref }}"
-          sudo k3s kubectl -n gua-prod set image deployment/identity-service identity-service="$IMG"
-          sudo k3s kubectl -n gua-prod rollout status deployment/identity-service --timeout=180s
+          # Plain kubectl against the in-cluster ServiceAccount. The scoped runner has no
+          # sudo and no k3s binary, and it does not need them: its Role permits exactly a
+          # patch of this one Deployment and a read of the resulting rollout.
+          kubectl -n gua-prod set image deployment/identity-service identity-service="$IMG"
+          kubectl -n gua-prod rollout status deployment/identity-service --timeout=180s
