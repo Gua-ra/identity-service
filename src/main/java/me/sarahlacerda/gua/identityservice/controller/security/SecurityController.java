@@ -5,6 +5,7 @@ import java.util.List;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -36,11 +37,13 @@ import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.config.OidcProperties;
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinOperationException;
+import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.Phase;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
+import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 
 @RestController
@@ -57,6 +60,7 @@ public class SecurityController {
     private final LoginSessionService loginSessionService;
     private final LoginFlowProperties loginProperties;
     private final OidcProperties oidcProperties;
+    private final PasskeyService passkeyService;
 
     @GetMapping("/pin/status")
     @Operation(summary = "Check whether the authenticated user has a PIN set", description = "Returns hasPin=true once the user has configured a security PIN. Used by clients to drive the 'set up two-step verification' nudge.", security = @SecurityRequirement(name = "oidcAccessToken"))
@@ -159,6 +163,19 @@ public class SecurityController {
     })
     public ResponseEntity<PasskeyEnrollStartResponse> startPasskeyEnrollment() {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
+
+        // Enrolling a second passkey for an account that already has one cannot succeed.
+        // The ceremony excludes the credentials the account already holds, so the
+        // authenticator refuses, and the browser reports that refusal as a failure rather
+        // than as "you already have one". Every login route already declines to offer
+        // setup in this case, in LoginFlowController.advanceToPasskeySetup. This entry
+        // point skipped the same check, so opening it from settings walked straight into a
+        // ceremony that was guaranteed to fail and left nothing behind, which read from
+        // the outside like passkeys being broken.
+        if (passkeyService.isEnabled() && passkeyService.hasPasskey(userId)) {
+            throw new LoginFlowException(HttpStatus.CONFLICT, "passkey_already_registered",
+                    "This account already has a passkey.");
+        }
 
         LoginSession session = new LoginSession();
         session.setUserId(userId);

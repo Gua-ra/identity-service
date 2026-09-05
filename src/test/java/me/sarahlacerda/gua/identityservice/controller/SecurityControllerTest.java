@@ -29,6 +29,7 @@ import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
+import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 import org.junit.jupiter.api.extension.ExtendWith;
 
@@ -47,6 +48,9 @@ class SecurityControllerTest {
     @Mock
     private LoginSessionService loginSessionService;
 
+    @Mock
+    private PasskeyService passkeyService;
+
     private MockMvc mockMvc;
     private ObjectMapper objectMapper;
     private IdentityServiceProperties properties;
@@ -61,7 +65,7 @@ class SecurityControllerTest {
         oidcProperties = new OidcProperties();
         oidcProperties.setIssuer("https://auth.example.com");
         SecurityController controller = new SecurityController(userSecurityService, authenticatedUserAccessor,
-                properties, directoryService, loginSessionService, loginProperties, oidcProperties);
+                properties, directoryService, loginSessionService, loginProperties, oidcProperties, passkeyService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new RestExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter())
