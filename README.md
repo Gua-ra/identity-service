@@ -341,7 +341,7 @@ Set `IDENTITY_RATE_LIMITS_ENABLED=false` to disable the limiter (e.g., for load 
 
 > **CURRENT IMPLEMENTATION, scheduled for removal.** This is the directory write client that ADM-001 L1b removes; the resolver endpoint it targets is being deleted, not deprecated. It is documented so operators know what the configuration does. Do not add callers to it, and do not read it as the identifier-binding design (that is L7 and L8).
 
-When configured, the service `POST`s `phone → homeserverId` to the resolver's `/directory/entries` at provisioning (and re-affirms it on sign-in), signed with this homeserver's Ed25519 roster signing key. The signature identifies which roster member wrote the row and nothing more. The call is **best-effort**: a resolver outage never blocks sign-up or sign-in, and this service reads its own [directory](#-directory) for its own users. On phone change the service also sends `DELETE /directory/entries`, which the resolver does not implement, so old numbers are not unpublished.
+When configured, the service `POST`s `phone → homeserverId` to the resolver's `/directory/entries` at provisioning (and re-affirms it on sign-in), signed with this homeserver's Ed25519 roster signing key. The signature identifies which roster member wrote the row and nothing more. The call is **best-effort**: a resolver outage never blocks sign-up or sign-in, and this service reads its own [directory](#directory) for its own users. On phone change the service also sends `DELETE /directory/entries`, which the resolver does not implement, so old numbers are not unpublished.
 
 Configuration (`identity.resolver.*`, all blank = disabled, single-homeserver dev works without it):
 
