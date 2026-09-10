@@ -85,8 +85,9 @@ public class MatrixProvisioningService {
 
     /**
      * Returns the E.164 numbers currently linked to {@code userId} on the homeserver,
-     * excluding {@code keep}. Read-only — used to capture the old number(s) before a
-     * phone change so they can be de-discovered at the federation (resolver) layer.
+     * excluding {@code keep}. Read-only: used to capture the old number(s) before a
+     * phone change so {@code ResolverDirectoryClient} can attempt to unpublish them
+     * (a DELETE the resolver does not implement today).
      */
     public List<String> getLinkedPhonesExcluding(String userId, String keep) {
         return matrixAdminClient.getLinkedPhones(userId).stream()

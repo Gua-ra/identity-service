@@ -49,8 +49,11 @@ public class DirectoryEntry {
     private String homeserverId;
 
     /**
-     * Globally-unique (within the Gua federation) human-readable handle, decoupled
-     * from the Matrix user id. Acts as the routing alias for discovery/mentions.
+     * Human-readable handle, unique within this deployment's directory
+     * (case-insensitive index) and stored alongside the Matrix user id. Today the
+     * interactive login path uses the same handle as the MXID localpart. Not
+     * federation-wide: that uniqueness is a property of the sequenced binding log in
+     * ADM-001 (L11, L12).
      */
     @Column(name = "username", length = 64)
     private String username;

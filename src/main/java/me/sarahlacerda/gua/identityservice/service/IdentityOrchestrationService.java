@@ -120,7 +120,7 @@ public class IdentityOrchestrationService {
         // the
         // homeserver drops all linked threepids, so signing back in with the same phone
         // must
-        // restore the binding — otherwise downstream flows that look up the user's
+        // restore the binding. Otherwise downstream flows that look up the user's
         // phone (e.g.
         // /account/reauth/start) will fail with "no phone number linked".
         final MatrixSession session = matrixProvisioningService.ensureSessionForUser(
@@ -131,9 +131,10 @@ public class IdentityOrchestrationService {
 
         final String digest = phoneNumberHasher.digest(e164PhoneNumber);
         directoryService.upsertByDigest(digest, phoneNumberMasker.mask(e164PhoneNumber), userId, resolvedDisplayName);
-        // Keep the shared resolver directory in sync (covers accounts created before this integration).
+        // Also publish to the member-written resolver directory (covers accounts created before this
+        // integration). That write path is the one ADM-001 L1b removes.
         resolverDirectoryClient.registerPhone(e164PhoneNumber);
-        // gua_identity_login_total{result} — successful sign-ins of existing accounts.
+        // gua_identity_login_total{result}: successful sign-ins of existing accounts.
         metrics.counter("gua.identity.login", "result", "success").increment();
         userSecurityService.recordSuccessfulLogin(userId);
         registerDeviceIfPresent(userId, session, deviceMetadata);
@@ -189,11 +190,12 @@ public class IdentityOrchestrationService {
             throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
         }
 
-        // Publish to the gua-resolver shared directory so the federation front door can route this phone
-        // to us (best-effort; the local directory above is authoritative for our own users).
+        // Publish to the member-written gua-resolver directory (best-effort; this service reads its own
+        // local directory above for its own users). That directory is the write path ADM-001 L1b
+        // removes; it is not the identifier binding of L7 and L8.
         resolverDirectoryClient.registerPhone(phone);
 
-        // gua_identity_signup_total{result,country} — completed new-account
+        // gua_identity_signup_total{result,country}: completed new-account
         // registrations, tagged with the ISO region of the (E.164) phone for the
         // Grafana registrations-by-country panel. country is low-cardinality (~200 ISO
         // codes); never tag with the phone itself or any per-user value.

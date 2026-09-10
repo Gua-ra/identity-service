@@ -101,10 +101,13 @@ public class DirectoryService {
     // --- Routing-at-scale (Gua federation) -------------------------------------
 
     /**
-     * Records the routing decision for an account: which homeserver it lives on and
-     * the globally-unique username alias. Looked up by phone digest (the account's
-     * stable directory key). A {@code null} value leaves the existing column
-     * untouched so this is safe to call on re-link.
+     * Records this deployment's routing choice for an account: the homeserver it was
+     * created on and the username alias, which is unique within this directory only.
+     * Looked up by phone digest (the account's stable directory key). A {@code null}
+     * value leaves the existing column untouched so this is safe to call on re-link.
+     * The row is a local record, not the committed placement or identifier binding of
+     * <a href="https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md">ADM-001</a>
+     * (L6, L7).
      */
     @Transactional
     public DirectoryEntry assignRouting(String phoneDigest, String homeserverId, String username) {
@@ -142,9 +145,11 @@ public class DirectoryService {
     }
 
     /**
-     * Resolves a global username to its directory entry (Matrix user id +
-     * homeserver). This is the routing lookup that lets the federation find where a
-     * given identity lives.
+     * Resolves a username to its directory entry (Matrix user id + the homeserver
+     * recorded for it in this deployment's directory). Uniqueness is enforced within
+     * this directory, not across the federation: federation-wide uniqueness is a
+     * property of the sequenced binding log in ADM-001 (L11, L12). Routing before
+     * login is the resolver's own lookup, in which this service takes no part.
      */
     @Transactional(readOnly = true)
     public Optional<DirectoryEntry> resolveByUsername(String username) {

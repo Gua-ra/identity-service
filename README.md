@@ -13,17 +13,17 @@ The **Gua Identity Service** is a Spring Boot microservice that, in the current 
 
 ## ✨ Features
 
-- 📱 **Phone sign-up & sign-in** — request OTP → verify OTP → either provision a new Matrix user, resume an existing session, or fall through to a PIN challenge for users with two-step verification enabled.
-- 🔐 **OTP management** — Redis-backed codes with TTL, per-phone and per-IP hourly caps, localized SMS templates (en / pt-BR), optional Twilio delivery.
-- 🔢 **Account PIN (two-step verification)** — set, OTP-protected change with a 24h cooldown, recovery reset, 5-attempt lockout with a 15-minute lock, and audit logging. A NIST-aligned strength policy rejects non-6-digit, all-repeated, sequential, and common PINs.
-- 🛡️ **Privileged account operations** — fresh, operation-scoped phone-OTP reauthentication gates account deactivation, identity-credential reset, and phone-number change (modeled on Matrix UIA `m.login.msisdn`). Phone changes additionally hard-require a second factor (PIN or passkey), verify the **new** number by OTP, and enforce a per-account cooldown.
-- 🔑 **OpenID Connect provider** — RS256 authorization-code + PKCE flow with an **interactive browser login** (phone → OTP → PIN/profile) that MAS redirects into, discovery/JWKS endpoints, and seeded clients for MAS (confidential) and the Gua apps (public, PKCE-required).
-- 🪪 **Passkeys (WebAuthn)** — after phone verification, the user can optionally **register a passkey** (during onboarding, or later from settings via `/security/passkey/enroll/start`) and later **sign in with it** instead of an SMS code. Built on Yubico `webauthn-server-core`; credentials are persisted (`passkey_credentials`) and the login flow gains a `PASSKEY_SETUP` step.
+- 📱 **Phone sign-up & sign-in**: request OTP → verify OTP → either provision a new Matrix user, resume an existing session, or fall through to a PIN challenge for users with two-step verification enabled.
+- 🔐 **OTP management**: Redis-backed codes with TTL, per-phone and per-IP hourly caps, localized SMS templates (en / pt-BR), optional Twilio delivery.
+- 🔢 **Account PIN (two-step verification)**: set, OTP-protected change with a 24h cooldown, recovery reset, 5-attempt lockout with a 15-minute lock, and audit logging. A NIST-aligned strength policy rejects non-6-digit, all-repeated, sequential, and common PINs.
+- 🛡️ **Privileged account operations**: fresh, operation-scoped phone-OTP reauthentication gates account deactivation, identity-credential reset, and phone-number change (modeled on Matrix UIA `m.login.msisdn`). Phone changes additionally hard-require a second factor (PIN or passkey), verify the **new** number by OTP, and enforce a per-account cooldown.
+- 🔑 **OpenID Connect provider**: RS256 authorization-code + PKCE flow with an **interactive browser login** (phone → OTP → PIN/profile) that MAS redirects into, discovery/JWKS endpoints, and seeded clients for MAS (confidential) and the Gua apps (public, PKCE-required).
+- 🪪 **Passkeys (WebAuthn)**: after phone verification, the user can optionally **register a passkey** (during onboarding, or later from settings via `/security/passkey/enroll/start`) and later **sign in with it** instead of an SMS code. Built on Yubico `webauthn-server-core`; credentials are persisted (`passkey_credentials`) and the login flow gains a `PASSKEY_SETUP` step.
 - 🌐 **Federation directory publishing** (scheduled for removal, ADM-001 L1b): at account provisioning, POSTs `phone → this homeserver` to the **gua-resolver** shared directory (`POST /directory/entries`), signed with the homeserver's Ed25519 roster signing key. Best-effort: a resolver outage never blocks sign-up/sign-in. Not the identifier-binding design; see [Federation directory](#-federation-directory-gua-resolver).
 - 📇 **Directory lookup**: contact discovery by server-side peppered HMAC of the phone number. The raw number is not stored in the directory; the digest plus a display-only masked form (e.g. `••••4567`) is. The shared pepper is the current mechanism, not the target one (ADM-001 L14, L15).
-- 📊 **Prometheus metrics** — Micrometer at `/actuator/prometheus` (HTTP/JVM/DB-pool) plus domain counters (`gua_identity_signup_total`, `gua_identity_login_total`, `gua_identity_otp_verify_total`, `gua_identity_sms_send_total{provider,result}`).
-- 🚦 **Built-in rate limiting** — per-endpoint Resilience4j limiters so the service is safe to run without an upstream WAF.
-- 🗄️ **Persistent identities** — PostgreSQL with Flyway migrations.
+- 📊 **Prometheus metrics**: Micrometer at `/actuator/prometheus` (HTTP/JVM/DB-pool) plus domain counters (`gua_identity_signup_total`, `gua_identity_login_total`, `gua_identity_otp_verify_total`, `gua_identity_sms_send_total{provider,result}`).
+- 🚦 **Built-in rate limiting**: per-endpoint Resilience4j limiters so the service is safe to run without an upstream WAF.
+- 🗄️ **Persistent identities**: PostgreSQL with Flyway migrations.
 - 📚 **OpenAPI/Swagger UI** at `/swagger-ui.html`.
 
 ---
@@ -33,14 +33,14 @@ The **Gua Identity Service** is a Spring Boot microservice that, in the current 
 - **Java 21** (LTS)
 - **Spring Boot 3.5.x**, **Gradle (Groovy DSL)**
 - **Spring Web** (MVC REST controllers) + **Spring WebFlux** (`WebClient` for the Matrix admin API)
-- **Spring Security** — stateless bearer-token auth validated locally against this service's own JWKS
+- **Spring Security**: stateless bearer-token auth validated locally against this service's own JWKS
 - **Spring Data JPA / Hibernate** (PostgreSQL dialect) + **Flyway** for migrations
-- **Spring Data Redis** — OTP codes, PIN-change and phone-change challenges, reauth tokens, signup tokens, authorization codes
-- **Nimbus JOSE + JWT** — RS256 token signing & verification
-- **Resilience4j** — per-endpoint rate limiting
-- **Twilio SDK** — SMS delivery (disabled by default)
-- **springdoc-openapi** — Swagger UI / OpenAPI docs
-- **Bean Validation** — request validation
+- **Spring Data Redis**: OTP codes, PIN-change and phone-change challenges, reauth tokens, signup tokens, authorization codes
+- **Nimbus JOSE + JWT**: RS256 token signing & verification
+- **Resilience4j**: per-endpoint rate limiting
+- **Twilio SDK**: SMS delivery (disabled by default)
+- **springdoc-openapi**: Swagger UI / OpenAPI docs
+- **Bean Validation**: request validation
 
 Testing: **Spring Boot Test**, **Testcontainers** (PostgreSQL), **WireMock** (Matrix admin contract tests). Running `./gradlew test` therefore requires a working Docker daemon.
 
@@ -139,7 +139,7 @@ docker compose -f docker-compose.test.yml down
 
 > ⚠️ **Always source the environment before `bootRun`.** Variables such as `IDENTITY_MATRIX_ADMIN_API_BASE_URL` are interpolated into `WebClient` base URLs; if they are unset the literal `${...}` placeholder reaches `WebClient` and every Matrix-admin call fails with `IllegalArgumentException: Not enough variable values available`. Use `source .env.identity-service` (or source the start script) in the same shell that runs Gradle.
 
-### Local secret files (gitignored — not in the repo)
+### Local secret files (gitignored, not in the repo)
 
 The following files contain development secrets and are intentionally **gitignored**. The dev stack creates or expects them locally; never commit them:
 
@@ -150,7 +150,7 @@ The following files contain development secrets and are intentionally **gitignor
 | `docker/.oidc-jwt-secret` | Local OIDC signing material for the dev stack. |
 | `docker/mas/mas.conf.yaml` | MAS configuration including its signing/encryption secrets and upstream-OIDC client credentials. |
 
-If you don't set `OIDC_RSA_PRIVATE_KEY` / `OIDC_RSA_PUBLIC_KEY`, the service generates an **ephemeral** RSA signing key at startup (and logs a warning) — fine for local dev, but tokens won't survive a restart.
+If you don't set `OIDC_RSA_PRIVATE_KEY` / `OIDC_RSA_PUBLIC_KEY`, the service generates an **ephemeral** RSA signing key at startup (and logs a warning). Fine for local dev, but tokens won't survive a restart.
 
 ---
 
@@ -178,7 +178,7 @@ Interactive docs: **`/swagger-ui.html`** (OpenAPI JSON at `/api-docs`). Endpoint
 | `POST /signup/complete` | Public¹ | Exchange a `signupToken` for a provisioned Matrix user with chosen username/display name. |
 | `POST /signin/verify-pin` | Public¹ | Exchange a `pinChallengeToken` + PIN for a Matrix session (second leg of 2SV sign-in). |
 | `POST /login/passkey/auth/options` | Session² | Start **passkey sign-in** for a returning user: WebAuthn assertion options, offered at the start of the login flow before OTP verification. |
-| `POST /login/passkey/auth/verify` | Session² | Verify the passkey assertion and complete sign-in without an SMS code. Only ever resolves to an existing account — never creates one. |
+| `POST /login/passkey/auth/verify` | Session² | Verify the passkey assertion and complete sign-in without an SMS code. Only ever resolves to an existing account, never creates one. |
 
 ¹ No bearer token, but gated by the single-use token issued from `/otp/verify`.
 
@@ -189,7 +189,7 @@ Interactive docs: **`/swagger-ui.html`** (OpenAPI JSON at `/api-docs`). Endpoint
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
 | `GET /security/pin/status` | Bearer | Whether the user has a PIN set (drives the "set up two-step verification" nudge). |
-| `POST /security/pin` | Bearer | Set the **initial** PIN. Rejects payloads containing `currentPin` — changes must use the flow below. |
+| `POST /security/pin` | Bearer | Set the **initial** PIN. Rejects payloads containing `currentPin`: changes must use the flow below. |
 | `POST /security/pin/change/start` | Bearer | Verify current PIN, enforce the 24h change cooldown, and send an OTP. Returns a challenge id (`425` if cooldown active). |
 | `POST /security/pin/change/complete` | Bearer | Redeem the challenge + OTP to apply the new PIN. |
 | `POST /security/pin/reset` | Public | Begin PIN recovery by sending an OTP to the verified phone. |
@@ -199,7 +199,7 @@ PIN policy is configurable under `identity.security`: `pin-change-cooldown` (def
 
 **PIN strength** is enforced by `PinPolicy` across every set/update/change/reset path: a PIN must be exactly six digits and must not be all-repeated (`000000`), strictly sequential (`123456` / `654321`), or one of a curated list of common PINs. Strength failures surface a distinct `weak_pin` error code (vs `invalid_pin` for a wrong PIN at login). The same rules are mirrored client-side (gua-idp-web, gua-ios) for instant feedback, but the server remains authoritative.
 
-**Username policy** (`UsernamePolicy`, shared by `/signup/check-username`, `/signup/complete`, and the interactive `/login/profile` step): 3–30 chars of lowercase letters, digits, dot, underscore or dash; not reserved; and — matching MAS's registration policy — not all-numeric (so a bare phone number can't become a handle).
+**Username policy** (`UsernamePolicy`, shared by `/signup/check-username`, `/signup/complete`, and the interactive `/login/profile` step): 3–30 chars of lowercase letters, digits, dot, underscore or dash; not reserved; and, matching MAS's registration policy, not all-numeric (so a bare phone number can't become a handle).
 
 ### Passkeys
 
@@ -210,11 +210,11 @@ Passkey **registration** is normally offered during onboarding (see [Interactive
 | `POST /security/passkey/enroll/start` | Bearer | Start in-app passkey enrollment: creates a login session pinned to the authenticated user and returns a one-time `enrollUrl`. |
 | `GET /login/passkey/enroll/{token}` | Public (one-time token) | Redeems the `enrollUrl` in a web view: sets the first-party login cookie and redirects into the sign-in UI at the passkey setup step (`410 enroll_link_expired` once used or expired). |
 
-The pinned session can only reach the passkey-setup step — it can never degrade into an open login or signup. Passkey **sign-in** happens inside the interactive login flow via `POST /login/passkey/auth/options` / `…/verify` (see the quick reference above).
+The pinned session can only reach the passkey-setup step. It can never degrade into an open login or signup. Passkey **sign-in** happens inside the interactive login flow via `POST /login/passkey/auth/options` / `…/verify` (see the quick reference above).
 
 ### Privileged account operations
 
-Each privileged operation requires a fresh **reauth token** proving phone possession, in addition to the bearer token. Reauth tokens are **operation-scoped**: `/account/reauth/verify` takes an `operation` field (`DEACTIVATE` | `IDENTITY_RESET` | `PHONE_CHANGE`; defaults to `DEACTIVATE` for backwards compatibility) and the issued token can only be spent on the matching endpoint — a token minted to authorize a deactivation is not valid for an identity reset or a phone change, and vice versa.
+Each privileged operation requires a fresh **reauth token** proving phone possession, in addition to the bearer token. Reauth tokens are **operation-scoped**: `/account/reauth/verify` takes an `operation` field (`DEACTIVATE` | `IDENTITY_RESET` | `PHONE_CHANGE`; defaults to `DEACTIVATE` for backwards compatibility) and the issued token can only be spent on the matching endpoint: a token minted to authorize a deactivation is not valid for an identity reset or a phone change, and vice versa.
 
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
@@ -225,9 +225,9 @@ Each privileged operation requires a fresh **reauth token** proving phone posses
 | `POST /account/phone/change/start` | Bearer + reauth (`PHONE_CHANGE`) + 2SV | Start a phone-number change: spends the reauth token **plus a second factor** (account PIN and/or passkey assertion), sends an OTP to the new number, and alerts the old number out of band. Returns a challenge id (`425` while the per-account change cooldown is active). |
 | `POST /account/phone/change/complete` | Bearer | Redeem the challenge + new-number OTP to atomically re-bind the account's phone mapping; all outstanding sessions are revoked. |
 
-**Phone changes require two-step verification.** Because the reauth OTP goes to the *current* number — which a SIM-swap attacker may control — `/account/phone/change/start` additionally demands a non-phone factor: the account PIN (always, when one is set) and/or a passkey assertion. Accounts with **neither** a PIN nor a passkey are hard-blocked with `403 step_up_required` and must set up two-step verification (a PIN via `/security/pin`, or a passkey) before they can change their number. There is no token-only fallback.
+**Phone changes require two-step verification.** Because the reauth OTP goes to the *current* number, which a SIM-swap attacker may control, `/account/phone/change/start` additionally demands a non-phone factor: the account PIN (always, when one is set) and/or a passkey assertion. Accounts with **neither** a PIN nor a passkey are hard-blocked with `403 step_up_required` and must set up two-step verification (a PIN via `/security/pin`, or a passkey) before they can change their number. There is no token-only fallback.
 
-**Phone-change cooldown & challenge limits** (configurable under `identity.security`): successful changes are separated by `phone-change-cooldown` (default **24h**) — while it is active `/account/phone/change/start` returns `425` with a `phone_change_cooldown` error code and a `Retry-After` header. Each challenge lives for `phone-change-challenge-ttl` (default **10m**) and allows `max-phone-change-otp-attempts` wrong OTPs (default **5**); at the cap both the challenge and its OTP are destroyed and the flow must restart from `/start`.
+**Phone-change cooldown & challenge limits** (configurable under `identity.security`): successful changes are separated by `phone-change-cooldown` (default **24h**). While it is active, `/account/phone/change/start` returns `425` with a `phone_change_cooldown` error code and a `Retry-After` header. Each challenge lives for `phone-change-challenge-ttl` (default **10m**) and allows `max-phone-change-otp-attempts` wrong OTPs (default **5**); at the cap both the challenge and its OTP are destroyed and the flow must restart from `/start`.
 
 ### Directory
 
@@ -245,13 +245,13 @@ are on Gua (`phone`, `userId`, `username`, `displayName`). The privacy contract:
   peppered HMAC-SHA256 used by the directory; raw numbers are never persisted and never logged.
   The directory itself continues to store only `phone_digest` + a display-only mask.
 - **No client-side hashing, on purpose.** The phone keyspace is small enough that any digest a
-  client could compute (with a necessarily public key) is reversible by dictionary — while shipping
+  client could compute (with a necessarily public key) is reversible by dictionary, while shipping
   the secret pepper to clients would let anyone holding a DB dump reverse the at-rest digests.
   Honest defense is TLS + server-side pepper, not hashing theater.
 - **Enumeration defenses.** Bearer auth required, per-request cap (`identity.directory.max-lookup-batch`,
   default 1000, error `lookup_batch_too_large`), endpoint rate limit (below), and a per-account
   `discoverable` opt-out (V6): accounts with `discoverable = false` never appear in results.
-- Invalid/duplicate address-book entries are skipped silently — one bad contact must not fail a sync.
+- Invalid/duplicate address-book entries are skipped silently: one bad contact must not fail a sync.
 
 ---
 
@@ -271,7 +271,7 @@ The service is a self-contained OIDC provider. It issues the access tokens that 
 
 ### Interactive login flow
 
-For browser-based login (the path used by MAS and the Gua apps), the identity service renders no HTML itself — it exposes a JSON API consumed by the **`gua-idp-web`** single-page app, served same-origin so the login-session cookie stays first-party.
+For browser-based login (the path used by MAS and the Gua apps), the identity service renders no HTML itself: it exposes a JSON API consumed by the **`gua-idp-web`** single-page app, served same-origin so the login-session cookie stays first-party.
 
 1. MAS redirects the browser to `GET /oauth2/authorize`. The validated OIDC request (client, redirect URI, scopes, `state`, `nonce`, PKCE challenge) is stored in a Redis-backed login session and referenced by an opaque, HttpOnly, `SameSite=Lax` cookie. The browser is redirected to `idp.login.ui-url` (default `/signin`, served by `gua-idp-web`; kept distinct from the `/login/*` API).
 2. The UI drives the `/login/*` API, echoing a per-session CSRF token (issued by `GET /login/context`) in the `X-CSRF-Token` header on every state-changing call.
@@ -310,7 +310,7 @@ Additional first-party app clients (web today, Android in future) are registered
 
 ### API authentication
 
-Client-facing REST endpoints require an access token in the `Authorization: Bearer <token>` header. `OidcAccessTokenValidator` first tries to verify the token locally against the published JWKS — checking the RS256 signature, the issuer, that the audience matches a registered client, and that the token has not expired or been revoked. If the token is not one of this service's own JWTs, it falls back to Synapse's `/whoami` endpoint so a native client can reuse its Matrix SDK session token (these tokens are granted no OIDC scopes). Access tokens carry a `jti` and can be invalidated ahead of expiry via a per-user revoke-before cutoff in Redis, which `/account/deactivate`, `/account/reset-identity-credentials`, and `/account/phone/change/complete` set. Authorization codes and other short-lived tokens are stored in Redis to keep the service horizontally scalable.
+Client-facing REST endpoints require an access token in the `Authorization: Bearer <token>` header. `OidcAccessTokenValidator` first tries to verify the token locally against the published JWKS, checking the RS256 signature, the issuer, that the audience matches a registered client, and that the token has not expired or been revoked. If the token is not one of this service's own JWTs, it falls back to Synapse's `/whoami` endpoint so a native client can reuse its Matrix SDK session token (these tokens are granted no OIDC scopes). Access tokens carry a `jti` and can be invalidated ahead of expiry via a per-user revoke-before cutoff in Redis, which `/account/deactivate`, `/account/reset-identity-credentials`, and `/account/phone/change/complete` set. Authorization codes and other short-lived tokens are stored in Redis to keep the service horizontally scalable.
 
 ---
 
@@ -356,7 +356,7 @@ Configuration (`identity.resolver.*`, all blank = disabled, single-homeserver de
 ## 📊 Observability
 
 Micrometer exposes Prometheus metrics at **`/actuator/prometheus`** (enable via
-`MANAGEMENT_ENDPOINTS_EXPOSURE=health,info,prometheus` — the default; the endpoint is permitted in
+`MANAGEMENT_ENDPOINTS_EXPOSURE=health,info,prometheus`, the default; the endpoint is permitted in
 `SecurityConfig` for in-cluster scraping and tagged `application=identity-service`). Alongside the free
 HTTP/JVM/DB-pool metrics, these domain counters drive the Gua usage/reliability dashboards + alerts:
 
@@ -367,7 +367,7 @@ HTTP/JVM/DB-pool metrics, these domain counters drive the Gua usage/reliability 
 | `gua_identity_otp_verify_total{result=valid\|invalid}` | OTP correctness (delivery / abuse signal) |
 | `gua_identity_sms_send_total{provider,result=sent\|failed}` | SMS usage + delivery failures (`provider` = the active `SmsSender`) |
 
-> Keep `/actuator` off the public edge (block it at the ingress/reverse-proxy) — Prometheus scrapes it on the
+> Keep `/actuator` off the public edge (block it at the ingress/reverse-proxy): Prometheus scrapes it on the
 > internal Service.
 
 ## 🚀 Deployment
@@ -382,24 +382,24 @@ docker build -t gua/identity-service:latest .
 
 An example `docker-compose.identity.yml` is included. Provide environment values (either via a `.env` file or directly in your orchestration system) for:
 
-- `SPRING_DATASOURCE_*` – JDBC details for Postgres
-- `SPRING_DATA_REDIS_*` – Redis host/port
-- `IDENTITY_BASE_URL` – publicly reachable base URL; becomes the OIDC `issuer`
-- `IDENTITY_MATRIX_*` – Synapse admin/client base URLs, homeserver domain, and admin token (used for provisioning; token validation is handled locally)
-- `IDENTITY_DIRECTORY_PEPPER` – server-side secret used to hash phone digests (current mechanism; rotating it orphans every stored digest, see ADM-001 L15)
-- `OIDC_RSA_PRIVATE_KEY` / `OIDC_RSA_PUBLIC_KEY` – RSA keypair used to sign and verify RS256 OIDC tokens (an ephemeral key is generated if omitted — not suitable for production)
-- `OIDC_CLIENT_MAS_SECRET` – confidential client secret for the MAS OIDC client
+- `SPRING_DATASOURCE_*`: JDBC details for Postgres
+- `SPRING_DATA_REDIS_*`: Redis host/port
+- `IDENTITY_BASE_URL`: publicly reachable base URL; becomes the OIDC `issuer`
+- `IDENTITY_MATRIX_*`: Synapse admin/client base URLs, homeserver domain, and admin token (used for provisioning; token validation is handled locally)
+- `IDENTITY_DIRECTORY_PEPPER`: server-side secret used to hash phone digests (current mechanism; rotating it orphans every stored digest, see ADM-001 L15)
+- `OIDC_RSA_PRIVATE_KEY` / `OIDC_RSA_PUBLIC_KEY`: RSA keypair used to sign and verify RS256 OIDC tokens (an ephemeral key is generated if omitted, not suitable for production)
+- `OIDC_CLIENT_MAS_SECRET`: confidential client secret for the MAS OIDC client
 - **SMS delivery (Twilio).** By default SMS is logged, not sent (`LoggingSmsSender`). Set
   `IDENTITY_SMS_TWILIO_ENABLED=true` to send real OTPs via Twilio:
-  - `IDENTITY_SMS_TWILIO_ACCOUNTSID` – Twilio Account SID (`AC…`)
-  - `IDENTITY_SMS_TWILIO_AUTHTOKEN` – Twilio Auth Token (secret)
-  - `IDENTITY_SMS_TWILIO_FROMNUMBER` – an SMS-capable Twilio number in E.164 (e.g. `+1…`), **or**
-  - `IDENTITY_SMS_TWILIO_MESSAGINGSERVICESID` – a Twilio Messaging Service SID (`MG…`), preferred for
+  - `IDENTITY_SMS_TWILIO_ACCOUNTSID`: Twilio Account SID (`AC…`)
+  - `IDENTITY_SMS_TWILIO_AUTHTOKEN`: Twilio Auth Token (secret)
+  - `IDENTITY_SMS_TWILIO_FROMNUMBER`: an SMS-capable Twilio number in E.164 (e.g. `+1…`), **or**
+  - `IDENTITY_SMS_TWILIO_MESSAGINGSERVICESID`: a Twilio Messaging Service SID (`MG…`), preferred for
     production (number pool, opt-out/compliance); takes precedence over the from-number when both are set.
 
   (On a Twilio trial account, SMS can only be delivered to verified numbers.)
-- `IDENTITY_RESOLVER_*` – `BASEURL`, `HOMESERVERID`, and `SIGNINGPRIVATEKEY` for the resolver directory write client, scheduled for removal under ADM-001 L1b (see [Federation directory](#-federation-directory-gua-resolver)); leave blank to disable
-- `MANAGEMENT_ENDPOINTS_EXPOSURE` – actuator endpoints to expose (default `health,info,prometheus`)
+- `IDENTITY_RESOLVER_*`: `BASEURL`, `HOMESERVERID`, and `SIGNINGPRIVATEKEY` for the resolver directory write client, scheduled for removal under ADM-001 L1b (see [Federation directory](#-federation-directory-gua-resolver)); leave blank to disable
+- `MANAGEMENT_ENDPOINTS_EXPOSURE`: actuator endpoints to expose (default `health,info,prometheus`)
 
 Then run:
 
