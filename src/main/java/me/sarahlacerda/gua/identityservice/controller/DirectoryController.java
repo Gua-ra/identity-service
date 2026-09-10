@@ -76,7 +76,7 @@ public class DirectoryController {
     @GetMapping("/resolve")
     @Operation(
         summary = "Resolve a global username",
-        description = "Resolves a global Gua username to the account's Matrix user id and the homeserver it lives on. This is the routing lookup that lets the federation locate where an identity is hosted.",
+        description = "Resolves a global Gua username to the account's Matrix user id and the homeserver recorded for it in this deployment's directory. Username uniqueness is enforced within this directory, not across the federation.",
         security = @SecurityRequirement(name = "oidcAccessToken")
     )
     @ApiResponses({

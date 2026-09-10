@@ -15,13 +15,17 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.crypto.Ed25519;
 
 /**
- * Publishes the homeserver's accounts into the gua-resolver's <b>shared</b> phone-&gt;homeserver directory
- * (POST /directory/entries), so the global federation front door can route an existing phone to the homeserver. The
- * write is authenticated with this homeserver's membership credential (its Ed25519 roster signing key), so
- * the resolver only accepts entries for accounts we host.
+ * Publishes this homeserver's accounts into the gua-resolver shared directory (POST /directory/entries).
  *
- * <p>Best-effort by design: a resolver outage must never block sign-up/sign-in (the local directory remains
- * the source of truth for our own users). Disabled cleanly when unconfigured.
+ * <p><b>Scheduled for removal: this is the mechanism <a href="https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md">ADM-001</a> L1b removes.</b> The
+ * resolver endpoint it targets is being deleted, not deprecated, and the verifier-attested identifier binding
+ * of ADM-001 (L7, L8) replaces it. Do not add callers. The class stays until the resolver deletion lands so
+ * the existing wiring keeps compiling.
+ *
+ * <p>Current behaviour: the write is signed with this homeserver's Ed25519 roster signing key, which
+ * identifies the writing member and nothing more; the resolver does not check that the account is hosted
+ * here. Best-effort: a resolver outage never blocks sign-up/sign-in, and this service reads its own local
+ * directory for its own users. Disabled cleanly when unconfigured.
  */
 @Component
 public class ResolverDirectoryClient {
@@ -67,11 +71,11 @@ public class ResolverDirectoryClient {
     }
 
     /**
-     * Remove a phone (E.164) -&gt; this homeserver mapping from the shared directory.
-     * Used when an account's number changes so the OLD number stops resolving to us
-     * at the federation layer. Best-effort and never throws — like
-     * {@link #registerPhone(String)}, the local directory is authoritative and the
-     * resolver re-converges on subsequent writes if this fails.
+     * Sends DELETE /directory/entries for a phone (E.164) -&gt; this homeserver mapping
+     * when an account's number changes. The resolver does not implement that mapping
+     * today, so the old number is not unpublished at the federation layer; the failure
+     * is logged and swallowed. Best-effort and never throws, like
+     * {@link #registerPhone(String)}. Part of the path ADM-001 L1b removes.
      */
     public void unregisterPhone(String e164Phone) {
         if (!enabled) {
@@ -89,8 +93,7 @@ public class ResolverDirectoryClient {
                     .toBodilessEntity();
             log.debug("Unpublished phone (old number) from the shared resolver directory for hs={}", homeserverId);
         } catch (Exception e) {
-            // Non-fatal: stale old-number routing self-heals once the resolver entry expires
-            // or is overwritten; never block the local swap on a resolver outage.
+            // Non-fatal: never block the local swap on a resolver failure.
             log.warn("Could not unpublish from the shared resolver directory (continuing): {}", e.getMessage());
         }
     }

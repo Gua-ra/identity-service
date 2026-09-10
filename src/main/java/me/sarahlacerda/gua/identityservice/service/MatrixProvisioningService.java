@@ -26,9 +26,11 @@ public class MatrixProvisioningService {
 
     /**
      * Generates an opaque, prefixed localpart for a brand-new account on the given
-     * homeserver. The localpart is intentionally NOT the user's chosen handle:
-     * under Gua's routing model the human-readable username lives in the directory
-     * (as a global alias), decoupled from the MXID.
+     * homeserver. Reached only from the legacy non-interactive authorize branch,
+     * which ADM-001 L1a schedules for removal. The interactive login path does not
+     * use it: there the chosen handle is the MXID localpart and the OIDC subject is
+     * the full MXID (see LoginFlowController), which is the starting point for any
+     * subject re-keying (ADM-001 S6). The opaque-MXID model remains a roadmap item.
      */
     public String generateOpaqueUserId(Homeserver homeserver) {
         return homeserver.userId(generateOpaqueLocalpart());

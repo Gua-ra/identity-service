@@ -1,14 +1,18 @@
 package me.sarahlacerda.gua.identityservice.domain;
 
 /**
- * A homeserver that the Gua federation can place accounts on. The identity
- * service is the routing authority: it decides which homeserver a new account
- * lives on and records that decision in the directory so returning users (and
- * username/phone lookups) resolve to the right place.
+ * A homeserver that this deployment can create accounts on.
  *
- * <p>This is a Gua-controlled-federation concept (à la Tchap): every homeserver
- * here is operated by Gua (or a consortium that delegates allocation to this
- * service). It is NOT the open Matrix federation.
+ * <p>Current implementation: this service picks a homeserver for a new account
+ * from its configured registry and records that choice in its own directory, so
+ * returning users (and username/phone lookups) resolve to the same place. That is
+ * a local, per-deployment choice, not the federation placement model. Under
+ * <a href="https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md">ADM-001</a> (L2, L6) placement is coordinated by the federation
+ * and verifiable against signed policy and roster state; allocation is not
+ * delegated to this service.
+ *
+ * <p>This is a closed-federation concept (à la Tchap): the homeservers listed
+ * here are the ones Gua operates. It is NOT the open Matrix federation.
  *
  * @param id              stable identifier used in the directory (never the domain, so a
  *                        homeserver can be re-addressed without rewriting rows)
