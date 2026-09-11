@@ -109,12 +109,14 @@ public class LoginFlowProperties {
         private List<String> webAllowlist = new ArrayList<>();
 
         /**
-         * Value of the forwarded downstream-client marker that identifies the web
-         * client. A session whose downstream marker equals this (or is absent, which
-         * fails closed) is treated as a web signup and subject to the allowlist.
+         * Value of the forwarded downstream-client marker that identifies a native
+         * app flow. Only a session whose marker equals this exactly is exempt from
+         * the gate; an absent, empty or any other value is treated as web (fail
+         * closed). The marker is client-asserted, so the exemption is a convenience
+         * for the beta apps, not a security boundary.
          */
         @NotBlank
-        private String webClientMarker = "web";
+        private String nativeClientMarker = "native";
     }
 
     /**

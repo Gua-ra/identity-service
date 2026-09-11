@@ -19,10 +19,12 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import me.sarahlacerda.gua.identityservice.client.matrix.MatrixAdminClient;
+import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.domain.MatrixSession;
 import me.sarahlacerda.gua.identityservice.domain.VerifyOtpResult;
 import me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException;
+import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneAlreadyLinkedException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
 import me.sarahlacerda.gua.identityservice.service.security.DeviceNotificationService;
@@ -60,6 +62,10 @@ class IdentityOrchestrationServiceTest {
         private final io.micrometer.core.instrument.MeterRegistry meterRegistry =
                         new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
 
+        // Real guard (gate off by default) so the /signup/complete rule is exercised
+        // for real; tests switch it on through these properties.
+        private final LoginFlowProperties loginFlowProperties = new LoginFlowProperties();
+
         private IdentityOrchestrationService service;
 
         @BeforeEach
@@ -77,7 +83,9 @@ class IdentityOrchestrationServiceTest {
                                 trustedDeviceService,
                                 deviceNotificationService,
                                 usernamePolicy,
-                                meterRegistry);
+                                meterRegistry,
+                                new RegistrationGuard(loginFlowProperties, new PhoneNumberNormalizer(),
+                                                directoryService, phoneNumberHasher, matrixAdminClient));
         }
 
         @Test
@@ -232,6 +240,63 @@ class IdentityOrchestrationServiceTest {
                                 .isInstanceOf(PhoneAlreadyLinkedException.class);
 
                 verify(signupTokenService, never()).consume(any());
+        }
+
+        // --- Web registration gate on the REST signup path ----------------------
+
+        private void enableGate(String... allowlist) {
+                loginFlowProperties.getRegistration().setWebAllowlistEnabled(true);
+                loginFlowProperties.getRegistration().setWebAllowlist(List.of(allowlist));
+        }
+
+        private MatrixSession stubSuccessfulSignup(String phone) {
+                String userId = "@alice:gua.global";
+                MatrixSession session = new MatrixSession("token", userId, null, CLIENT_BASE_URL);
+                when(signupTokenService.peek("token")).thenReturn(phone);
+                when(phoneNumberHasher.digest(phone)).thenReturn("digest");
+                when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
+                when(matrixProvisioningService.buildUserId("alice")).thenReturn(userId);
+                when(matrixAdminClient.userExists(userId)).thenReturn(false);
+                when(matrixProvisioningService.ensureSessionForUser(userId, phone, "Alice", true)).thenReturn(session);
+                return session;
+        }
+
+        @Test
+        void completeSignupRefusesNonAllowlistedNewNumberWhenGateEnabled() {
+                enableGate("+12025550199");
+                when(signupTokenService.peek("token")).thenReturn("+12025550123");
+
+                assertThatThrownBy(() -> service.completeSignup("token", "alice", "Alice", null, null))
+                                .isInstanceOf(LoginFlowException.class)
+                                .hasFieldOrPropertyWithValue("code", "registration_not_approved");
+
+                verify(signupTokenService, never()).consume(any());
+                verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(), eq(true));
+                verify(directoryService, never()).upsertByDigest(any(), anyString(), any(), any());
+        }
+
+        @Test
+        void completeSignupProvisionsAllowlistedNewNumberWhenGateEnabled() {
+                enableGate("+12025550123");
+                MatrixSession session = stubSuccessfulSignup("+12025550123");
+
+                MatrixSession result = service.completeSignup("token", "alice", "Alice", null, null);
+
+                verify(signupTokenService).consume("token");
+                verify(directoryService).upsertByDigest(eq("digest"), anyString(), eq("@alice:gua.global"), eq("Alice"));
+                assertThat(result).isEqualTo(session);
+        }
+
+        @Test
+        void completeSignupProvisionsAnyNewNumberWhenGateDisabled() {
+                // Gate off (the default): a populated allowlist is ignored.
+                loginFlowProperties.getRegistration().setWebAllowlist(List.of("+12025550199"));
+                MatrixSession session = stubSuccessfulSignup("+12025550123");
+
+                MatrixSession result = service.completeSignup("token", "alice", "Alice", null, null);
+
+                verify(signupTokenService).consume("token");
+                assertThat(result).isEqualTo(session);
         }
 
         @Test
