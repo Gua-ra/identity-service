@@ -86,6 +86,25 @@ class OidcTokenServiceTest {
         assertClaims(SignedJWT.parse(tokens.idToken()), authorization);
     }
 
+    /**
+     * ADM-001 S6: the subject stays the account's full Matrix user id and
+     * preferred_username is carried verbatim from the authorization. The token service
+     * derives neither.
+     */
+    @Test
+    void subjectStaysTheMatrixUserIdAndPreferredUsernameIsCarriedVerbatim() throws ParseException {
+        OidcAuthorization authorization = new OidcAuthorization(
+                "@alice:dev.local", "+15551234567", "Alice", "alice.s", Set.of("openid", "profile"), "mas", null);
+
+        OidcTokenResponse tokens = tokenService.issueTokens(authorization);
+
+        for (String token : List.of(tokens.accessToken(), tokens.idToken())) {
+            JWTClaimsSet claims = SignedJWT.parse(token).getJWTClaimsSet();
+            assertThat(claims.getSubject()).isEqualTo("@alice:dev.local");
+            assertThat(claims.getStringClaim("preferred_username")).isEqualTo("alice.s");
+        }
+    }
+
     @Test
     void parseAccessTokenRoundTrips() {
         OidcAuthorization authorization = new OidcAuthorization(

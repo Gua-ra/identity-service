@@ -53,4 +53,14 @@ public class UsernamePolicy {
         }
         return normalized;
     }
+
+    /**
+     * Format-only check (3-30 lowercase letters, digits, dot, underscore, or dash),
+     * without the reserved-name and all-numeric rules that apply when choosing a new
+     * handle. Vets the localpart an existing account presents to MAS, which may
+     * predate those rules.
+     */
+    public static boolean hasValidFormat(String localpart) {
+        return localpart != null && USERNAME_PATTERN.matcher(localpart).matches();
+    }
 }

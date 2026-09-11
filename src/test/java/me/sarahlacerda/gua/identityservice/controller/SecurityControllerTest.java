@@ -26,6 +26,7 @@ import me.sarahlacerda.gua.identityservice.controller.dto.PinResetRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinUpdateRequest;
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
+import me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
@@ -65,7 +66,8 @@ class SecurityControllerTest {
         oidcProperties = new OidcProperties();
         oidcProperties.setIssuer("https://auth.example.com");
         SecurityController controller = new SecurityController(userSecurityService, authenticatedUserAccessor,
-                properties, directoryService, loginSessionService, loginProperties, oidcProperties, passkeyService);
+                properties, directoryService, loginSessionService, loginProperties, oidcProperties, passkeyService,
+                new AccountLocalpartResolver(directoryService));
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new RestExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter())
@@ -220,5 +222,44 @@ class SecurityControllerTest {
         // No directory display name -> localpart fallback.
         org.junit.jupiter.api.Assertions.assertEquals("alice", created.getDisplayName());
         org.junit.jupiter.api.Assertions.assertEquals("alice", created.getPreferredUsername());
+    }
+
+    @Test
+    void startPasskeyEnrollmentUsesTheStoredUsername() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
+        org.mockito.Mockito.when(directoryService.findByUserId("@alice:dev.local"))
+                .thenReturn(java.util.List.of(
+                        DirectoryEntry.builder().userId("@alice:dev.local").username("alice.s").build()));
+        org.mockito.Mockito.when(loginSessionService.create(org.mockito.ArgumentMatchers.any(LoginSession.class)))
+                .thenReturn("sess-1");
+        org.mockito.Mockito.when(loginSessionService.newToken()).thenReturn("csrf-1");
+        org.mockito.Mockito.when(loginSessionService.createEnrollToken(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenReturn("tok-1");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/passkey/enroll/start")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+
+        org.mockito.ArgumentCaptor<LoginSession> captor = org.mockito.ArgumentCaptor.forClass(LoginSession.class);
+        verify(loginSessionService).create(captor.capture());
+        org.junit.jupiter.api.Assertions.assertEquals("alice.s", captor.getValue().getPreferredUsername());
+        // No directory display name: the stored username stands in.
+        org.junit.jupiter.api.Assertions.assertEquals("alice.s", captor.getValue().getDisplayName());
+    }
+
+    @Test
+    void startPasskeyEnrollmentRefusesAnAccountWithoutAPerAccountLocalpart() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("ga1abc:x");
+        org.mockito.Mockito.when(directoryService.findByUserId("ga1abc:x")).thenReturn(java.util.List.of());
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/passkey/enroll/start")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status()
+                        .isInternalServerError())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code")
+                        .value("account_identity_inconsistent"));
+
+        verify(loginSessionService, org.mockito.Mockito.never())
+                .create(org.mockito.ArgumentMatchers.any(LoginSession.class));
     }
 }

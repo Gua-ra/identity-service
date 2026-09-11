@@ -1,5 +1,6 @@
 package me.sarahlacerda.gua.identityservice.controller;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -33,6 +34,7 @@ import me.sarahlacerda.gua.identityservice.client.matrix.MatrixAdminClient;
 import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.controller.oidc.LoginFlowController;
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
+import me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.MatrixProvisioningService;
 import me.sarahlacerda.gua.identityservice.service.OtpService;
@@ -69,6 +71,12 @@ class LoginFlowControllerTest {
                 MatrixAdminClient matrixAdminClient) {
             return new RegistrationGuard(properties, normalizer, directoryService, phoneNumberHasher,
                     matrixAdminClient);
+        }
+
+        // The real resolver, so the localpart each returning path emits is exercised end to end.
+        @org.springframework.context.annotation.Bean
+        AccountLocalpartResolver accountLocalpartResolver(DirectoryService directoryService) {
+            return new AccountLocalpartResolver(directoryService);
         }
     }
 
@@ -264,7 +272,8 @@ class LoginFlowControllerTest {
         session.setReauthUserId("u1");
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
         when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
-        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").displayName("Alice").build();
+        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").username("alice")
+                .displayName("Alice").build();
         when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
         when(userSecurityService.hasPin("u1")).thenReturn(false);
 
@@ -317,7 +326,8 @@ class LoginFlowControllerTest {
     void submitOtpForReturningUserWithoutPinRoutesToPasskeySetup() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
         when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
-        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").displayName("Alice").build();
+        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").username("alice")
+                .displayName("Alice").build();
         when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
         when(userSecurityService.hasPin("u1")).thenReturn(false);
 
@@ -336,7 +346,8 @@ class LoginFlowControllerTest {
     void submitOtpForReturningUserWithPinRoutesToPin() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
         when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
-        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").displayName("Alice").build();
+        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").username("alice")
+                .displayName("Alice").build();
         when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
         when(userSecurityService.hasPin("u1")).thenReturn(true);
 
@@ -652,6 +663,8 @@ class LoginFlowControllerTest {
 
         // OTP is bypassed entirely for a proven existing user.
         verify(otpService, org.mockito.Mockito.never()).verifyOtp(any(), any());
+        // The stored username is what MAS is told.
+        assertEquals("alice", issuedAuthorization().preferredUsername());
     }
 
     @Test
@@ -695,6 +708,167 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.code").value("reauth_user_mismatch"));
 
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    @Test
+    void passkeyAuthVerifyWithoutStoredUsernameFallsBackToTheMxidLocalpart() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local"));
+        when(directoryService.findByUserId("@alice:dev.local")).thenReturn(List.of(
+                DirectoryEntry.builder().phoneDigest("digest").userId("@alice:dev.local").displayName("Alice").build()));
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        mockMvc.perform(post("/login/passkey/auth/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+
+        assertEquals("alice", issuedAuthorization().preferredUsername());
+    }
+
+    @Test
+    void passkeyAuthVerifyRefusesNonMatrixUserIdWithoutStoredUsernameAndIssuesNoCode() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("ga1abc:x"));
+        when(directoryService.findByUserId("ga1abc:x")).thenReturn(List.of(
+                DirectoryEntry.builder().phoneDigest("digest").userId("ga1abc:x").displayName("Alice").build()));
+
+        mockMvc.perform(post("/login/passkey/auth/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("account_identity_inconsistent"));
+
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    // --- Existing-account localpart (ADM-001 S6) --------------------------
+
+    /** Lets a returning login finish in one call: the account already has a passkey. */
+    private void stubAccountAlreadyHasPasskey(String userId) {
+        when(passkeyService.isEnabled()).thenReturn(true);
+        when(passkeyService.hasPasskey(userId)).thenReturn(true);
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+    }
+
+    /** The authorization the issued code carries, which is what the tokens will say. */
+    private OidcAuthorization issuedAuthorization() {
+        org.mockito.ArgumentCaptor<OidcAuthorization> captor =
+                org.mockito.ArgumentCaptor.forClass(OidcAuthorization.class);
+        verify(authorizationService).issueCode(captor.capture(), eq(CALLBACK), any());
+        return captor.getValue();
+    }
+
+    private void stubReturningDigest(DirectoryEntry entry) {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
+    }
+
+    private org.springframework.test.web.servlet.ResultActions performOtp() throws Exception {
+        return mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"));
+    }
+
+    @Test
+    void returningUserEmitsTheStoredUsername() throws Exception {
+        stubReturningDigest(DirectoryEntry.builder().phoneDigest("digest").userId("@alice:dev.local")
+                .username("alice.s").displayName("Alice").build());
+        stubAccountAlreadyHasPasskey("@alice:dev.local");
+
+        performOtp()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+
+        OidcAuthorization authorization = issuedAuthorization();
+        // sub stays the MXID; the localpart is the stored username, not the MXID's.
+        assertEquals("@alice:dev.local", authorization.userId());
+        assertEquals("alice.s", authorization.preferredUsername());
+    }
+
+    /** The S6 trap: a re-keyed, colon-bearing user_id must not change what MAS is told. */
+    @Test
+    void returningUserWithReKeyedUserIdStillEmitsTheStoredUsername() throws Exception {
+        stubReturningDigest(DirectoryEntry.builder().phoneDigest("digest").userId("ga1abc:x")
+                .username("alice").displayName("Alice").build());
+        stubAccountAlreadyHasPasskey("ga1abc:x");
+
+        performOtp()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+
+        assertEquals("alice", issuedAuthorization().preferredUsername());
+    }
+
+    @Test
+    void returningUserWithoutStoredUsernameEmitsTheMxidLocalpart() throws Exception {
+        stubReturningDigest(DirectoryEntry.builder().phoneDigest("digest").userId("@alice:dev.local")
+                .displayName("Alice").build());
+        stubAccountAlreadyHasPasskey("@alice:dev.local");
+
+        performOtp()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+
+        assertEquals("alice", issuedAuthorization().preferredUsername());
+    }
+
+    @Test
+    void colonBearingNonMatrixUserIdWithoutStoredUsernameIsRefusedAndIssuesNoCode() throws Exception {
+        stubReturningDigest(DirectoryEntry.builder().phoneDigest("digest").userId("ga1abc:x")
+                .displayName("Alice").build());
+
+        performOtp()
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("account_identity_inconsistent"));
+
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+        verify(loginSessionService, org.mockito.Mockito.never()).save(any(), any());
+        verify(userSecurityService, org.mockito.Mockito.never()).hasPin(any());
+    }
+
+    @Test
+    void fallbackLocalpartHeldByAnotherAccountIsRefusedAndIssuesNoCode() throws Exception {
+        stubReturningDigest(DirectoryEntry.builder().phoneDigest("digest").userId("@alice:dev.local")
+                .displayName("Alice").build());
+        when(directoryService.resolveByUsername("alice")).thenReturn(Optional.of(DirectoryEntry.builder()
+                .phoneDigest("other-digest").userId("@alice:other.local").username("alice").build()));
+
+        performOtp()
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("account_identity_inconsistent"));
+
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    @Test
+    void healedRowTakesTheMxidLocalpartFallback() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        // Digest misses, the homeserver binding recovers the account, the heal writes a row
+        // with no stored username.
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.empty(), Optional.of(
+                DirectoryEntry.builder().phoneDigest("digest").userId("@alice:dev.local").build()));
+        when(matrixAdminClient.findUserIdByPhone(PHONE)).thenReturn(Optional.of("@alice:dev.local"));
+        when(phoneNumberMasker.mask(PHONE)).thenReturn("••••4567");
+        stubAccountAlreadyHasPasskey("@alice:dev.local");
+
+        performOtp()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.newUser").value(false));
+
+        assertEquals("alice", issuedAuthorization().preferredUsername());
     }
 
     // --- Web registration allowlist guard ---------------------------------
@@ -832,7 +1006,8 @@ class LoginFlowControllerTest {
         session.setDownstreamClient("web");
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
         when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
-        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").displayName("Alice").build();
+        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").username("alice")
+                .displayName("Alice").build();
         when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
         when(userSecurityService.hasPin("u1")).thenReturn(false);
 
