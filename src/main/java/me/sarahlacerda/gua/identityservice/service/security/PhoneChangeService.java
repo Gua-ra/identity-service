@@ -1,7 +1,6 @@
 package me.sarahlacerda.gua.identityservice.service.security;
 
 import java.time.Duration;
-import java.util.List;
 import java.util.UUID;
 
 import org.slf4j.Logger;
@@ -24,7 +23,6 @@ import me.sarahlacerda.gua.identityservice.service.MatrixProvisioningService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
-import me.sarahlacerda.gua.identityservice.service.routing.ResolverDirectoryClient;
 import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditLogger;
 
 /**
@@ -46,8 +44,7 @@ import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditL
  * <li>{@code /complete} enforces an IP-independent per-challenge wrong-OTP cap,
  * then performs one atomic directory swap that carries
  * displayName/discoverable/username/homeserverId forward, then post-commit
- * registers the new / unregisters the old number, revokes all tokens, audits and
- * notifies.</li>
+ * revokes all tokens, audits and notifies.</li>
  * </ul>
  */
 @Service
@@ -70,7 +67,6 @@ public class PhoneChangeService {
     private final DirectoryService directoryService;
     private final PhoneDirectorySwapService phoneDirectorySwapService;
     private final MatrixProvisioningService matrixProvisioningService;
-    private final ResolverDirectoryClient resolverDirectoryClient;
     private final TokenRevocationService tokenRevocationService;
     private final SecurityAuditLogger auditLogger;
     private final DeviceNotificationService deviceNotificationService;
@@ -182,10 +178,7 @@ public class PhoneChangeService {
             throw ex;
         }
 
-        // OTP good. Capture the OLD homeserver-linked numbers BEFORE rebinding so we can
-        // de-discover them at the federation layer afterwards (the raw old number is never
-        // stored locally, only its digest/mask; the homeserver is the source of the E.164).
-        List<String> oldE164ForResolver = matrixProvisioningService.getLinkedPhonesExcluding(userId, newE164);
+        // OTP good.
         String oldMasked = directoryService.findMaskedPhoneByUserId(userId).orElse(null);
 
         // Idempotent exclusive binding on the homeserver, then the atomic swap.
@@ -202,9 +195,6 @@ public class PhoneChangeService {
 
         // Post-commit side effects. Each is wrapped so a failure in one never skips
         // revokeAllTokens (the real session-takeover control).
-        bestEffort("resolver.registerPhone(new)", () -> resolverDirectoryClient.registerPhone(newE164));
-        oldE164ForResolver.forEach(old ->
-                bestEffort("resolver.unregisterPhone(old)", () -> resolverDirectoryClient.unregisterPhone(old)));
         bestEffort("revokeAllTokens", () -> tokenRevocationService.revokeAllTokens(userId));
         bestEffort("audit.phoneChangeCompleted", () -> auditLogger.phoneChangeCompleted(userId, newMasked));
         bestEffort("notify.phoneChanged", () -> deviceNotificationService.notifyPhoneChanged(userId, newMasked));

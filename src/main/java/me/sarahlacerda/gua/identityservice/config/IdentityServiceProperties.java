@@ -31,24 +31,6 @@ public class IdentityServiceProperties {
     private final SecurityProperties security = new SecurityProperties();
     private final SmsProperties sms = new SmsProperties();
     private final RateLimitProperties rateLimits = new RateLimitProperties();
-    private final ResolverProperties resolver = new ResolverProperties();
-
-    /**
-     * gua-resolver integration: publish this homeserver's accounts into the member-written
-     * phone-&gt;homeserver directory (POST /directory/entries). That write path is the one
-     * <a href="https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md">ADM-001</a> L1b removes;
-     * these properties stay only until the resolver deletion lands. All blank = disabled
-     * (single-homeserver dev works without it). signingPrivateKey is this homeserver's Ed25519
-     * membership credential (base64 PKCS#8), injected from a Secret; it identifies the writing member
-     * and nothing more.
-     */
-    @Getter
-    @Setter
-    public static class ResolverProperties {
-        private String baseUrl;
-        private String homeserverId;
-        private String signingPrivateKey;
-    }
 
     @Getter
     @Setter
