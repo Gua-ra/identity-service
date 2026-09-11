@@ -184,6 +184,7 @@ Interactive docs: **`/swagger-ui.html`** (OpenAPI JSON at `/api-docs`). Endpoint
 | --- | --- | --- |
 | `POST /otp/send` | Public | Generate and dispatch an OTP to a phone number (rate-limited, localized SMS). |
 | `POST /otp/verify` | Public | Verify an OTP. Returns one of: an existing-user Matrix session, a `signupToken` (new user), or a `pinChallengeToken` (returning user with two-step verification). |
+| `POST /account/genesis` | Public³ | Register an on-device `AccountGenesis`, receive its `accountId` and a single-use attach handle. Off unless `identity.genesis.enabled`. See [Account genesis](#account-genesis-accountid). |
 | `GET /signup/check-username` | Public | Real-time username availability check (format/reserved rules + Matrix lookup). Does not mutate state. |
 | `POST /signup/complete` | Public¹ | Exchange a `signupToken` for a provisioned Matrix user with chosen username/display name. |
 | `POST /signin/verify-pin` | Public¹ | Exchange a `pinChallengeToken` + PIN for a Matrix session (second leg of 2SV sign-in). |
@@ -193,6 +194,42 @@ Interactive docs: **`/swagger-ui.html`** (OpenAPI JSON at `/api-docs`). Endpoint
 ¹ No bearer token, but gated by the single-use token issued from `/otp/verify`.
 
 ² Part of the interactive OIDC login session: requires the login-session cookie plus the CSRF token from `GET /login/context` (see [Interactive login flow](#interactive-login-flow)).
+
+³ No bearer token, and none is possible: registration happens before any OIDC flow exists to authenticate against. The request is self-authenticating instead, carrying a possession proof under the key committed inside the genesis itself.
+
+### Account genesis (`accountId`)
+
+Every account gets a permanent `accountId`, derived from an immutable object that commits the account's initial authority key. This implements Phase 3 of the [gua-resolver migration plan](https://github.com/Gua-ra/gua-resolver/blob/main/docs/migrations/gua-resolver-migration-plan.md), as decided in [ADM-008](https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-008-account-genesis-and-placement-records.md).
+
+**Nothing reads the accountId.** Not routing, not login, not a token claim, not a userinfo field, not a directory column. It is derived, stored and audited, and that is all. The reason is specific: MAS derives the Matrix localpart from an arbitrary template over the imported claims, and an accountId is lowercase letters and digits, so it would pass MAS's localpart rules. A claim carrying one would be a single config line away from re-keying accounts. `AccountIdNotReadGuardTest` fails the build if an accountId reaches any file on the routing, login or claim path.
+
+**The objects.** `AccountGenesis` (suite `0x01`, 87 bytes) commits an Ed25519 authority key, the algorithm identifiers, and an initial recovery authority key and framework. It holds no identifier and no homeserver. `BootstrapGenesis` (suite `0x00`, 22 bytes) commits nothing but random entropy, and marks an account that predates account authority. Both are fixed-layout byte strings, and
+
+```
+accountId = "ga1" || base32(0x01 || rootClass || SHA-256(canonical bytes))
+```
+
+where `rootClass` is `0x01` for a genesis-rooted account and `0x00` for a bootstrap one, so an auditor can tell them apart from the id alone. The digest covers the bytes **as received**, never a re-encoding. An accountId has exactly one spelling: 34 bytes are 272 bits while 55 base32 characters carry 275, so the final character always holds three unused bits and is one of `a`, `i`, `q`, `y`. Decoders match `^ga1[a-z2-7]{54}[aiqy]$`, then decode, re-encode and compare.
+
+Golden vectors live in [`docs/specs/genesis-vectors.v1.json`](docs/specs/genesis-vectors.v1.json): canonical bytes, hashes, accountIds, reproducible signatures under the RFC 8032 published test keys, and every case a conforming decoder must refuse together with the rule that refuses it. The iOS, Android and resolver ports verify against that file, and `GenesisVectorsTest` recomputes every byte of it.
+
+**Registration and attach.** The client registers its genesis at `POST /account/genesis` and gets back a single-use attach handle, stored only as a hash and valid for `identity.genesis.pending-ttl`. It then sends `login_hint = "gua:phone=<E.164>;genesis=<handle>"`, which MAS forwards verbatim.
+
+A handle on its own attaches nothing. Anyone can compose an authorize URL, so the hint is attacker-controlled in both directions, and the dangerous shape is an attacker's own genesis in a URL that prefills the victim's number. The attach therefore needs a second proof: when a session carrying a handle reaches the profile step, the server issues 32 CSPRNG bytes held against that login session, and the client signs the fixed-length preimage (27 domain bytes, then the challenge, then the 34 raw accountId bytes) with the committed authority key. identity-service verifies it against the key inside the stored genesis and derives the accountId itself, reading none from the request. Verification happens inside the account-creation transaction, so a handle that fails to attach fails the whole signup rather than silently falling back to a bootstrap id. A signup presenting no handle at all takes the bootstrap branch, which is not a failure.
+
+**Flags** (all off by default, so a deployment that sets none behaves exactly as it did before this feature existed):
+
+| Property | Env | Default | Effect |
+| --- | --- | --- | --- |
+| `identity.genesis.enabled` | `IDENTITY_GENESIS_ENABLED` | `false` | Master switch. Off: the endpoint answers `503`, the `gua:` hint grammar is not parsed, and no account gets a genesis row. |
+| `identity.genesis.production-issuance` | `IDENTITY_GENESIS_PRODUCTION_ISSUANCE` | `false` | Allows issuing ids under recovery framework `0x01`. Off outside dev: that framework commits no delay bounds, and its recovery key shares the device store with the key it would veto, so production issuance waits on ADM-002. Dev turns it on and treats the ids as disposable. |
+| `identity.genesis.pending-ttl` | `IDENTITY_GENESIS_PENDING_TTL` | `PT30M` | How long a registered genesis stays attachable. |
+| `identity.genesis.require-for-native` | `IDENTITY_GENESIS_REQUIRE_FOR_NATIVE` | `false` | Refuses a native signup that presents no handle instead of giving it a bootstrap id. Flip only once the clients ship genesis. |
+| `identity.genesis.bootstrap-backfill.enabled` | `IDENTITY_GENESIS_BOOTSTRAP_BACKFILL_ENABLED` | `false` | Mints a bootstrap accountId at startup for every existing account that has none. Idempotent and resumable, so it is safe to leave on. |
+
+**Metrics.** `gua_identity_account_genesis_total{origin}` splits accounts into `GENESIS` and `BOOTSTRAP`; `gua_identity_accounts_without_genesis` must reach zero and stay there. Both are read from the database at most once a minute and cached in between.
+
+**Rollback.** Turn the flags off: the endpoint returns `503`, attach is skipped and nothing writes a genesis row. The table stays, because an accountId is permanent and nothing reads it. Drop `account_genesis` (and its `flyway_schema_history` row) only on abandoning the feature.
 
 ### Account PIN (two-step verification)
 
@@ -349,6 +386,7 @@ Every public endpoint is protected by a **Resilience4j**-based rate limiter, so 
 | --- | --- | --- |
 | `POST /otp/send` | 5 | 1 min |
 | `POST /otp/verify` | 10 | 1 min |
+| `POST /account/genesis` | 10 | 1 min |
 | `POST /account/phone/change/start` | 3 | 1 hour |
 | `POST /account/phone/change/complete` | 10 | 1 hour |
 | `POST /signup/complete` | 10 | 1 min |
