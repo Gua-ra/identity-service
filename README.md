@@ -5,26 +5,119 @@
 
 # Gua Identity Service
 
-> **Status: CURRENT IMPLEMENTATION.** This README describes what the service does on `main` today, as an operator or integrator needs it. It is not the target authentication boundary. Under [ADM-001](https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md) each homeserver's own auth service becomes authoritative for login (L2), and the remaining role of this service is a follow-up decision. **TARGET ARCHITECTURE** appears only in [Relationship to the target architecture](#-relationship-to-the-target-architecture) and the documents it links; nothing described there is built.
+> **Status: CURRENT IMPLEMENTATION.** This README describes what the service does on `main` today, for operators and integrators. The service is not the target authentication boundary. In the target design, login authority moves to each homeserver's own auth service, and this service's remaining role is a follow-up decision. That design appears only under the **TARGET ARCHITECTURE** label in [Relationship to the target architecture](#-relationship-to-the-target-architecture) and the documents linked there. Nothing described there is built.
 
-The **Gua Identity Service** is a Spring Boot microservice that, in the current implementation, handles **user identity and authentication** for every Gua homeserver. It owns phone sign-up and sign-in, OTP delivery, the account PIN (two-step verification), privileged account operations (deactivate / identity reset / phone-number change), contact discovery by peppered phone hash, and a self-contained **OpenID Connect provider** that issues the access tokens used to authenticate calls back into this service and to bridge login into Matrix Authentication Service (MAS) / Synapse.
+The Gua Identity Service is a Spring Boot microservice. Today it handles identity and authentication for every Gua homeserver. It owns:
+
+- phone sign-up and sign-in, including OTP delivery;
+- the account PIN, which is Gua's two-step verification;
+- privileged account operations: deactivation, identity reset and phone-number change;
+- contact discovery by peppered phone hash.
+
+It also runs a self-contained OpenID Connect provider. That provider issues the access tokens that authenticate calls back into this service. It also bridges login into Matrix Authentication Service (MAS) and Synapse.
 
 ---
 
-## ✨ Features
+## ✨ What it does today
 
-- 📱 **Phone sign-up & sign-in**: request OTP → verify OTP → either provision a new Matrix user, resume an existing session, or fall through to a PIN challenge for users with two-step verification enabled.
+- 📱 **Phone sign-up & sign-in**: request OTP → verify OTP → one of three outcomes: provision a new Matrix user, resume an existing session, or fall through to a PIN challenge for users with two-step verification enabled.
 - 🔐 **OTP management**: Redis-backed codes with TTL, per-phone and per-IP hourly caps, localized SMS templates (en / pt-BR), optional Twilio delivery.
-- 🔢 **Account PIN (two-step verification)**: set, OTP-protected change with a 24h cooldown, recovery reset, 5-attempt lockout with a 15-minute lock, and audit logging. A NIST-aligned strength policy rejects non-6-digit, all-repeated, sequential, and common PINs.
-- 🛡️ **Privileged account operations**: fresh, operation-scoped phone-OTP reauthentication gates account deactivation, identity-credential reset, and phone-number change (modeled on Matrix UIA `m.login.msisdn`). Phone changes additionally hard-require a second factor (PIN or passkey), verify the **new** number by OTP, and enforce a per-account cooldown.
-- 🔑 **OpenID Connect provider**: RS256 authorization-code + PKCE flow with an **interactive browser login** (phone → OTP → PIN/profile) that MAS redirects into, discovery/JWKS endpoints, and seeded clients for MAS (confidential) and the Gua apps (public, PKCE-required).
-- 🪪 **Passkeys (WebAuthn)**: after phone verification, the user can optionally **register a passkey** (during onboarding, or later from settings via `/security/passkey/enroll/start`) and later **sign in with it** instead of an SMS code. Built on Yubico `webauthn-server-core`; credentials are persisted (`passkey_credentials`) and the login flow gains a `PASSKEY_SETUP` step.
-- 🌐 **Federation directory publishing** (scheduled for removal, ADM-001 L1b): at account provisioning, POSTs `phone → this homeserver` to the **gua-resolver** shared directory (`POST /directory/entries`), signed with the homeserver's Ed25519 roster signing key. Best-effort: a resolver outage never blocks sign-up/sign-in. Not the identifier-binding design; see [Federation directory](#-federation-directory-gua-resolver).
-- 📇 **Directory lookup**: contact discovery by server-side peppered HMAC of the phone number. The raw number is not stored in the directory; the digest plus a display-only masked form (e.g. `••••4567`) is. The shared pepper is the current mechanism, not the target one (ADM-001 L14, L15).
+- 🔢 **Account PIN (two-step verification)**: set, OTP-protected change with a 24h cooldown, recovery reset, 5-attempt lockout with a 15-minute lock, and audit logging. A NIST-aligned strength policy rejects PINs that are not six digits, all-repeated, sequential, or common.
+- 🛡️ **Privileged account operations**: account deactivation, identity-credential reset and phone-number change. Each is gated by a fresh phone-OTP reauthentication scoped to that one operation (modeled on Matrix UIA `m.login.msisdn`). A phone change also hard-requires a second factor (PIN or passkey), verifies the **new** number by OTP, and enforces a per-account cooldown.
+- 🔑 **OpenID Connect provider**: RS256 authorization-code + PKCE flow with an interactive browser login (phone → OTP → PIN or profile) that MAS redirects into. Includes discovery and JWKS endpoints, plus seeded clients for MAS (confidential) and the Gua apps (public, PKCE-required).
+- 🪪 **Passkeys (WebAuthn)**: after phone verification, the user can register a passkey, either during onboarding or later from settings via `/security/passkey/enroll/start`. They can then sign in with it instead of an SMS code. Built on Yubico `webauthn-server-core`. Credentials are persisted in `passkey_credentials`, and the login flow gains a `PASSKEY_SETUP` step.
+- 🌐 **Federation directory publishing** (scheduled for removal): at account provisioning, POSTs `phone → this homeserver` to the gua-resolver shared directory (`POST /directory/entries`), signed with the homeserver's Ed25519 roster signing key. Best-effort: a resolver outage never blocks sign-up or sign-in. This is not the identifier-binding design; see [Federation directory](#-federation-directory-gua-resolver).
+- 📇 **Directory lookup**: contact discovery by server-side peppered HMAC of the phone number. The directory stores the digest plus a display-only masked form (e.g. `••••4567`), never the raw number. The shared pepper is the current mechanism and is scheduled for replacement.
 - 📊 **Prometheus metrics**: Micrometer at `/actuator/prometheus` (HTTP/JVM/DB-pool) plus domain counters (`gua_identity_signup_total`, `gua_identity_login_total`, `gua_identity_otp_verify_total`, `gua_identity_sms_send_total{provider,result}`).
-- 🚦 **Built-in rate limiting**: per-endpoint Resilience4j limiters so the service is safe to run without an upstream WAF.
+- 🚦 **Built-in rate limiting**: per-endpoint Resilience4j limiters, so the service is safe to run without an upstream WAF.
 - 🗄️ **Persistent identities**: PostgreSQL with Flyway migrations.
 - 📚 **OpenAPI/Swagger UI** at `/swagger-ui.html`.
+
+---
+
+## 🏗️ How it fits together
+
+```mermaid
+flowchart LR
+    Clients["Gua Frontend<br/>(iOS, Web, Android)"] -->|phone OTP, PIN,<br/>bearer token| IDS["Identity Service"]
+    IDS -->|provision / admin| Synapse["Synapse<br/>homeserver"]
+    MAS["Matrix Auth Service"] -->|OIDC authorization-code| IDS
+    Clients -->|login via| MAS
+    IDS --- PG[("PostgreSQL")]
+    IDS --- Redis[("Redis")]
+```
+
+Today the identity service plays two roles at once. It is the OIDC provider that MAS delegates phone-OTP login to. It also issues and validates the bearer tokens that its own client-facing REST API requires. Together, those two roles make it the single OIDC provider and the sole credential store for every homeserver. That is the current implementation, not the target; see [Relationship to the target architecture](#-relationship-to-the-target-architecture).
+
+Bearer tokens are primarily verified locally against the published JWKS: RS256 signature, issuer, audience and expiry. A token that is not one of this service's own JWTs is checked against Synapse's `/whoami` endpoint instead. That fallback lets a native client reuse its Matrix SDK session token for a subset of endpoints.
+
+Login works like this. MAS redirects the browser to `GET /oauth2/authorize`. The identity service parks the request in a short-lived, Redis-backed login session and hands off to the `gua-idp-web` single-page UI. That UI walks the user through phone, then OTP, then PIN (returning user) or profile (new user), using the `/login/*` API. Only then is an authorization code issued back to MAS.
+
+---
+
+## 🔭 Relationship to the target architecture
+
+> **TARGET ARCHITECTURE.** Nothing in this section is built. It records where this service sits relative to the frozen design, so that every other section can be read as current state.
+
+Start with the plain-language guide, [Gua identity and federation](https://github.com/Gua-ra/gua-resolver/blob/main/docs/architecture/gua-identity-and-federation.md). The normative record is [ADM-001](https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md). This README does not repeat its reasoning.
+
+- **Login authority moves to the homeserver.** Today this service is the single OIDC provider and the sole credential store for every homeserver. In the target, each homeserver's own auth service decides login. No artifact issued by the federation is a session grant. What remains of this service afterwards is a follow-up decision, tracked as Phase 7 of the [gua-resolver migration plan](https://github.com/Gua-ra/gua-resolver/blob/main/docs/migrations/gua-resolver-migration-plan.md).
+- **Placement and identifier binding become federation concerns.** Placement is which homeserver holds an account. Identifier binding is how an identifier, such as a phone number, is tied to that account. In the target, both are verifiable against signed policy, roster state and verifier attestations. This service's local router and directory table are not that model.
+- **Two code paths are scheduled for removal.** Both are still present today: the legacy non-interactive branch of `GET /oauth2/authorize`, and the resolver directory write client.
+- **The shared directory pepper is the current mechanism.** It is scheduled for replacement.
+- **Existing accounts are the migration input.** Each one is recorded in `directory_entries.homeserver_id`, and its OIDC `sub` is the full Matrix user id. Their migration is tracked in the migration plan.
+
+---
+
+## 🧰 Running it locally
+
+One command starts Redis, Postgres, a disposable Synapse homeserver and a MAS container, then exports the environment variables the service needs:
+
+```bash
+# run and export environment variables into the current shell
+source scripts/start-dev-test-stack.sh
+```
+
+Running the script normally (`bash scripts/start-dev-test-stack.sh`) still launches the containers. It also writes the computed environment variables to `.env.identity-service`. Load them with `source .env.identity-service`, or copy them into IntelliJ.
+
+The script:
+
+1. Starts all dependencies from `docker-compose.test.yml`: PostgreSQL, Redis, a disposable Synapse homeserver, and a MAS container running the `Gua-ra/gua-auth-service` fork image.
+2. Waits for Synapse to become healthy.
+3. Creates (or reuses) an admin Matrix user and captures its access token.
+4. Generates a directory pepper at `docker/.identity-pepper` so hashing stays consistent.
+5. Exports every environment variable the identity service needs.
+
+Once the script has been sourced, run the application with `./gradlew bootRun` or from IntelliJ. No further environment setup is needed. To tear everything down:
+
+```bash
+docker compose -f docker-compose.test.yml down
+```
+
+> ⚠️ **Always source the environment before `bootRun`.** Variables such as `IDENTITY_MATRIX_ADMIN_API_BASE_URL` are interpolated into `WebClient` base URLs. If they are unset, the literal `${...}` placeholder reaches `WebClient`, and every Matrix-admin call fails with `IllegalArgumentException: Not enough variable values available`. Source `.env.identity-service` (or the start script) in the same shell that runs Gradle.
+
+### Local secret files (gitignored, not in the repo)
+
+These files hold development secrets and are intentionally gitignored. The dev stack creates or expects them locally. Never commit them:
+
+| File | Purpose |
+| --- | --- |
+| `.env.identity-service` | Computed env vars written by the start script (Matrix admin token, base URLs, pepper, OIDC keys). |
+| `docker/.identity-pepper` | Server-side pepper used to hash phone numbers for directory lookup. |
+| `docker/.oidc-jwt-secret` | Local OIDC signing material for the dev stack. |
+| `docker/mas/mas.conf.yaml` | MAS configuration including its signing/encryption secrets and upstream-OIDC client credentials. |
+
+If `OIDC_RSA_PRIVATE_KEY` / `OIDC_RSA_PUBLIC_KEY` are not set, the service generates an ephemeral RSA signing key at startup and logs a warning. That is fine for local development, but tokens will not survive a restart.
+
+---
+
+## 🧪 Tests
+
+```bash
+./gradlew test
+```
+
+Integration and contract tests use **Testcontainers** (PostgreSQL) and **WireMock** (Matrix admin API), so a running **Docker** daemon is required.
 
 ---
 
@@ -48,59 +141,28 @@ Infra: **PostgreSQL** (identities), **Redis** (ephemeral tokens), **Synapse** + 
 
 ---
 
-## 🏗️ How it fits together
-
-```mermaid
-flowchart LR
-    Clients["Gua Frontend<br/>(iOS, Web, Android)"] -->|phone OTP, PIN,<br/>bearer token| IDS["Identity Service"]
-    IDS -->|provision / admin| Synapse["Synapse<br/>homeserver"]
-    MAS["Matrix Auth Service"] -->|OIDC authorization-code| IDS
-    Clients -->|login via| MAS
-    IDS --- PG[("PostgreSQL")]
-    IDS --- Redis[("Redis")]
-```
-
-Today the identity service is **both** an OIDC provider (MAS delegates phone-OTP login to it) **and** the issuer/validator of the bearer tokens its own client-facing REST API requires. That makes it the single OIDC provider and sole credential store for every homeserver. It is the current implementation, not the target: ADM-001 L2 places login authority in each homeserver's own auth service. Tokens are primarily verified locally against the published JWKS (RS256 signature, issuer, audience, and expiry). As a fallback, a token that is not one of this service's own JWTs is verified against Synapse's `/whoami` endpoint, which lets a native client reuse its Matrix SDK session token to call a subset of endpoints.
-
-For login, MAS redirects the browser to `GET /oauth2/authorize`; the identity service parks the request in a short-lived, Redis-backed login session and hands off to the **`gua-idp-web`** single-page UI, which walks the user through phone → OTP → PIN (returning) or profile (new user) via the `/login/*` API before an authorization code is issued back to MAS.
-
----
-
-## 🔭 Relationship to the target architecture
-
-> **TARGET ARCHITECTURE.** Nothing in this section is built. It records where this service sits relative to the frozen design, so that every other section is read as the current state.
-
-The plain-language guide is [Gua identity and federation](https://github.com/Gua-ra/gua-resolver/blob/main/docs/architecture/gua-identity-and-federation.md); the normative record is [ADM-001](https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md). Decisions are cited by their ADM-001 label and their reasoning is not repeated here.
-
-- **Authentication moves to the homeserver** (L2). Today this service is the single OIDC provider and the sole credential store for every homeserver. In the target, each homeserver's own auth service decides login, and no federation-issued artifact is a session grant. What remains of this service afterwards is a follow-up decision, tracked as Phase 7 of the [gua-resolver migration plan](https://github.com/Gua-ra/gua-resolver/blob/main/docs/migrations/gua-resolver-migration-plan.md).
-- **Placement and identifier binding are federation concerns** (L6, L7, L8), verifiable against signed policy, roster state and verifier attestations. This service's local router and directory table are not that model.
-- **Two paths here are scheduled for removal, not yet removed**: the legacy non-interactive branch of `GET /oauth2/authorize` (L1a) and the resolver directory write client (L1b).
-- **Existing accounts** recorded in `directory_entries.homeserver_id`, with the OIDC `sub` equal to the Matrix user id, are the migration input tracked as S6.
-
----
-
 ## 🧭 Routing & global usernames
 
-> **CURRENT IMPLEMENTATION.** This section is the per-deployment routing the service performs today. It is not the placement or identifier-binding model of ADM-001 (L2, L6, L7).
+> **CURRENT IMPLEMENTATION.** This section describes the per-deployment routing the service performs today. It is not the placement or identifier-binding model of the target architecture.
 
-Gua runs a closed set of homeservers (à la [Tchap](https://github.com/tchapgouv), the French government's closed Matrix federation), not the open Matrix network. Today this service picks which of its configured homeservers a new account is created on and records that choice in its own directory. Routing before login is the resolver's `POST /resolve`, called by the iOS and Android clients; this service takes no part in that call.
+Gua runs a closed set of homeservers, in the style of [Tchap](https://github.com/tchapgouv), the French government's closed Matrix federation. It does not join the open Matrix network. Today this service picks which of its configured homeservers a new account is created on, and records that choice in its own directory. Routing before login is a separate step: the iOS and Android clients call the resolver's `POST /resolve`, and this service takes no part in that call.
 
-- **Homeserver registry** (`identity.routing.homeservers`) lists the homeservers this deployment can create accounts on (`id`, `domain`, admin URL, region, weight, enabled). When unset, a single homeserver is synthesised from the legacy `identity.matrix.*` properties, so single-homeserver deployments need no config change. This is local configuration, not the federation roster (L10).
-- **Routing layer** (`HomeserverRouter`) picks a homeserver for a **new** account by rule (`single` / `region` / `weighted`) and records it in `directory_entries.homeserver_id`. The choice is local and nothing outside this service can re-derive it; L6 defines the target placement transaction. Moving an existing account between homeservers is not supported here. Matrix has no native migration that preserves identity and key continuity (L9), and Gua placement migration for existing rows is tracked as S6.
-- **Global usernames** are unique within this deployment's directory (case-insensitive), enforced by `directory_entries.username` + a unique index. The username is an **alias** recorded alongside the account's `homeserver_id`. `GET /directory/resolve?username=` returns the MXID + homeserver for a username. A homeserver that runs without this service is not covered by that index, so this is a per-deployment guarantee, not a federation one.
-- The UI treats the full Matrix ID `@id:server` as an implementation detail: users see only their username, and the directory maps it to the MXID + homeserver recorded at signup.
+- **Homeserver registry** (`identity.routing.homeservers`) lists the homeservers this deployment can create accounts on. Each entry has `id`, `domain`, admin URL, region, weight and enabled. When the registry is unset, a single homeserver is synthesised from the legacy `identity.matrix.*` properties, so single-homeserver deployments need no config change. The registry is local configuration, not the federation roster.
+- **Routing layer** (`HomeserverRouter`) picks a homeserver for each new account by rule (`single`, `region` or `weighted`) and records it in `directory_entries.homeserver_id`. The choice is local: nothing outside this service can re-derive it. Moving an existing account between homeservers is not supported here. Matrix has no native migration that preserves identity and key continuity. Placement migration for existing rows is tracked in the gua-resolver migration plan.
+- **Global usernames** are unique within this deployment's directory, case-insensitively. `directory_entries.username` plus a unique index enforce this. The username is an alias recorded alongside the account's `homeserver_id`. `GET /directory/resolve?username=` returns the MXID and homeserver for a username. A homeserver that runs without this service is not covered by that index, so this is a per-deployment guarantee, not a federation one.
+- The UI treats the full Matrix ID `@id:server` as an implementation detail. Users see only their username. The directory maps it to the MXID and homeserver recorded at signup.
 
-> Roadmap: the **opaque-MXID** model (decoupling the human handle from the MXID) is staged as a follow-up because it changes the MAS `preferred_username` → Synapse provisioning chain. Today the chosen handle is both the MXID localpart and the recorded global username, and the OIDC `sub` is the full Matrix user id. Do not read this as account portability between homeservers (L9).
+> Roadmap: an opaque-MXID model, which decouples the human handle from the MXID, is staged as a follow-up. It changes the chain from MAS `preferred_username` to Synapse provisioning. Today the chosen handle is both the MXID localpart and the recorded global username, and the OIDC `sub` is the full Matrix user id. Do not read this as account portability between homeservers.
 
 ---
 
 ## 🔀 MAS fork: `Gua-ra/gua-auth-service`
 
-The identity stack uses **[`Gua-ra/gua-auth-service`](https://github.com/Gua-ra/gua-auth-service)**, a fork of [`element-hq/matrix-authentication-service`](https://github.com/element-hq/matrix-authentication-service) (MAS). In the current topology MAS treats this service as its upstream OIDC issuer. That direction is the current implementation only: ADM-001 L2 makes the homeserver's own auth service authoritative for login.
+The identity stack uses [`Gua-ra/gua-auth-service`](https://github.com/Gua-ra/gua-auth-service), a fork of [`element-hq/matrix-authentication-service`](https://github.com/element-hq/matrix-authentication-service) (MAS). In the current topology, MAS treats this service as its upstream OIDC issuer. That direction is the current implementation only. In the target architecture, the homeserver's own auth service decides login; see [Relationship to the target architecture](#-relationship-to-the-target-architecture).
 
 ### Why a fork?
 
-The upstream consent screen ("Continue to {client}?") exposes the homeserver name to users and adds an extra step for first-party clients. Gua-specific handlers live under `crates/handlers/src/gua/` in the fork, which keeps upstream updates cheap to merge. The fork's `main` currently carries no consent-skip configuration, so every login goes through MAS's consent page; check the fork repository before relying on any `[gua]` config section.
+The upstream consent screen ("Continue to {client}?") exposes the homeserver name to users and adds an extra step for first-party clients. Gua-specific handlers live under `crates/handlers/src/gua/` in the fork, which keeps upstream updates cheap to merge. The fork's `main` currently carries no consent-skip configuration, so every login goes through MAS's consent page. Check the fork repository before relying on any `[gua]` config section.
 
 ### Docker image
 
@@ -109,58 +171,6 @@ Tag convention: `v<upstream-mas-version>-gua.<patch>` (mirrors [Tchap's approach
 ### Upgrading the fork
 
 Follow the fork repository's own documentation for the upgrade runbook.
-
----
-
-
-Spin up Redis, Postgres, and a disposable Synapse homeserver with a single command:
-
-```bash
-# run and export environment variables into the current shell
-source scripts/start-dev-test-stack.sh
-```
-
-
-Running the script normally (`bash scripts/start-dev-test-stack.sh`) will still launch the containers; it also writes the computed environment variables to `.env.identity-service` so you can load them manually with `source .env.identity-service` or copy them into IntelliJ.
-
-What the script does:
-
-1. Starts all dependencies using `docker-compose.test.yml` (PostgreSQL, Redis, a disposable Synapse homeserver, and a **MAS container** running the `Gua-ra/gua-auth-service` fork image).
-2. Waits for Synapse to become healthy.
-3. Creates (or reuses) an admin Matrix user and captures its access token.
-4. Generates a directory pepper (stored at `docker/.identity-pepper`) for consistent hashing.
-5. Exports all required environment variables for the identity service.
-
-Once the script has been sourced you can run the application with `./gradlew bootRun` or from IntelliJ without additional environment setup. To tear everything down:
-
-```bash
-docker compose -f docker-compose.test.yml down
-```
-
-> ⚠️ **Always source the environment before `bootRun`.** Variables such as `IDENTITY_MATRIX_ADMIN_API_BASE_URL` are interpolated into `WebClient` base URLs; if they are unset the literal `${...}` placeholder reaches `WebClient` and every Matrix-admin call fails with `IllegalArgumentException: Not enough variable values available`. Use `source .env.identity-service` (or source the start script) in the same shell that runs Gradle.
-
-### Local secret files (gitignored, not in the repo)
-
-The following files contain development secrets and are intentionally **gitignored**. The dev stack creates or expects them locally; never commit them:
-
-| File | Purpose |
-| --- | --- |
-| `.env.identity-service` | Computed env vars written by the start script (Matrix admin token, base URLs, pepper, OIDC keys). |
-| `docker/.identity-pepper` | Server-side pepper used to hash phone numbers for directory lookup. |
-| `docker/.oidc-jwt-secret` | Local OIDC signing material for the dev stack. |
-| `docker/mas/mas.conf.yaml` | MAS configuration including its signing/encryption secrets and upstream-OIDC client credentials. |
-
-If you don't set `OIDC_RSA_PRIVATE_KEY` / `OIDC_RSA_PUBLIC_KEY`, the service generates an **ephemeral** RSA signing key at startup (and logs a warning). Fine for local dev, but tokens won't survive a restart.
-
----
-
-## 🧪 Tests
-
-```bash
-./gradlew test
-```
-
-Integration and contract tests use **Testcontainers** (PostgreSQL) and **WireMock** (Matrix admin API), so a running **Docker** daemon is required.
 
 ---
 
@@ -199,7 +209,7 @@ PIN policy is configurable under `identity.security`: `pin-change-cooldown` (def
 
 **PIN strength** is enforced by `PinPolicy` across every set/update/change/reset path: a PIN must be exactly six digits and must not be all-repeated (`000000`), strictly sequential (`123456` / `654321`), or one of a curated list of common PINs. Strength failures surface a distinct `weak_pin` error code (vs `invalid_pin` for a wrong PIN at login). The same rules are mirrored client-side (gua-idp-web, gua-ios) for instant feedback, but the server remains authoritative.
 
-**Username policy** (`UsernamePolicy`, shared by `/signup/check-username`, `/signup/complete`, and the interactive `/login/profile` step): 3–30 chars of lowercase letters, digits, dot, underscore or dash; not reserved; and, matching MAS's registration policy, not all-numeric (so a bare phone number can't become a handle).
+**Username policy** (`UsernamePolicy`, shared by `/signup/check-username`, `/signup/complete`, and the interactive `/login/profile` step): 3 to 30 chars of lowercase letters, digits, dot, underscore or dash; not reserved; and, matching MAS's registration policy, not all-numeric (so a bare phone number can't become a handle).
 
 ### Passkeys
 
@@ -257,7 +267,7 @@ are on Gua (`phone`, `userId`, `username`, `displayName`). The privacy contract:
 
 ## 🔐 OpenID Connect provider
 
-The service is a self-contained OIDC provider. It issues the access tokens that protect its own REST API and lets [Matrix Authentication Service (MAS)](https://github.com/element-hq/matrix-authentication-service/) delegate user login to phone-based OTP flows.
+The service is a self-contained OIDC provider. It issues the access tokens that protect its own REST API and lets [Matrix Authentication Service (MAS)](https://github.com/element-hq/matrix-authentication-service/) delegate user login to its phone OTP flows.
 
 ### Endpoints
 
@@ -265,7 +275,7 @@ The service is a self-contained OIDC provider. It issues the access tokens that 
 | --- | --- |
 | `GET /.well-known/openid-configuration` | Discovery metadata (issuer, authorize/token/userinfo/JWKS URLs, supported response/grant types, `S256` PKCE, `RS256`). |
 | `GET /.well-known/jwks.json` | Publishes the **RSA public** signing key so relying parties can verify RS256 tokens. |
-| `GET /oauth2/authorize` | Authorization-code entry point. Validates `client_id`, `redirect_uri`, `response_type=code`, `scope`, and optional `state`/`nonce`/PKCE `code_challenge`, then starts a login session and **redirects to the interactive login UI**. (A legacy non-interactive branch that accepts `phone_number`+`otp_code` directly still exists. It is scheduled for removal under ADM-001 L1a and is not a supported mode; do not build on it.) |
+| `GET /oauth2/authorize` | Authorization-code entry point. Validates `client_id`, `redirect_uri`, `response_type=code`, `scope`, and optional `state`/`nonce`/PKCE `code_challenge`, then starts a login session and **redirects to the interactive login UI**. (A legacy non-interactive branch that accepts `phone_number`+`otp_code` directly still exists. It is scheduled for removal and is not a supported mode; do not build on it.) |
 | `POST /oauth2/token` | Exchanges an authorization code (and PKCE `code_verifier`) for a signed access token + ID token. |
 | `GET /userinfo` | Returns the authenticated subject (`sub`), `phone_number`, `phone_number_masked` (display-only, e.g. `••••4567`), and optional `name` / `preferred_username`. |
 
@@ -291,7 +301,7 @@ For browser-based login (the path used by MAS and the Gua apps), the identity se
 
 New users are walked through profile → `PIN_SETUP` (optional two-step verification) → `PASSKEY_SETUP`; returning users reach `PASSKEY_SETUP` once phone (and any PIN) verification completes, unless the account already has a passkey. Both setup steps can be skipped. A returning user may instead authenticate with a passkey via the `…/auth/*` endpoints.
 
-On success an authorization code is issued, the login session is consumed (and its cookie cleared), and the response carries `redirectUrl` for the UI to navigate back to the client, which exchanges the code at `/oauth2/token`. For new users the chosen handle is emitted as the `preferred_username` claim so MAS uses it as the Matrix localpart on first provisioning. The OIDC `sub` is the account's full Matrix user id on the homeserver chosen at signup (localpart plus homeserver domain): stable, but homeserver-scoped rather than opaque, which is why re-keying subjects is an explicit migration step (ADM-001 S6).
+On success an authorization code is issued, the login session is consumed (and its cookie cleared), and the response carries `redirectUrl` for the UI to navigate back to the client, which exchanges the code at `/oauth2/token`. For new users the chosen handle is emitted as the `preferred_username` claim so MAS uses it as the Matrix localpart on first provisioning. The OIDC `sub` is the account's full Matrix user id on the homeserver chosen at signup (localpart plus homeserver domain). It is stable, but homeserver-scoped rather than opaque, which is why re-keying subjects is an explicit step in the migration plan.
 
 Login-flow configuration (`idp.login.*`): `ui-url` (`IDP_LOGIN_UI_URL`, default `/signin`), `session-ttl` (`IDP_LOGIN_SESSION_TTL`, default `PT10M`), `cookie-name` (`IDP_LOGIN_COOKIE_NAME`, default `gua_login`), and `cookie-secure` (`IDP_LOGIN_COOKIE_SECURE`, default `true`; set `false` only for plain-HTTP local development).
 
@@ -337,13 +347,24 @@ Every public endpoint is protected by a **Resilience4j**-based rate limiter, so 
 Set `IDENTITY_RATE_LIMITS_ENABLED=false` to disable the limiter (e.g., for load testing). Otherwise clients receive HTTP `429` with a JSON body (`{"message":"Rate limit exceeded"}`) and a `Retry-After` header.
 
 ---
+
 ## 🌐 Federation directory (gua-resolver)
 
-> **CURRENT IMPLEMENTATION, scheduled for removal.** This is the directory write client that ADM-001 L1b removes; the resolver endpoint it targets is being deleted, not deprecated. It is documented so operators know what the configuration does. Do not add callers to it, and do not read it as the identifier-binding design (that is L7 and L8).
+> **CURRENT IMPLEMENTATION, scheduled for removal.** This section describes the resolver directory write client. The resolver endpoint it calls is being deleted, not deprecated. The client is documented so operators know what the configuration does. Do not add callers to it. It is not the identifier-binding design; see [Relationship to the target architecture](#-relationship-to-the-target-architecture).
 
-When configured, the service `POST`s `phone → homeserverId` to the resolver's `/directory/entries` at provisioning (and re-affirms it on sign-in), signed with this homeserver's Ed25519 roster signing key. The signature identifies which roster member wrote the row and nothing more. The call is **best-effort**: a resolver outage never blocks sign-up or sign-in, and this service reads its own [directory](#directory) for its own users. On phone change the service also sends `DELETE /directory/entries`, which the resolver does not implement, so old numbers are not unpublished.
+### What it does
 
-Configuration (`identity.resolver.*`, all blank = disabled, single-homeserver dev works without it):
+When configured, the service publishes `phone → homeserverId` to the resolver at `POST /directory/entries`. It does this at provisioning and again on sign-in through `/otp/verify` and `/signin/verify-pin`. The interactive `/login/*` flow and passkey sign-in do not publish. Each request is signed with this homeserver's Ed25519 roster signing key. The signature identifies which roster member wrote the row, and nothing more.
+
+The call is best-effort. A resolver outage never blocks sign-up or sign-in. For its own users, this service reads its own [directory](#directory).
+
+### Hazard: old numbers stay published
+
+On phone change the service also sends `DELETE /directory/entries`. The resolver does not implement that endpoint, so old numbers are never unpublished.
+
+### Configuration
+
+Properties live under `identity.resolver.*`. Leave all of them blank to disable the client; single-homeserver dev works without it.
 
 | Property | Env | Notes |
 | --- | --- | --- |
@@ -351,7 +372,9 @@ Configuration (`identity.resolver.*`, all blank = disabled, single-homeserver de
 | `homeserver-id` | `IDENTITY_RESOLVER_HOMESERVERID` | this homeserver's id in the resolver roster |
 | `signing-private-key` | `IDENTITY_RESOLVER_SIGNINGPRIVATEKEY` | Ed25519 roster signing key, base64 PKCS#8, injected from a Secret |
 
-`IDENTITY_DIRECTORY_PEPPER` is this service's own directory pepper. The resolver has a separate `directory.pepper`, and the two services hash the phone differently, so their digests are not interchangeable even with the same pepper value. The shared-pepper model is the current mechanism and is replaced under ADM-001 L14 and L15.
+### Pepper
+
+`IDENTITY_DIRECTORY_PEPPER` is this service's own directory pepper. The resolver has a separate `directory.pepper`. The two services hash the phone number differently, so their digests are not interchangeable even when the pepper value is the same. The shared-pepper model is the current mechanism and is scheduled for replacement.
 
 ## 📊 Observability
 
@@ -386,7 +409,7 @@ An example `docker-compose.identity.yml` is included. Provide environment values
 - `SPRING_DATA_REDIS_*`: Redis host/port
 - `IDENTITY_BASE_URL`: publicly reachable base URL; becomes the OIDC `issuer`
 - `IDENTITY_MATRIX_*`: Synapse admin/client base URLs, homeserver domain, and admin token (used for provisioning; token validation is handled locally)
-- `IDENTITY_DIRECTORY_PEPPER`: server-side secret used to hash phone digests (current mechanism; rotating it orphans every stored digest, see ADM-001 L15)
+- `IDENTITY_DIRECTORY_PEPPER`: server-side secret used to hash phone digests. This is the current mechanism and is scheduled for replacement; rotating it orphans every stored digest
 - `OIDC_RSA_PRIVATE_KEY` / `OIDC_RSA_PUBLIC_KEY`: RSA keypair used to sign and verify RS256 OIDC tokens (an ephemeral key is generated if omitted, not suitable for production)
 - `OIDC_CLIENT_MAS_SECRET`: confidential client secret for the MAS OIDC client
 - **SMS delivery (Twilio).** By default SMS is logged, not sent (`LoggingSmsSender`). Set
@@ -398,7 +421,7 @@ An example `docker-compose.identity.yml` is included. Provide environment values
     production (number pool, opt-out/compliance); takes precedence over the from-number when both are set.
 
   (On a Twilio trial account, SMS can only be delivered to verified numbers.)
-- `IDENTITY_RESOLVER_*`: `BASEURL`, `HOMESERVERID`, and `SIGNINGPRIVATEKEY` for the resolver directory write client, scheduled for removal under ADM-001 L1b (see [Federation directory](#-federation-directory-gua-resolver)); leave blank to disable
+- `IDENTITY_RESOLVER_*`: `BASEURL`, `HOMESERVERID`, and `SIGNINGPRIVATEKEY` for the resolver directory write client, which is scheduled for removal (see [Federation directory](#-federation-directory-gua-resolver)); leave blank to disable
 - `MANAGEMENT_ENDPOINTS_EXPOSURE`: actuator endpoints to expose (default `health,info,prometheus`)
 
 Then run:
