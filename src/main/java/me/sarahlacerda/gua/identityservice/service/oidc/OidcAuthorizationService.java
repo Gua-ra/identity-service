@@ -14,14 +14,14 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import me.sarahlacerda.gua.identityservice.config.OidcProperties;
-import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
-import me.sarahlacerda.gua.identityservice.service.DirectoryService;
-import me.sarahlacerda.gua.identityservice.service.MatrixProvisioningService;
-import me.sarahlacerda.gua.identityservice.service.OtpService;
-import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
-import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
-import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 
+/**
+ * Mints and redeems OAuth 2.0 authorization codes. This service never
+ * authenticates anyone: the caller must already hold a fully resolved
+ * {@link OidcAuthorization}, which only the interactive login flow produces
+ * after the phone, OTP and PIN/profile steps. The former non-interactive path
+ * that accepted an OTP directly is removed (ADM-001 L1a).
+ */
 @Service
 @RequiredArgsConstructor
 public class OidcAuthorizationService {
@@ -29,43 +29,9 @@ public class OidcAuthorizationService {
     private static final String CODE_KEY_PREFIX = "oidc:code:";
     private static final SecureRandom RANDOM = new SecureRandom();
 
-    private final OtpService otpService;
-    private final DirectoryService directoryService;
-    private final PhoneNumberHasher phoneNumberHasher;
-    private final PhoneNumberMasker phoneNumberMasker;
-    private final MatrixProvisioningService matrixProvisioningService;
-    private final UserSecurityService userSecurityService;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final OidcProperties properties;
-
-    public OidcAuthorizationCode issueAuthorizationCode(OidcAuthorizationRequest request) {
-        otpService.verifyOtp(request.phoneNumber(), request.otpCode());
-
-        String digest = phoneNumberHasher.digest(request.phoneNumber());
-        Optional<DirectoryEntry> existingEntry = directoryService.findByDigest(digest);
-
-        String userId = existingEntry
-                .map(DirectoryEntry::getUserId)
-                .orElseGet(matrixProvisioningService::generateOpaqueUserId);
-
-        String resolvedDisplayName = resolveDisplayName(request.displayName(), existingEntry);
-
-        directoryService.upsertByDigest(digest, phoneNumberMasker.mask(request.phoneNumber()), userId,
-                resolvedDisplayName);
-        userSecurityService.recordSuccessfulLogin(userId);
-
-        OidcAuthorization authorization = new OidcAuthorization(
-                userId,
-                request.phoneNumber(),
-                resolvedDisplayName,
-                null,
-                request.scope(),
-                request.clientId(),
-                null);
-
-        return issueCode(authorization, request.redirectUri(), request.codeChallenge());
-    }
 
     /**
      * Generates a one-time authorization code for an already-authenticated
@@ -133,13 +99,6 @@ public class OidcAuthorizationService {
         byte[] bytes = new byte[32];
         RANDOM.nextBytes(bytes);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-    }
-
-    private String resolveDisplayName(String requested, Optional<DirectoryEntry> existingEntry) {
-        if (requested != null && !requested.isBlank()) {
-            return requested;
-        }
-        return existingEntry.map(DirectoryEntry::getDisplayName).orElse(null);
     }
 
     private record AuthorizationCodePayload(

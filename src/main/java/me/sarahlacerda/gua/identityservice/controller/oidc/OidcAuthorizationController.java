@@ -20,7 +20,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.util.UriComponentsBuilder;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -36,7 +35,6 @@ import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationCode;
-import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationRequest;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcClientService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcClientService.RegisteredClient;
@@ -58,9 +56,10 @@ public class OidcAuthorizationController {
     @Operation(summary = "Initiate the OAuth 2.0 authorization code flow", description = "Entry point used by Matrix Authentication Service. Validates the OIDC request, starts a "
             + "browser login session, and redirects to the interactive login UI (phone -> OTP -> PIN/profile) "
             + "which issues the authorization code once the user is authenticated. Supports PKCE (RFC 7636) via "
-            + "code_challenge / code_challenge_method=S256.")
+            + "code_challenge / code_challenge_method=S256. This endpoint accepts no credentials: an authorization "
+            + "code is only ever issued by the interactive flow at /login/** (ADM-001 L1a).")
     @ApiResponses({
-            @ApiResponse(responseCode = "302", description = "Redirecting to the login UI, or back to the client with an authorization code"),
+            @ApiResponse(responseCode = "302", description = "Redirecting to the login UI"),
             @ApiResponse(responseCode = "400", description = "Unsupported response type, unknown client, or invalid request", content = @Content)
     })
     public ResponseEntity<Void> authorize(
@@ -75,9 +74,6 @@ public class OidcAuthorizationController {
             @Parameter(description = "Optional login hint (E.164 phone) forwarded by MAS to pre-fill the login UI.") @RequestParam(value = "login_hint", required = false) String loginHint,
             @Parameter(description = "OIDC prompt parameter. `login` requests re-authentication of an already signed-in user (login-only).") @RequestParam(value = "prompt", required = false) String prompt,
             @Parameter(description = "OIDC id_token_hint: a previously issued ID token identifying the already-authenticated user for re-authentication.") @RequestParam(value = "id_token_hint", required = false) String idTokenHint,
-            @Parameter(description = "Deprecated: direct phone number for the non-interactive flow. Omit to use the interactive login UI.") @RequestParam(value = "phone_number", required = false) String phoneNumber,
-            @Parameter(description = "Deprecated: OTP for the non-interactive flow. Omit to use the interactive login UI.") @RequestParam(value = "otp_code", required = false) String otpCode,
-            @Parameter(description = "Optional display name (non-interactive flow only).") @RequestParam(value = "display_name", required = false) String displayName,
             @Parameter(description = "Downstream client MAS is authenticating for (`web` for the web client, `native` for the apps). Forwarded by MAS and used to gate web signups behind the registration allowlist.") @RequestParam(value = "gua_downstream", required = false) String guaDownstream) {
         if (!"code".equals(responseType)) {
             throw new OidcInvalidRequestException("unsupported_response_type", "Only response_type=code is supported");
@@ -89,25 +85,10 @@ public class OidcAuthorizationController {
         clientService.validateScope(client, scopes);
         clientService.validateChallenge(client, codeChallenge, codeChallengeMethod);
 
-        // Legacy non-interactive flow: credentials supplied directly as query params.
-        // Retained for backward compatibility; new clients omit them and use the
-        // interactive login UI below.
-        if (phoneNumber != null && otpCode != null) {
-            OidcAuthorizationRequest request = new OidcAuthorizationRequest(
-                    clientId, redirectUri, scopes, phoneNumber, otpCode, displayName, codeChallenge,
-                    codeChallengeMethod);
-            OidcAuthorizationCode authorizationCode = authorizationService.issueAuthorizationCode(request);
-            UriComponentsBuilder redirect = UriComponentsBuilder.fromUriString(redirectUri)
-                    .queryParam("code", authorizationCode.code());
-            if (state != null) {
-                redirect.queryParam("state", state);
-            }
-            return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(redirect.toUriString())).build();
-        }
-
-        // Interactive flow: park the validated request in a login session and hand off
-        // to the browser UI, which walks phone -> OTP -> PIN/profile before the
-        // authorization code is issued at /login/**.
+        // Park the validated request in a login session and hand off to the browser
+        // UI, which walks phone -> OTP -> PIN/profile before the authorization code is
+        // issued at /login/**. There is no other way to obtain a code: the former
+        // non-interactive branch (OTP as a query parameter) is gone, per ADM-001 L1a.
         LoginSession session = new LoginSession();
         session.setClientId(clientId);
         session.setRedirectUri(redirectUri);
