@@ -26,7 +26,6 @@ It also runs a self-contained OpenID Connect provider. That provider issues the 
 - 🛡️ **Privileged account operations**: account deactivation, identity-credential reset and phone-number change. Each is gated by a fresh phone-OTP reauthentication scoped to that one operation (modeled on Matrix UIA `m.login.msisdn`). A phone change also hard-requires a second factor (PIN or passkey), verifies the **new** number by OTP, and enforces a per-account cooldown.
 - 🔑 **OpenID Connect provider**: RS256 authorization-code + PKCE flow with an interactive browser login (phone → OTP → PIN or profile) that MAS redirects into. Includes discovery and JWKS endpoints, plus seeded clients for MAS (confidential) and the Gua apps (public, PKCE-required).
 - 🪪 **Passkeys (WebAuthn)**: after phone verification, the user can register a passkey, either during onboarding or later from settings via `/security/passkey/enroll/start`. They can then sign in with it instead of an SMS code. Built on Yubico `webauthn-server-core`. Credentials are persisted in `passkey_credentials`, and the login flow gains a `PASSKEY_SETUP` step.
-- 🌐 **Federation directory publishing** (scheduled for removal): at account provisioning, POSTs `phone → this homeserver` to the gua-resolver shared directory (`POST /directory/entries`), signed with the homeserver's Ed25519 roster signing key. Best-effort: a resolver outage never blocks sign-up or sign-in. This is not the identifier-binding design; see [Federation directory](#-federation-directory-gua-resolver).
 - 📇 **Directory lookup**: contact discovery by server-side peppered HMAC of the phone number. The directory stores the digest plus a display-only masked form (e.g. `••••4567`), never the raw number. The shared pepper is the current mechanism and is scheduled for replacement.
 - 📊 **Prometheus metrics**: Micrometer at `/actuator/prometheus` (HTTP/JVM/DB-pool) plus domain counters (`gua_identity_signup_total`, `gua_identity_login_total`, `gua_identity_otp_verify_total`, `gua_identity_sms_send_total{provider,result}`).
 - 🚦 **Built-in rate limiting**: per-endpoint Resilience4j limiters, so the service is safe to run without an upstream WAF.
@@ -63,7 +62,7 @@ Start with the plain-language guide, [Gua identity and federation](https://githu
 
 - **Login authority moves to the homeserver.** Today this service is the single OIDC provider and the sole credential store for every homeserver. In the target, each homeserver's own auth service decides login. No artifact issued by the federation is a session grant. What remains of this service afterwards is a follow-up decision, tracked as Phase 7 of the [gua-resolver migration plan](https://github.com/Gua-ra/gua-resolver/blob/main/docs/migrations/gua-resolver-migration-plan.md).
 - **Placement and identifier binding become federation concerns.** Placement is which homeserver holds an account. Identifier binding is how an identifier, such as a phone number, is tied to that account. In the target, both are verifiable against signed policy, roster state and verifier attestations. This service's local router and directory table are not that model.
-- **Two code paths are scheduled for removal.** Both are still present today: the legacy non-interactive branch of `GET /oauth2/authorize`, and the resolver directory write client.
+- **The resolver directory write client is removed.** Sign-up, sign-in and phone change no longer publish anything to the resolver; see [Federation directory](#-federation-directory-gua-resolver). The legacy non-interactive branch of `GET /oauth2/authorize` is still present today and remains scheduled for removal.
 - **The shared directory pepper is the current mechanism.** It is scheduled for replacement.
 - **Existing accounts are the migration input.** Each one is recorded in `directory_entries.homeserver_id`, and its OIDC `sub` is the full Matrix user id. Their migration is tracked in the migration plan.
 
@@ -350,27 +349,14 @@ Set `IDENTITY_RATE_LIMITS_ENABLED=false` to disable the limiter (e.g., for load 
 
 ## 🌐 Federation directory (gua-resolver)
 
-> **CURRENT IMPLEMENTATION, scheduled for removal.** This section describes the resolver directory write client. The resolver endpoint it calls is being deleted, not deprecated. The client is documented so operators know what the configuration does. Do not add callers to it. It is not the identifier-binding design; see [Relationship to the target architecture](#-relationship-to-the-target-architecture).
+> **REMOVED.** This service no longer writes to the gua-resolver directory. The client that did (`POST /directory/entries`, signed with this homeserver's roster key) was the member-authorized directory mutation that [ADM-001](https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md) L1b rejects: the resolver accepted any active member's key for any row, so a member could bind any phone number to itself. The client, its properties and its call sites are deleted, and `ResolverDirectoryPublishRemovedTest` fails the build if the write path comes back.
 
-### What it does
+### What this means
 
-When configured, the service publishes `phone → homeserverId` to the resolver at `POST /directory/entries`. It does this at provisioning and again on sign-in through `/otp/verify` and `/signin/verify-pin`. The interactive `/login/*` flow and passkey sign-in do not publish. Each request is signed with this homeserver's Ed25519 roster signing key. The signature identifies which roster member wrote the row, and nothing more.
-
-The call is best-effort. A resolver outage never blocks sign-up or sign-in. For its own users, this service reads its own [directory](#directory).
-
-### Hazard: old numbers stay published
-
-On phone change the service also sends `DELETE /directory/entries`. The resolver does not implement that endpoint, so old numbers are never unpublished.
-
-### Configuration
-
-Properties live under `identity.resolver.*`. Leave all of them blank to disable the client; single-homeserver dev works without it.
-
-| Property | Env | Notes |
-| --- | --- | --- |
-| `base-url` | `IDENTITY_RESOLVER_BASEURL` | resolver base URL (e.g. the in-cluster service) |
-| `homeserver-id` | `IDENTITY_RESOLVER_HOMESERVERID` | this homeserver's id in the resolver roster |
-| `signing-private-key` | `IDENTITY_RESOLVER_SIGNINGPRIVATEKEY` | Ed25519 roster signing key, base64 PKCS#8, injected from a Secret |
+- Sign-up, sign-in (`/otp/verify`, `/signin/verify-pin`) and phone change complete without contacting the resolver. For this deployment's own users they read and write only this service's own [directory](#directory), as they always did.
+- The resolver's read path is unaffected. Clients still route before login through the resolver's `POST /resolve`, in which this service takes no part.
+- Rows this service published earlier are left in place in the resolver directory until placement records replace them. Nothing here removes or rewrites them, including old numbers from past phone changes, which were never unpublished because the resolver had no delete. That migration is tracked in the [gua-resolver migration plan](https://github.com/Gua-ra/gua-resolver/blob/main/docs/migrations/gua-resolver-migration-plan.md).
+- The `identity.resolver.*` properties no longer exist. `IDENTITY_RESOLVER_BASEURL`, `IDENTITY_RESOLVER_HOMESERVERID` and `IDENTITY_RESOLVER_SIGNINGPRIVATEKEY` are ignored if a manifest still sets them: nothing binds those names and unknown environment variables do not fail startup (`IdentityServicePropertiesResolverEnvTest`). Remove them, and the signing-key Secret, from the deployment when convenient.
 
 ### Pepper
 
@@ -421,7 +407,6 @@ An example `docker-compose.identity.yml` is included. Provide environment values
     production (number pool, opt-out/compliance); takes precedence over the from-number when both are set.
 
   (On a Twilio trial account, SMS can only be delivered to verified numbers.)
-- `IDENTITY_RESOLVER_*`: `BASEURL`, `HOMESERVERID`, and `SIGNINGPRIVATEKEY` for the resolver directory write client, which is scheduled for removal (see [Federation directory](#-federation-directory-gua-resolver)); leave blank to disable
 - `MANAGEMENT_ENDPOINTS_EXPOSURE`: actuator endpoints to expose (default `health,info,prometheus`)
 
 Then run:

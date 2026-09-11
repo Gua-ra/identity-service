@@ -10,6 +10,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -38,7 +39,6 @@ import me.sarahlacerda.gua.identityservice.service.MatrixProvisioningService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
-import me.sarahlacerda.gua.identityservice.service.routing.ResolverDirectoryClient;
 import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditLogger;
 
 @ExtendWith(MockitoExtension.class)
@@ -73,8 +73,6 @@ class PhoneChangeServiceTest {
     @Mock
     private MatrixProvisioningService matrixProvisioningService;
     @Mock
-    private ResolverDirectoryClient resolverDirectoryClient;
-    @Mock
     private TokenRevocationService tokenRevocationService;
     @Mock
     private SecurityAuditLogger auditLogger;
@@ -100,7 +98,6 @@ class PhoneChangeServiceTest {
                 directoryService,
                 phoneDirectorySwapService,
                 matrixProvisioningService,
-                resolverDirectoryClient,
                 tokenRevocationService,
                 auditLogger,
                 deviceNotificationService);
@@ -301,28 +298,34 @@ class PhoneChangeServiceTest {
     @Test
     void completeRunsPostCommitSideEffectsEachOnceInOrder() {
         primeSuccessfulComplete();
-        when(matrixProvisioningService.getLinkedPhonesExcluding(USER, NEW_E164))
-                .thenReturn(List.of("+15145550000"));
 
         service.completePhoneNumberChange(USER, CHALLENGE, "123456", "1.2.3.4");
 
-        InOrder inOrder = inOrder(phoneDirectorySwapService, resolverDirectoryClient, tokenRevocationService,
+        InOrder inOrder = inOrder(phoneDirectorySwapService, tokenRevocationService,
                 auditLogger, deviceNotificationService);
         inOrder.verify(phoneDirectorySwapService).swap(USER, NEW_E164);
-        inOrder.verify(resolverDirectoryClient).registerPhone(NEW_E164);
-        inOrder.verify(resolverDirectoryClient).unregisterPhone("+15145550000");
         inOrder.verify(tokenRevocationService).revokeAllTokens(USER);
         inOrder.verify(auditLogger).phoneChangeCompleted(eq(USER), anyString());
         inOrder.verify(deviceNotificationService).notifyPhoneChanged(eq(USER), anyString());
     }
 
     @Test
-    void completeStillRevokesTokensWhenNotifyOrResolverFails() {
+    void completeTouchesTheHomeserverOnlyToBindTheNewNumber() {
         primeSuccessfulComplete();
-        when(matrixProvisioningService.getLinkedPhonesExcluding(USER, NEW_E164))
-                .thenReturn(List.of("+15145550000"));
-        doThrow(new RuntimeException("resolver down")).when(resolverDirectoryClient).registerPhone(NEW_E164);
-        doThrow(new RuntimeException("resolver down")).when(resolverDirectoryClient).unregisterPhone(anyString());
+
+        service.completePhoneNumberChange(USER, CHALLENGE, "123456", "1.2.3.4");
+
+        // The old numbers used to be read back from the homeserver so they could be
+        // unpublished from the resolver directory. That publishing client is gone
+        // (ADM-001 L1b): binding the new number is the only homeserver interaction left,
+        // and nothing in this flow talks to the resolver at all.
+        verify(matrixProvisioningService).ensureExclusivePhoneBinding(USER, NEW_E164);
+        verifyNoMoreInteractions(matrixProvisioningService);
+    }
+
+    @Test
+    void completeStillRevokesTokensWhenNotifyFails() {
+        primeSuccessfulComplete();
         doThrow(new RuntimeException("push down")).when(deviceNotificationService)
                 .notifyPhoneChanged(anyString(), anyString());
 
@@ -368,7 +371,5 @@ class PhoneChangeServiceTest {
         // phoneChangeOtpService.verify(...) returns void on success (no stub -> no throw).
         org.mockito.Mockito.lenient().when(directoryService.findMaskedPhoneByUserId(USER))
                 .thenReturn(java.util.Optional.of("••••9999"));
-        org.mockito.Mockito.lenient().when(matrixProvisioningService.getLinkedPhonesExcluding(USER, NEW_E164))
-                .thenReturn(List.of());
     }
 }
