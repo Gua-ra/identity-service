@@ -73,22 +73,4 @@ class MatrixProvisioningServiceTest {
         verify(matrixAdminClient, never()).linkPhone("@user:domain", "+17777777777");
         verify(matrixAdminClient).unlinkPhone("@user:domain", "+18888888888");
     }
-
-    @Test
-    void generateOpaqueUserIdBuildsOpaqueLocalPart() {
-        String userId = service.generateOpaqueUserId();
-
-        assertThat(userId).startsWith("@" + properties.getMatrix().getUserLocalpartPrefix())
-            .endsWith(":" + properties.getMatrix().getHomeserverDomain());
-        assertThat(userId.length()).isGreaterThan(10); // ensures randomness applied
-    }
-
-    @Test
-    void generateOpaqueUserIdFallsBackWhenPrefixLooksLikeDomain() {
-        properties.getMatrix().setUserLocalpartPrefix("dev.example.com");
-
-        String userId = service.generateOpaqueUserId();
-
-        assertThat(userId).startsWith("@u").endsWith(":" + properties.getMatrix().getHomeserverDomain());
-    }
 }

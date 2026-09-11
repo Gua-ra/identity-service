@@ -16,7 +16,6 @@ identity:
     client-api-base-url: ${IDENTITY_MATRIX_CLIENT_API_BASE_URL}
     homeserver-domain: ${IDENTITY_MATRIX_HOME_DOMAIN}
     admin-access-token: ${IDENTITY_MATRIX_ADMIN_TOKEN}
-    user-localpart-prefix: ${IDENTITY_MATRIX_LOCALPART_PREFIX}
   directory:
     pepper: ${IDENTITY_DIRECTORY_PEPPER}
     # Optional integrity pin for the pepper. A non-reversible fingerprint of the

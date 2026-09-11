@@ -76,9 +76,6 @@ public class IdentityServiceProperties {
 
         @NotBlank
         private String adminAccessToken;
-
-        @NotBlank
-        private String userLocalpartPrefix = "gua";
     }
 
     @Getter

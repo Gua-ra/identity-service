@@ -1,6 +1,10 @@
 package me.sarahlacerda.gua.identityservice.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.startsWith;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -15,6 +19,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.lang.reflect.Method;
+import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -25,6 +32,8 @@ import me.sarahlacerda.gua.identityservice.exception.OidcClientAuthenticationExc
 import me.sarahlacerda.gua.identityservice.exception.OidcInvalidRequestException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -33,9 +42,10 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import me.sarahlacerda.gua.identityservice.service.OtpService;
+import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationCode;
-import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationRequest;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcClientService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcClientService.RegisteredClient;
@@ -49,6 +59,7 @@ import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 class OidcAuthorizationControllerTest {
 
     private static final String CALLBACK = "https://client.example.com/callback";
+    private static final String PKCE_CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 
     @Autowired
     private MockMvc mockMvc;
@@ -71,6 +82,14 @@ class OidcAuthorizationControllerTest {
     @MockitoBean
     private EndpointRateLimiter endpointRateLimiter;
 
+    /**
+     * Not a dependency of the controller any more. Present in the slice only so the
+     * legacy-parameter regression can assert, explicitly, that no OTP is ever
+     * verified on {@code /oauth2/authorize}.
+     */
+    @MockitoBean
+    private OtpService otpService;
+
     private RegisteredClient confidentialClient;
     private RegisteredClient publicClient;
 
@@ -84,44 +103,116 @@ class OidcAuthorizationControllerTest {
         when(clientService.requireClient("gua-ios")).thenReturn(publicClient);
     }
 
+    private void stubInteractiveFlow() {
+        when(loginFlowProperties.getCookieName()).thenReturn("gua_login");
+        when(loginFlowProperties.isCookieSecure()).thenReturn(true);
+        when(loginFlowProperties.getSessionTtl()).thenReturn(Duration.ofMinutes(10));
+        when(loginFlowProperties.getUiUrl()).thenReturn("/signin");
+        when(loginSessionService.newToken()).thenReturn("csrf-1");
+        when(loginSessionService.create(any())).thenReturn("sid-1");
+    }
+
+    private LoginSession parkedSession() {
+        ArgumentCaptor<LoginSession> captor = ArgumentCaptor.forClass(LoginSession.class);
+        verify(loginSessionService).create(captor.capture());
+        return captor.getValue();
+    }
+
     @Test
-    void authorizeIssuesCodeAndRedirects() throws Exception {
-        OidcAuthorization authorization = new OidcAuthorization(
-                "user-123", "+15551234567", "Alice", Set.of("openid", "profile"), "mas");
-        when(authorizationService.issueAuthorizationCode(any())).thenReturn(
-                new OidcAuthorizationCode("auth-code", authorization, CALLBACK));
+    void authorizeParksValidatedRequestAndRedirectsToLoginUi() throws Exception {
+        stubInteractiveFlow();
 
         mockMvc.perform(get("/oauth2/authorize")
                 .param("response_type", "code")
                 .param("client_id", "mas")
                 .param("redirect_uri", CALLBACK)
                 .param("scope", "openid profile")
-                .param("phone_number", "+15551234567")
-                .param("otp_code", "123456")
-                .param("display_name", "Alice")
-                .param("state", "abc"))
+                .param("state", "abc")
+                .param("nonce", "nonce-1"))
                 .andExpect(status().isFound())
-                .andExpect(header().string("Location", CALLBACK + "?code=auth-code&state=abc"));
+                .andExpect(header().string("Location", "/signin"))
+                .andExpect(header().string("Set-Cookie", startsWith("gua_login=sid-1;")));
 
         verify(clientService).requireClient("mas");
         verify(clientService).validateRedirectUri(confidentialClient, CALLBACK);
         verify(clientService).validateScope(eq(confidentialClient), any());
         verify(clientService).validateChallenge(confidentialClient, null, null);
 
-        ArgumentCaptor<OidcAuthorizationRequest> captor = ArgumentCaptor.forClass(OidcAuthorizationRequest.class);
-        verify(authorizationService).issueAuthorizationCode(captor.capture());
-        assertThat(captor.getValue().codeChallenge()).isNull();
+        LoginSession session = parkedSession();
+        assertThat(session.getPhase()).isEqualTo(LoginSession.Phase.PHONE);
+        assertThat(session.getClientId()).isEqualTo("mas");
+        assertThat(session.getRedirectUri()).isEqualTo(CALLBACK);
+        assertThat(session.getScope()).containsExactly("openid", "profile");
+        assertThat(session.getState()).isEqualTo("abc");
+        assertThat(session.getNonce()).isEqualTo("nonce-1");
+        assertThat(session.getCsrfToken()).isEqualTo("csrf-1");
+        assertThat(session.getCodeChallenge()).isNull();
+        assertThat(session.getIntent()).isEqualTo(LoginSession.Intent.PHONE);
+        assertThat(session.getPhoneHint()).isNull();
+        verifyNoInteractions(authorizationService);
     }
 
     @Test
-    void authorizeWithPkcePropagatesChallenge() throws Exception {
-        String challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
-        when(authorizationService.issueAuthorizationCode(any())).thenReturn(
-                new OidcAuthorizationCode(
-                        "code-pkce",
-                        new OidcAuthorization("user-x", "+15550009999", null, Set.of("openid"), "gua-ios"),
-                        "global.gua:/oidc",
-                        Optional.of(challenge)));
+    void authorizeWithPkceParksChallengeOnSession() throws Exception {
+        stubInteractiveFlow();
+
+        mockMvc.perform(get("/oauth2/authorize")
+                .param("response_type", "code")
+                .param("client_id", "gua-ios")
+                .param("redirect_uri", "global.gua:/oidc")
+                .param("code_challenge", PKCE_CHALLENGE)
+                .param("code_challenge_method", "S256"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin"));
+
+        verify(clientService).validateChallenge(publicClient, PKCE_CHALLENGE, "S256");
+        LoginSession session = parkedSession();
+        assertThat(session.getCodeChallenge()).isEqualTo(PKCE_CHALLENGE);
+        assertThat(session.getCodeChallengeMethod()).isEqualTo("S256");
+        verifyNoInteractions(authorizationService);
+    }
+
+    /**
+     * Regression for ADM-001 L1a. The removed non-interactive branch verified an OTP
+     * supplied as a query parameter and redirected straight back to the client with
+     * an authorization code, so control of the SMS channel alone yielded a session.
+     * A request that still carries those parameters must be indistinguishable from
+     * an interactive request: same redirect to the login UI, same parked session at
+     * the phone step, no code anywhere, and neither the OTP service nor the
+     * authorization service is touched.
+     */
+    @Test
+    void authorizeIgnoresLegacyOtpParametersAndNeverIssuesCode() throws Exception {
+        stubInteractiveFlow();
+
+        mockMvc.perform(get("/oauth2/authorize")
+                .param("response_type", "code")
+                .param("client_id", "mas")
+                .param("redirect_uri", CALLBACK)
+                .param("scope", "openid profile")
+                .param("state", "abc")
+                .param("phone_number", "+15551234567")
+                .param("otp_code", "123456")
+                .param("display_name", "Alice"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin"))
+                .andExpect(header().string("Location", not(containsString("code="))))
+                .andExpect(header().string("Location", not(startsWith(CALLBACK))))
+                .andExpect(header().string("Set-Cookie", startsWith("gua_login=sid-1;")));
+
+        LoginSession session = parkedSession();
+        assertThat(session.getPhase()).isEqualTo(LoginSession.Phase.PHONE);
+        assertThat(session.getPhoneNumber()).isNull();
+        assertThat(session.getUserId()).isNull();
+        assertThat(session.getDisplayName()).isNull();
+        assertThat(session.isNewUser()).isFalse();
+        verifyNoInteractions(authorizationService);
+        verifyNoInteractions(otpService);
+    }
+
+    @Test
+    void authorizeIgnoresLegacyOtpParametersForPublicClientWithPkce() throws Exception {
+        stubInteractiveFlow();
 
         mockMvc.perform(get("/oauth2/authorize")
                 .param("response_type", "code")
@@ -129,26 +220,40 @@ class OidcAuthorizationControllerTest {
                 .param("redirect_uri", "global.gua:/oidc")
                 .param("phone_number", "+15550009999")
                 .param("otp_code", "654321")
-                .param("code_challenge", challenge)
+                .param("code_challenge", PKCE_CHALLENGE)
                 .param("code_challenge_method", "S256"))
-                .andExpect(status().isFound());
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin"))
+                .andExpect(header().string("Location", not(containsString("code="))));
 
-        verify(clientService).validateChallenge(publicClient, challenge, "S256");
-        ArgumentCaptor<OidcAuthorizationRequest> captor = ArgumentCaptor.forClass(OidcAuthorizationRequest.class);
-        verify(authorizationService).issueAuthorizationCode(captor.capture());
-        assertThat(captor.getValue().codeChallenge()).isEqualTo(challenge);
+        LoginSession session = parkedSession();
+        assertThat(session.getPhase()).isEqualTo(LoginSession.Phase.PHONE);
+        assertThat(session.getPhoneNumber()).isNull();
+        assertThat(session.getCodeChallenge()).isEqualTo(PKCE_CHALLENGE);
+        verifyNoInteractions(authorizationService);
+        verifyNoInteractions(otpService);
+    }
+
+    /**
+     * The service no longer has any path that turns an OTP into an authorization
+     * code. The removal is already enforced at compile time (the controller cannot
+     * call a method that does not exist, and the request record it took is gone);
+     * this check keeps the removal visible as a named test so a reintroduction
+     * fails loudly rather than silently compiling.
+     */
+    @Test
+    void authorizationServiceHasNoOtpBackedCodeIssuancePath() {
+        assertThat(Arrays.stream(OidcAuthorizationService.class.getDeclaredMethods()).map(Method::getName))
+                .doesNotContain("issueAuthorizationCode");
+        assertThatThrownBy(() -> Class.forName(
+                "me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationRequest"))
+                .isInstanceOf(ClassNotFoundException.class);
     }
 
     @Test
     void authorizeInteractiveFlowStoresDownstreamClientOnSession() throws Exception {
-        when(loginFlowProperties.getCookieName()).thenReturn("gua_login");
-        when(loginFlowProperties.isCookieSecure()).thenReturn(true);
-        when(loginFlowProperties.getSessionTtl()).thenReturn(java.time.Duration.ofMinutes(10));
-        when(loginFlowProperties.getUiUrl()).thenReturn("/signin");
-        when(loginSessionService.newToken()).thenReturn("csrf-1");
-        when(loginSessionService.create(any())).thenReturn("sid-1");
+        stubInteractiveFlow();
 
-        // Interactive flow: omit phone_number/otp_code so the session-parking branch runs.
         mockMvc.perform(get("/oauth2/authorize")
                 .param("response_type", "code")
                 .param("client_id", "mas")
@@ -158,22 +263,13 @@ class OidcAuthorizationControllerTest {
                 .andExpect(status().isFound())
                 .andExpect(header().string("Location", "/signin"));
 
-        ArgumentCaptor<me.sarahlacerda.gua.identityservice.service.oidc.LoginSession> captor =
-                ArgumentCaptor.forClass(me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.class);
-        verify(loginSessionService).create(captor.capture());
-        assertThat(captor.getValue().getDownstreamClient()).isEqualTo("web");
-
+        assertThat(parkedSession().getDownstreamClient()).isEqualTo("web");
         verifyNoInteractions(authorizationService);
     }
 
     @Test
     void authorizeInteractiveFlowLeavesDownstreamClientNullWhenSignalAbsent() throws Exception {
-        when(loginFlowProperties.getCookieName()).thenReturn("gua_login");
-        when(loginFlowProperties.isCookieSecure()).thenReturn(true);
-        when(loginFlowProperties.getSessionTtl()).thenReturn(java.time.Duration.ofMinutes(10));
-        when(loginFlowProperties.getUiUrl()).thenReturn("/signin");
-        when(loginSessionService.newToken()).thenReturn("csrf-1");
-        when(loginSessionService.create(any())).thenReturn("sid-1");
+        stubInteractiveFlow();
 
         mockMvc.perform(get("/oauth2/authorize")
                 .param("response_type", "code")
@@ -182,10 +278,65 @@ class OidcAuthorizationControllerTest {
                 .param("scope", "openid profile"))
                 .andExpect(status().isFound());
 
-        ArgumentCaptor<me.sarahlacerda.gua.identityservice.service.oidc.LoginSession> captor =
-                ArgumentCaptor.forClass(me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.class);
-        verify(loginSessionService).create(captor.capture());
-        assertThat(captor.getValue().getDownstreamClient()).isNull();
+        assertThat(parkedSession().getDownstreamClient()).isNull();
+    }
+
+    private void authorizeWithLoginHint(String loginHint) throws Exception {
+        stubInteractiveFlow();
+
+        mockMvc.perform(get("/oauth2/authorize")
+                .param("response_type", "code")
+                .param("client_id", "gua-ios")
+                .param("redirect_uri", "global.gua:/oidc")
+                .param("code_challenge", PKCE_CHALLENGE)
+                .param("code_challenge_method", "S256")
+                .param("login_hint", loginHint))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin"));
+    }
+
+    /**
+     * The native apps send the reserved login_hint {@code passkey} when the user taps
+     * "Sign in with a passkey" and MAS forwards it verbatim. It is an intent, not a
+     * phone number: the session parks at the phone step as usual, flagged PASSKEY,
+     * and the marker never lands in the phone hint. Matching ignores case and
+     * surrounding whitespace.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"passkey", "PASSKEY", " passkey "})
+    void authorizePasskeyLoginHintParksPasskeyIntentWithoutPhoneHint(String loginHint) throws Exception {
+        authorizeWithLoginHint(loginHint);
+
+        LoginSession session = parkedSession();
+        assertThat(session.getPhase()).isEqualTo(LoginSession.Phase.PHONE);
+        assertThat(session.getIntent()).isEqualTo(LoginSession.Intent.PASSKEY);
+        assertThat(session.getPhoneHint()).isNull();
+        assertThat(session.getPhoneNumber()).isNull();
+        verifyNoInteractions(authorizationService);
+    }
+
+    @Test
+    void authorizePhoneLoginHintKeepsPhoneIntentAndPreFillsPhone() throws Exception {
+        authorizeWithLoginHint("phone:+15551234567");
+
+        LoginSession session = parkedSession();
+        assertThat(session.getIntent()).isEqualTo(LoginSession.Intent.PHONE);
+        assertThat(session.getPhoneHint()).isEqualTo("+15551234567");
+    }
+
+    /**
+     * Anything that is neither a phone nor exactly the reserved marker is ignored:
+     * phone intent, no pre-fill. Near misses of the marker must not be promoted.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"mxid:@alice:example.org", "passkeys", "passkey:+15551234567", "not a hint"})
+    void authorizeUnrecognisedLoginHintKeepsPhoneIntentAndNoPhoneHint(String loginHint) throws Exception {
+        authorizeWithLoginHint(loginHint);
+
+        LoginSession session = parkedSession();
+        assertThat(session.getPhase()).isEqualTo(LoginSession.Phase.PHONE);
+        assertThat(session.getIntent()).isEqualTo(LoginSession.Intent.PHONE);
+        assertThat(session.getPhoneHint()).isNull();
     }
 
     @Test
@@ -193,12 +344,11 @@ class OidcAuthorizationControllerTest {
         mockMvc.perform(get("/oauth2/authorize")
                 .param("response_type", "token")
                 .param("client_id", "mas")
-                .param("redirect_uri", CALLBACK)
-                .param("phone_number", "+15551234567")
-                .param("otp_code", "123456"))
+                .param("redirect_uri", CALLBACK))
                 .andExpect(status().isBadRequest());
 
         verifyNoInteractions(authorizationService);
+        verifyNoInteractions(loginSessionService);
     }
 
     @Test
@@ -209,13 +359,12 @@ class OidcAuthorizationControllerTest {
         mockMvc.perform(get("/oauth2/authorize")
                 .param("response_type", "code")
                 .param("client_id", "ghost")
-                .param("redirect_uri", CALLBACK)
-                .param("phone_number", "+15551234567")
-                .param("otp_code", "123456"))
+                .param("redirect_uri", CALLBACK))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("invalid_client"));
 
         verifyNoInteractions(authorizationService);
+        verifyNoInteractions(loginSessionService);
     }
 
     @Test
@@ -289,14 +438,13 @@ class OidcAuthorizationControllerTest {
 
     @Test
     void tokenRejectsPkceMismatch() throws Exception {
-        String challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
         OidcAuthorization authorization = new OidcAuthorization(
                 "user-x", "+15550009999", null, Set.of("openid"), "gua-ios");
         when(authorizationService.consumeAuthorizationCode("auth-code"))
                 .thenReturn(Optional.of(new OidcAuthorizationCode("auth-code", authorization,
-                        "global.gua:/oidc", Optional.of(challenge))));
+                        "global.gua:/oidc", Optional.of(PKCE_CHALLENGE))));
         doThrow(new OidcInvalidRequestException("invalid_grant", "code_verifier does not match"))
-                .when(clientService).verifyPkce(Optional.of(challenge), "wrong-verifier");
+                .when(clientService).verifyPkce(Optional.of(PKCE_CHALLENGE), "wrong-verifier");
 
         mockMvc.perform(post("/oauth2/token")
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
