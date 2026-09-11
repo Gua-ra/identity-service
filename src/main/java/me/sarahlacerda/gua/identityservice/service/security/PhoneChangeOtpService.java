@@ -13,6 +13,7 @@ import me.sarahlacerda.gua.identityservice.exception.InvalidOtpException;
 import me.sarahlacerda.gua.identityservice.exception.OtpRateLimitedException;
 import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
 import me.sarahlacerda.gua.identityservice.service.OtpCodeGenerator;
+import me.sarahlacerda.gua.identityservice.service.OtpCodes;
 import me.sarahlacerda.gua.identityservice.service.RateLimiter;
 import me.sarahlacerda.gua.identityservice.service.SmsSender;
 
@@ -85,12 +86,13 @@ public class PhoneChangeOtpService {
     /**
      * Verifies {@code code} against the challenge-namespaced OTP. Single-use:
      * deletes the key on success. Throws {@link InvalidOtpException} when the code
-     * is missing, expired, or wrong — the caller owns the per-challenge attempt cap.
+     * is missing, expired, or wrong. The comparison is constant-time; the caller
+     * ({@code PhoneChangeService}) owns the per-challenge attempt cap.
      */
     public void verify(String challengeId, String code) {
         String key = otpKey(challengeId);
         String storedCode = redisTemplate.opsForValue().get(key);
-        if (!StringUtils.hasText(storedCode) || !storedCode.equals(code)) {
+        if (!StringUtils.hasText(storedCode) || !OtpCodes.matches(storedCode, code)) {
             metrics.counter("gua.identity.otp.verify", "result", "invalid", "flow", "phone-change").increment();
             throw new InvalidOtpException("Invalid or expired verification code");
         }

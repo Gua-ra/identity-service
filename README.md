@@ -336,6 +336,10 @@ Every public endpoint is protected by a **Resilience4j**-based rate limiter, so 
 | `POST /account/phone/change/complete` | 10 | 1 hour |
 | `POST /signup/complete` | 10 | 1 min |
 | `POST /signin/verify-pin` | 10 | 1 min |
+| `POST /login/otp` | 10 | 1 min |
+| `POST /login/pin` | 10 | 1 min |
+| `POST /login/passkey/auth/options` | 20 | 1 min |
+| `POST /login/passkey/auth/verify` | 20 | 1 min |
 | `POST /security/pin` | 20 | 5 min |
 | `POST /security/pin/change/start` | 5 | 1 hour |
 | `POST /security/pin/change/complete` | 5 | 1 hour |
@@ -343,6 +347,8 @@ Every public endpoint is protected by a **Resilience4j**-based rate limiter, so 
 | `POST /security/pin/reset/complete` | 3 | 1 hour |
 | `POST /directory/lookup` | 30 | 5 min |
 | _all others_ | 120 (`default-config`) | 1 min |
+
+**Guess budgets.** The per-address rules above bound how fast one client can try a code; they do not bound how many guesses a code can absorb, because guesses can be spread over addresses for the whole TTL. Every OTP therefore carries its own budget: each guess is counted per phone in Redis (`otp:attempts:<E.164>`, an atomic increment expiring with the code) before it is compared, so at most `identity.otp.max-verify-attempts` guesses (default **5**, `IDENTITY_OTP_MAX_VERIFY_ATTEMPTS`) are ever compared against one code, whether they arrive one by one, spread over addresses or in parallel. The last allowed guess deletes the code when it is wrong, a guess counted past the cap is refused without being compared, and the spent counter is left to expire so a late guess cannot reopen the budget; only a fresh send, which resets the counter, can continue. Codes are compared in constant time. This covers every path that redeems a phone OTP (`/otp/verify`, `/login/otp`, PIN reset, account re-authentication); the new-number OTP of a phone change keeps its own per-challenge cap (`identity.security.max-phone-change-otp-attempts`). The interactive login steps `/login/otp`, `/login/pin`, `/login/passkey/auth/options` and `/login/passkey/auth/verify` are listed individually because the `default-config` window was far too loose for a credential check; those calls carry no bearer token, so their limiter is keyed by client address.
 
 Set `IDENTITY_RATE_LIMITS_ENABLED=false` to disable the limiter (e.g., for load testing). Otherwise clients receive HTTP `429` with a JSON body (`{"message":"Rate limit exceeded"}`) and a `Retry-After` header.
 
@@ -374,7 +380,7 @@ HTTP/JVM/DB-pool metrics, these domain counters drive the Gua usage/reliability 
 | --- | --- |
 | `gua_identity_signup_total{result}` | completed new-account registrations |
 | `gua_identity_login_total{result}` | successful sign-ins of existing accounts |
-| `gua_identity_otp_verify_total{result=valid\|invalid}` | OTP correctness (delivery / abuse signal) |
+| `gua_identity_otp_verify_total{result=valid\|invalid\|exhausted}` | OTP correctness (delivery / abuse signal); `exhausted` counts guesses refused by the attempt cap: the guess that burns a code plus any parallel guess counted past the cap (brute-force signal) |
 | `gua_identity_sms_send_total{provider,result=sent\|failed}` | SMS usage + delivery failures (`provider` = the active `SmsSender`) |
 
 > Keep `/actuator` off the public edge (block it at the ingress/reverse-proxy): Prometheus scrapes it on the

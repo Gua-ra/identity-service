@@ -47,6 +47,14 @@ public class IdentityServiceProperties {
         @Min(1)
         private int maxRequestsPerIpPerHour = 10;
 
+        /**
+         * Wrong guesses one code may absorb before it is deleted. Counted per phone
+         * in Redis next to the code and expiring with it; a new send resets it. The
+         * endpoint limiters bound guesses per address, this bounds them per code.
+         */
+        @Min(1)
+        private int maxVerifyAttempts = 5;
+
         @NotBlank
         private String smsTemplate = "Your Gua verification code is %s. Never share this code with anyone. Gua will never ask you for it.";
 
