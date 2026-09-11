@@ -43,6 +43,22 @@ public class LoginSession {
         COMPLETED
     }
 
+    /**
+     * What the user set out to do when the login started, taken from the OIDC
+     * {@code login_hint}. The native apps send the reserved value {@code passkey}
+     * when the user taps "Sign in with a passkey" and MAS forwards it verbatim;
+     * every other hint, or none, is a phone login. This is guidance for the UI
+     * only: the passkey assertion endpoints stay reachable from the phone step
+     * whatever the intent, and a session written before this field existed reads
+     * back as {@link #PHONE}.
+     */
+    public enum Intent {
+        /** Phone number first, then OTP (the default). */
+        PHONE,
+        /** The user asked to sign in with a passkey; the UI opens the assertion straight away. */
+        PASSKEY
+    }
+
     // --- Original OIDC authorization request (echoed back to MAS at the end) ---
     private String clientId;
     private String redirectUri;
@@ -54,6 +70,8 @@ public class LoginSession {
 
     // --- Progressive authentication state ---
     private Phase phase = Phase.PHONE;
+    /** See {@link Intent}. Absent from sessions persisted before it existed. */
+    private Intent intent = Intent.PHONE;
     private String phoneNumber;
     /**
      * Phone (E.164) pre-filled from the OIDC login_hint, shown on the phone step.
@@ -106,4 +124,9 @@ public class LoginSession {
      * calls.
      */
     private String csrfToken;
+
+    /** Never {@code null}: a session with no recorded intent is a phone login. */
+    public Intent getIntent() {
+        return intent == null ? Intent.PHONE : intent;
+    }
 }

@@ -46,6 +46,13 @@ import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
 @Tag(name = "OIDC Authorization", description = "OAuth 2.0 authorization code endpoints backing the Matrix Authentication Service")
 public class OidcAuthorizationController {
 
+    /**
+     * Reserved {@code login_hint} value the native apps send when the user taps
+     * "Sign in with a passkey". Matched case-insensitively after trimming and never
+     * treated as a phone number.
+     */
+    public static final String PASSKEY_LOGIN_HINT = "passkey";
+
     private final OidcAuthorizationService authorizationService;
     private final OidcTokenService tokenService;
     private final OidcClientService clientService;
@@ -71,7 +78,7 @@ public class OidcAuthorizationController {
             @Parameter(description = "String value used to associate the client session with the ID token (OIDC nonce).") @RequestParam(value = "nonce", required = false) String nonce,
             @Parameter(description = "PKCE code challenge (base64url, 43-128 chars). Required for public clients.") @RequestParam(value = "code_challenge", required = false) String codeChallenge,
             @Parameter(description = "PKCE code_challenge_method. Only S256 is supported.") @RequestParam(value = "code_challenge_method", required = false) String codeChallengeMethod,
-            @Parameter(description = "Optional login hint (E.164 phone) forwarded by MAS to pre-fill the login UI.") @RequestParam(value = "login_hint", required = false) String loginHint,
+            @Parameter(description = "Optional login hint forwarded verbatim by MAS. Either an E.164 phone number to pre-fill the login UI, or the reserved value `passkey` (case-insensitive), which records a passkey sign-in intent on the session and is never treated as a phone number.") @RequestParam(value = "login_hint", required = false) String loginHint,
             @Parameter(description = "OIDC prompt parameter. `login` requests re-authentication of an already signed-in user (login-only).") @RequestParam(value = "prompt", required = false) String prompt,
             @Parameter(description = "OIDC id_token_hint: a previously issued ID token identifying the already-authenticated user for re-authentication.") @RequestParam(value = "id_token_hint", required = false) String idTokenHint,
             @Parameter(description = "Downstream client MAS is authenticating for (`web` for the web client, `native` for the apps). Forwarded by MAS and used to gate web signups behind the registration allowlist.") @RequestParam(value = "gua_downstream", required = false) String guaDownstream) {
@@ -98,7 +105,15 @@ public class OidcAuthorizationController {
         session.setCodeChallenge(codeChallenge);
         session.setCodeChallengeMethod(codeChallengeMethod);
         session.setPhase(LoginSession.Phase.PHONE);
-        session.setPhoneHint(normalizeLoginHint(loginHint));
+        // The hint is either the reserved passkey intent or a phone to pre-fill, never
+        // both: the intent marker must not leak into the phone field.
+        if (isPasskeyLoginHint(loginHint)) {
+            session.setIntent(LoginSession.Intent.PASSKEY);
+            session.setPhoneHint(null);
+        } else {
+            session.setIntent(LoginSession.Intent.PHONE);
+            session.setPhoneHint(normalizeLoginHint(loginHint));
+        }
         // Which downstream client this login is for (web vs native), forwarded by MAS.
         // Parked on the session so the registration guard can gate web signups only.
         session.setDownstreamClient(guaDownstream);
@@ -232,6 +247,11 @@ public class OidcAuthorizationController {
             }
         }
         return scopes.isEmpty() ? Set.of() : scopes;
+    }
+
+    /** True when the hint is exactly the reserved passkey intent marker (trimmed, any case). */
+    private static boolean isPasskeyLoginHint(String loginHint) {
+        return loginHint != null && PASSKEY_LOGIN_HINT.equalsIgnoreCase(loginHint.trim());
     }
 
     /**

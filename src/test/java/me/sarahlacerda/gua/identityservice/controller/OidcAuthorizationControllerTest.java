@@ -32,6 +32,8 @@ import me.sarahlacerda.gua.identityservice.exception.OidcClientAuthenticationExc
 import me.sarahlacerda.gua.identityservice.exception.OidcInvalidRequestException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -145,6 +147,8 @@ class OidcAuthorizationControllerTest {
         assertThat(session.getNonce()).isEqualTo("nonce-1");
         assertThat(session.getCsrfToken()).isEqualTo("csrf-1");
         assertThat(session.getCodeChallenge()).isNull();
+        assertThat(session.getIntent()).isEqualTo(LoginSession.Intent.PHONE);
+        assertThat(session.getPhoneHint()).isNull();
         verifyNoInteractions(authorizationService);
     }
 
@@ -275,6 +279,64 @@ class OidcAuthorizationControllerTest {
                 .andExpect(status().isFound());
 
         assertThat(parkedSession().getDownstreamClient()).isNull();
+    }
+
+    private void authorizeWithLoginHint(String loginHint) throws Exception {
+        stubInteractiveFlow();
+
+        mockMvc.perform(get("/oauth2/authorize")
+                .param("response_type", "code")
+                .param("client_id", "gua-ios")
+                .param("redirect_uri", "global.gua:/oidc")
+                .param("code_challenge", PKCE_CHALLENGE)
+                .param("code_challenge_method", "S256")
+                .param("login_hint", loginHint))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin"));
+    }
+
+    /**
+     * The native apps send the reserved login_hint {@code passkey} when the user taps
+     * "Sign in with a passkey" and MAS forwards it verbatim. It is an intent, not a
+     * phone number: the session parks at the phone step as usual, flagged PASSKEY,
+     * and the marker never lands in the phone hint. Matching ignores case and
+     * surrounding whitespace.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"passkey", "PASSKEY", " passkey "})
+    void authorizePasskeyLoginHintParksPasskeyIntentWithoutPhoneHint(String loginHint) throws Exception {
+        authorizeWithLoginHint(loginHint);
+
+        LoginSession session = parkedSession();
+        assertThat(session.getPhase()).isEqualTo(LoginSession.Phase.PHONE);
+        assertThat(session.getIntent()).isEqualTo(LoginSession.Intent.PASSKEY);
+        assertThat(session.getPhoneHint()).isNull();
+        assertThat(session.getPhoneNumber()).isNull();
+        verifyNoInteractions(authorizationService);
+    }
+
+    @Test
+    void authorizePhoneLoginHintKeepsPhoneIntentAndPreFillsPhone() throws Exception {
+        authorizeWithLoginHint("phone:+15551234567");
+
+        LoginSession session = parkedSession();
+        assertThat(session.getIntent()).isEqualTo(LoginSession.Intent.PHONE);
+        assertThat(session.getPhoneHint()).isEqualTo("+15551234567");
+    }
+
+    /**
+     * Anything that is neither a phone nor exactly the reserved marker is ignored:
+     * phone intent, no pre-fill. Near misses of the marker must not be promoted.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"mxid:@alice:example.org", "passkeys", "passkey:+15551234567", "not a hint"})
+    void authorizeUnrecognisedLoginHintKeepsPhoneIntentAndNoPhoneHint(String loginHint) throws Exception {
+        authorizeWithLoginHint(loginHint);
+
+        LoginSession session = parkedSession();
+        assertThat(session.getPhase()).isEqualTo(LoginSession.Phase.PHONE);
+        assertThat(session.getIntent()).isEqualTo(LoginSession.Intent.PHONE);
+        assertThat(session.getPhoneHint()).isNull();
     }
 
     @Test

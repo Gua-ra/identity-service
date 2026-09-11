@@ -155,6 +155,29 @@ class LoginFlowControllerTest {
     }
 
     @Test
+    void contextExposesPhoneIntentByDefault() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PHONE"))
+                .andExpect(jsonPath("$.intent").value("PHONE"))
+                .andExpect(jsonPath("$.csrfToken").value(CSRF));
+    }
+
+    @Test
+    void contextExposesPasskeyIntent() throws Exception {
+        LoginSession session = session(Phase.PHONE);
+        session.setIntent(LoginSession.Intent.PASSKEY);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PHONE"))
+                .andExpect(jsonPath("$.intent").value("PASSKEY"));
+    }
+
+    @Test
     void openPasskeyEnrollmentSetsCookieAndRedirectsToSignin() throws Exception {
         when(properties.getCookieName()).thenReturn("gua_login");
         when(properties.isCookieSecure()).thenReturn(true);
@@ -573,6 +596,29 @@ class LoginFlowControllerTest {
         ObjectNode options = JsonNodeFactory.instance.objectNode();
         options.put("challenge", "abc");
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
+        when(passkeyService.startAuthentication(SID)).thenReturn(options);
+
+        mockMvc.perform(post("/login/passkey/auth/options")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.publicKey.challenge").value("abc"));
+    }
+
+    /**
+     * The intent is UI guidance only. A session flagged PASSKEY that has already
+     * moved to the OTP step still gets assertion options, exactly like a phone-intent
+     * session at either step.
+     */
+    @Test
+    void passkeyAuthOptionsIgnoreIntentAndStayAvailableAtOtpStep() throws Exception {
+        ObjectNode options = JsonNodeFactory.instance.objectNode();
+        options.put("challenge", "abc");
+        LoginSession session = session(Phase.OTP_SENT);
+        session.setIntent(LoginSession.Intent.PASSKEY);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
         when(passkeyService.startAuthentication(SID)).thenReturn(options);
 
         mockMvc.perform(post("/login/passkey/auth/options")
