@@ -68,11 +68,15 @@ public class OtpService {
     }
 
     /**
-     * Redeems {@code code} for the phone's live OTP. Wrong guesses are counted per
-     * code in Redis; on the {@code identity.otp.max-verify-attempts}-th wrong guess the
-     * code is deleted and only a new send restores it. The endpoint limiters bound
-     * how fast one address can guess, this bounds how many guesses a code can absorb
-     * at all, however the guesses are spread across addresses and paths.
+     * Redeems {@code code} for the phone's live OTP. Every guess is counted per code
+     * in Redis before it is compared, so at most {@code identity.otp.max-verify-attempts}
+     * guesses are ever compared against one code, however they are spread across
+     * addresses and paths or fired in parallel: the count is an atomic INCR, the last
+     * allowed guess deletes the code when it is wrong, and a guess whose count overtook
+     * the cap is refused without being looked at. The spent counter is left to expire
+     * with the code's TTL so a late guess cannot reopen the budget; only a new send,
+     * which resets the counter, restores the code. The endpoint limiters bound how
+     * fast one address can guess, this bounds how many guesses a code can absorb at all.
      */
     public void verifyOtp(String e164PhoneNumber, String code) {
         String codeKey = codeKey(e164PhoneNumber);
@@ -83,26 +87,36 @@ public class OtpService {
             metrics.counter("gua.identity.otp.verify", "result", "invalid").increment();
             throw new InvalidOtpException("Invalid or expired verification code");
         }
+        long attempts = countGuess(codeKey, attemptsKey);
+        int maxAttempts = properties.getOtp().getMaxVerifyAttempts();
+        if (attempts > maxAttempts) {
+            // A parallel guess spent the last slot between this one's GET and INCR.
+            throw exhausted(codeKey);
+        }
         if (!OtpCodes.matches(storedCode, code)) {
-            throw wrongGuess(codeKey, attemptsKey);
+            metrics.counter("gua.identity.otp.verify", "result", "invalid").increment();
+            if (attempts < maxAttempts) {
+                throw new InvalidOtpException("Invalid or expired verification code");
+            }
+            throw exhausted(codeKey);
         }
         redisTemplate.delete(codeKey);
         redisTemplate.delete(attemptsKey);
         metrics.counter("gua.identity.otp.verify", "result", "valid").increment();
     }
 
-    private InvalidOtpException wrongGuess(String codeKey, String attemptsKey) {
+    private long countGuess(String codeKey, String attemptsKey) {
         Long counted = redisTemplate.opsForValue().increment(attemptsKey);
-        long attempts = counted == null ? 1L : counted;
         // The counter never outlives the code it guards.
         redisTemplate.expire(attemptsKey, remainingTtl(codeKey));
-        metrics.counter("gua.identity.otp.verify", "result", "invalid").increment();
-        if (attempts < properties.getOtp().getMaxVerifyAttempts()) {
-            return new InvalidOtpException("Invalid or expired verification code");
-        }
+        return counted == null ? 1L : counted;
+    }
+
+    private InvalidOtpException exhausted(String codeKey) {
+        // Only the code goes. Deleting the counter too would hand a guess that fetched the
+        // code before the cap tripped a fresh budget starting at 1.
         redisTemplate.delete(codeKey);
-        redisTemplate.delete(attemptsKey);
-        // gua_identity_otp_verify_total{result="exhausted"}: codes burned by the cap (brute-force signal).
+        // gua_identity_otp_verify_total{result="exhausted"}: guesses refused by the cap (brute-force signal).
         metrics.counter("gua.identity.otp.verify", "result", "exhausted").increment();
         return new InvalidOtpException("Too many incorrect verification codes; request a new code");
     }

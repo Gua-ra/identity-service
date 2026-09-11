@@ -94,13 +94,19 @@ class OtpServiceTest {
     }
 
     @Test
-    void verifyOtpRemovesStoredCodeOnSuccess() {
+    void verifyOtpCountsTheGuessThenRemovesTheCodeOnSuccess() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("otp:code:+12025550123")).thenReturn("654321");
+        when(valueOperations.get(CODE_KEY)).thenReturn("654321");
+        when(valueOperations.increment(ATTEMPTS_KEY)).thenReturn(1L);
 
-        otpService.verifyOtp("+12025550123", "654321");
+        otpService.verifyOtp(PHONE, "654321");
 
-        verify(redisTemplate).delete("otp:code:+12025550123");
+        // Counted before it is compared: a right guess spends a slot like a wrong one.
+        InOrder inOrder = Mockito.inOrder(redisTemplate, valueOperations);
+        inOrder.verify(valueOperations).increment(ATTEMPTS_KEY);
+        inOrder.verify(redisTemplate).delete(CODE_KEY);
+        inOrder.verify(redisTemplate).delete(ATTEMPTS_KEY);
+        assertThat(count("valid")).isEqualTo(1.0);
     }
 
     @Test
@@ -116,15 +122,17 @@ class OtpServiceTest {
     void verifyOtpSucceedsWhenTheRightCodeFollowsFewerThanMaxWrongGuesses() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(valueOperations.get(CODE_KEY)).thenReturn("654321");
-        when(valueOperations.increment(ATTEMPTS_KEY)).thenReturn(1L, 2L, 3L, 4L);
+        when(valueOperations.increment(ATTEMPTS_KEY)).thenReturn(1L, 2L, 3L, 4L, 5L);
 
         for (int guess = 1; guess < properties.getOtp().getMaxVerifyAttempts(); guess++) {
             assertThatThrownBy(() -> otpService.verifyOtp(PHONE, "000000")).isInstanceOf(InvalidOtpException.class);
         }
         verify(redisTemplate, never()).delete(CODE_KEY);
 
+        // The right code takes the fifth and last slot, which is within the budget.
         otpService.verifyOtp(PHONE, "654321");
 
+        verify(valueOperations, times(5)).increment(ATTEMPTS_KEY);
         verify(redisTemplate).delete(CODE_KEY);
         verify(redisTemplate).delete(ATTEMPTS_KEY);
         assertThat(count("valid")).isEqualTo(1.0);
@@ -143,7 +151,9 @@ class OtpServiceTest {
         }
 
         verify(redisTemplate).delete(CODE_KEY);
-        verify(redisTemplate).delete(ATTEMPTS_KEY);
+        // The spent counter stays until it expires, so a guess that fetched the code
+        // before the cap tripped cannot start over at 1.
+        verify(redisTemplate, never()).delete(ATTEMPTS_KEY);
         assertThat(count("exhausted")).isEqualTo(1.0);
         assertThat(count("invalid")).isEqualTo(5.0);
 
@@ -152,6 +162,25 @@ class OtpServiceTest {
         assertThatThrownBy(() -> otpService.verifyOtp(PHONE, "654321")).isInstanceOf(InvalidOtpException.class);
         verify(valueOperations, times(5)).increment(ATTEMPTS_KEY);
         assertThat(count("valid")).isZero();
+    }
+
+    @Test
+    void verifyOtpRefusesAGuessThatOvertookTheCapWithoutComparing() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(CODE_KEY)).thenReturn("654321");
+        // A parallel guess spent the fifth slot between this call's GET and INCR.
+        when(valueOperations.increment(ATTEMPTS_KEY)).thenReturn(6L);
+
+        assertThatThrownBy(() -> otpService.verifyOtp(PHONE, "654321"))
+                .isInstanceOf(InvalidOtpException.class)
+                .hasMessage("Too many incorrect verification codes; request a new code");
+
+        // Even the right code is refused unseen: nothing was compared, so nothing succeeded.
+        verify(redisTemplate).delete(CODE_KEY);
+        verify(redisTemplate, never()).delete(ATTEMPTS_KEY);
+        assertThat(count("valid")).isZero();
+        assertThat(count("invalid")).isZero();
+        assertThat(count("exhausted")).isEqualTo(1.0);
     }
 
     @Test
