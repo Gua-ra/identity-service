@@ -379,7 +379,7 @@ HTTP/JVM/DB-pool metrics, these domain counters drive the Gua usage/reliability 
 | --- | --- |
 | `gua_identity_signup_total{result}` | completed new-account registrations |
 | `gua_identity_login_total{result}` | successful sign-ins of existing accounts |
-| `gua_identity_otp_verify_total{result=valid\|invalid\|exhausted}` | OTP correctness (delivery / abuse signal); `exhausted` counts codes deleted by the attempt cap (brute-force signal) |
+| `gua_identity_otp_verify_total{result=valid\|invalid\|exhausted}` | OTP correctness (delivery / abuse signal); `exhausted` counts guesses refused by the attempt cap: the guess that burns a code plus any parallel guess counted past the cap (brute-force signal) |
 | `gua_identity_sms_send_total{provider,result=sent\|failed}` | SMS usage + delivery failures (`provider` = the active `SmsSender`) |
 
 > Keep `/actuator` off the public edge (block it at the ingress/reverse-proxy): Prometheus scrapes it on the
