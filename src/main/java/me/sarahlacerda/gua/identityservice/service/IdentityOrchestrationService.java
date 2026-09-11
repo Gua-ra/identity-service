@@ -18,7 +18,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
-import me.sarahlacerda.gua.identityservice.service.routing.ResolverDirectoryClient;
 import me.sarahlacerda.gua.identityservice.service.security.DeviceNotificationService;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
@@ -40,7 +39,6 @@ public class IdentityOrchestrationService {
     private final TrustedDeviceService trustedDeviceService;
     private final DeviceNotificationService deviceNotificationService;
     private final UsernamePolicy usernamePolicy;
-    private final ResolverDirectoryClient resolverDirectoryClient;
     private final MeterRegistry metrics;
 
     public void sendOtp(String e164PhoneNumber, String requesterIp, String language) {
@@ -131,9 +129,6 @@ public class IdentityOrchestrationService {
 
         final String digest = phoneNumberHasher.digest(e164PhoneNumber);
         directoryService.upsertByDigest(digest, phoneNumberMasker.mask(e164PhoneNumber), userId, resolvedDisplayName);
-        // Also publish to the member-written resolver directory (covers accounts created before this
-        // integration). That write path is the one ADM-001 L1b removes.
-        resolverDirectoryClient.registerPhone(e164PhoneNumber);
         // gua_identity_login_total{result}: successful sign-ins of existing accounts.
         metrics.counter("gua.identity.login", "result", "success").increment();
         userSecurityService.recordSuccessfulLogin(userId);
@@ -189,11 +184,6 @@ public class IdentityOrchestrationService {
         } catch (DataIntegrityViolationException ex) {
             throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
         }
-
-        // Publish to the member-written gua-resolver directory (best-effort; this service reads its own
-        // local directory above for its own users). That directory is the write path ADM-001 L1b
-        // removes; it is not the identifier binding of L7 and L8.
-        resolverDirectoryClient.registerPhone(phone);
 
         // gua_identity_signup_total{result,country}: completed new-account
         // registrations, tagged with the ISO region of the (E.164) phone for the
