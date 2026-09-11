@@ -335,6 +335,10 @@ Every public endpoint is protected by a **Resilience4j**-based rate limiter, so 
 | `POST /account/phone/change/complete` | 10 | 1 hour |
 | `POST /signup/complete` | 10 | 1 min |
 | `POST /signin/verify-pin` | 10 | 1 min |
+| `POST /login/otp` | 10 | 1 min |
+| `POST /login/pin` | 10 | 1 min |
+| `POST /login/passkey/auth/options` | 20 | 1 min |
+| `POST /login/passkey/auth/verify` | 20 | 1 min |
 | `POST /security/pin` | 20 | 5 min |
 | `POST /security/pin/change/start` | 5 | 1 hour |
 | `POST /security/pin/change/complete` | 5 | 1 hour |
@@ -342,6 +346,8 @@ Every public endpoint is protected by a **Resilience4j**-based rate limiter, so 
 | `POST /security/pin/reset/complete` | 3 | 1 hour |
 | `POST /directory/lookup` | 30 | 5 min |
 | _all others_ | 120 (`default-config`) | 1 min |
+
+**Guess budgets.** The per-address rules above bound how fast one client can try a code; they do not bound how many guesses a code can absorb, because guesses can be spread over addresses for the whole TTL. Every OTP therefore carries its own budget: wrong guesses are counted per phone in Redis (`otp:attempts:<E.164>`, expiring with the code) and on the `identity.otp.max-verify-attempts`-th wrong guess (default **5**, `IDENTITY_OTP_MAX_VERIFY_ATTEMPTS`) the code is deleted, so only a fresh send, which resets the counter, can continue. Codes are compared in constant time. This covers every path that redeems a phone OTP (`/otp/verify`, `/login/otp`, PIN reset, account re-authentication); the new-number OTP of a phone change keeps its own per-challenge cap (`identity.security.max-phone-change-otp-attempts`). The interactive login steps `/login/otp`, `/login/pin`, `/login/passkey/auth/options` and `/login/passkey/auth/verify` are listed individually because the `default-config` window was far too loose for a credential check; those calls carry no bearer token, so their limiter is keyed by client address.
 
 Set `IDENTITY_RATE_LIMITS_ENABLED=false` to disable the limiter (e.g., for load testing). Otherwise clients receive HTTP `429` with a JSON body (`{"message":"Rate limit exceeded"}`) and a `Retry-After` header.
 

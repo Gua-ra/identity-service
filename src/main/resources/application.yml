@@ -59,6 +59,30 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_SIGNIN_VERIFY_PIN_LIMIT:10}
         refresh-period: ${IDENTITY_RATE_LIMIT_SIGNIN_VERIFY_PIN_REFRESH:PT1M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_SIGNIN_VERIFY_PIN_TIMEOUT:PT0S}
+      # Interactive OIDC login counterparts of /otp/verify and /signin/verify-pin. An
+      # unlisted path falls under default-config, far too loose for a credential check.
+      # These bound guesses per client address; identity.otp.max-verify-attempts bounds
+      # them per code.
+      - path: /login/otp
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_LOGIN_OTP_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_LOGIN_OTP_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_LOGIN_OTP_TIMEOUT:PT0S}
+      - path: /login/pin
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_LOGIN_PIN_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_LOGIN_PIN_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_LOGIN_PIN_TIMEOUT:PT0S}
+      - path: /login/passkey/auth/options
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_LOGIN_PASSKEY_AUTH_OPTIONS_LIMIT:20}
+        refresh-period: ${IDENTITY_RATE_LIMIT_LOGIN_PASSKEY_AUTH_OPTIONS_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_LOGIN_PASSKEY_AUTH_OPTIONS_TIMEOUT:PT0S}
+      - path: /login/passkey/auth/verify
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_LOGIN_PASSKEY_AUTH_VERIFY_LIMIT:20}
+        refresh-period: ${IDENTITY_RATE_LIMIT_LOGIN_PASSKEY_AUTH_VERIFY_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_LOGIN_PASSKEY_AUTH_VERIFY_TIMEOUT:PT0S}
       - path: /account/phone/change/start
         methods: [POST]
         limit-for-period: ${IDENTITY_RATE_LIMIT_PHONE_CHANGE_START_LIMIT:3}
