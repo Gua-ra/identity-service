@@ -33,6 +33,7 @@ class IdentityMetricsInitializerTest {
         assertCounterAtZero(registry, "gua.identity.login", "result", "success");
         assertCounterAtZero(registry, "gua.identity.otp.verify", "result", "valid");
         assertCounterAtZero(registry, "gua.identity.otp.verify", "result", "invalid");
+        assertCounterAtZero(registry, "gua.identity.otp.verify", "result", "exhausted");
         assertCounterAtZero(registry, "gua.identity.sms.send", "provider", "dummy", "result", "sent");
         assertCounterAtZero(registry, "gua.identity.sms.send", "provider", "dummy", "result", "failed");
     }
@@ -62,8 +63,8 @@ class IdentityMetricsInitializerTest {
 
         assertThat(registry.get("gua.identity.otp.verify").tag("result", "valid").counter().count())
                 .isEqualTo(1.0);
-        // Still exactly the two pre-registered series — no duplicates minted.
-        assertThat(registry.find("gua.identity.otp.verify").counters()).hasSize(2);
+        // Still exactly the three pre-registered series, no duplicates minted.
+        assertThat(registry.find("gua.identity.otp.verify").counters()).hasSize(3);
     }
 
     private static void assertCounterAtZero(MeterRegistry registry, String name, String... tags) {

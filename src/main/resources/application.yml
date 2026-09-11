@@ -4,6 +4,7 @@ identity:
     ttl: ${IDENTITY_OTP_TTL:PT5M}
     max-requests-per-phone-per-hour: ${IDENTITY_OTP_MAX_PHONE_PER_HOUR:5}
     max-requests-per-ip-per-hour: ${IDENTITY_OTP_MAX_IP_PER_HOUR:10}
+    max-verify-attempts: ${IDENTITY_OTP_MAX_VERIFY_ATTEMPTS:5}
     sms-template: ${IDENTITY_OTP_SMS_TEMPLATE:Your Gua verification code is %s. Never share this code with anyone. Gua will never ask you for it.}
     localized-sms-templates:
       en: ${IDENTITY_OTP_SMS_TEMPLATE_EN:Your Gua verification code is %s. Never share this code with anyone. Gua support will never ask you for it.}

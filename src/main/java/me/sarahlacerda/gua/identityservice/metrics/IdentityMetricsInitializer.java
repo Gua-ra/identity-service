@@ -13,7 +13,7 @@ import me.sarahlacerda.gua.identityservice.service.SmsSender;
  * <ul>
  *   <li>{@code gua_identity_signup_total{result="success",country="unknown"}}</li>
  *   <li>{@code gua_identity_login_total{result="success"}}</li>
- *   <li>{@code gua_identity_otp_verify_total{result="valid"|"invalid"}}</li>
+ *   <li>{@code gua_identity_otp_verify_total{result="valid"|"invalid"|"exhausted"}}</li>
  *   <li>{@code gua_identity_sms_send_total{provider=&lt;wired sender&gt;,result="sent"|"failed"}}</li>
  * </ul>
  * Micrometer counters are otherwise created lazily on first increment (see
@@ -47,6 +47,7 @@ public class IdentityMetricsInitializer {
 
         Counter.builder("gua.identity.otp.verify").tag("result", "valid").register(metrics);
         Counter.builder("gua.identity.otp.verify").tag("result", "invalid").register(metrics);
+        Counter.builder("gua.identity.otp.verify").tag("result", "exhausted").register(metrics);
 
         // provider matches whichever SmsSender bean is wired (twilio in prod,
         // logging in dev) — the same value OtpService tags its increments with.
