@@ -26,16 +26,15 @@ import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
  * (nothing here is baked into the normal code path):
  *
  * <ol>
- * <li><b>OTP send</b> ({@link #assertOtpAllowed}) — the earliest point, before any
+ * <li><b>OTP send</b> ({@link #assertOtpAllowed}): the earliest point, before any
  * SMS is dispatched. A web flow may only trigger an OTP for a phone that is
  * already a known account or is explicitly allowlisted; an unknown web number is
- * refused with {@code 403 registration_not_approved} and no SMS is sent. This is
- * what actually stops the credit burn, since the OTP is dispatched several steps
- * before an account is ever created.</li>
- * <li><b>New-account creation</b> ({@link #assertAllowedForNewUser}) — defence in
- * depth at the profile step, before the directory write, so a brand-new web
- * signup whose phone is not allowlisted cannot be provisioned even if it somehow
- * obtained an OTP.</li>
+ * refused with {@code 403 registration_not_approved} and no SMS is sent.</li>
+ * <li><b>New-account creation</b> ({@link #assertAllowedForNewUser}): before the
+ * account is provisioned, on both signup paths (the interactive
+ * {@code /login/profile} step and the REST {@code /signup/complete}). A brand-new
+ * web signup whose phone is not allowlisted is refused even if it obtained an OTP
+ * some other way, for example through an exempt session.</li>
  * </ol>
  *
  * <p>
@@ -43,15 +42,17 @@ import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
  * the homeserver phone binding as a pepper-drift fallback) OR is on the configured
  * allowlist. Because any account registered through the mobile apps lands in the
  * directory, an app-registered number is automatically recognised here and can log
- * in on the web with no extra plumbing — that is the intended "app registers, then
- * the web works too" behaviour.
+ * in on the web with no extra plumbing.
  *
  * <p>
- * The gate fails closed. A session is treated as a web flow when its forwarded
- * downstream marker equals the configured web marker OR is absent (MAS did not
- * forward the signal); only an explicit non-web marker (e.g. {@code native}) is
- * exempt. Requests with no session at all (the legacy REST OTP endpoint) are always
- * treated as web.
+ * Web versus native comes from the {@code gua_downstream} marker MAS appends to the
+ * upstream authorize request. That marker is a query parameter on a browser
+ * redirect, so whoever drives the browser can edit it: the native exemption is a
+ * convenience for the beta apps, not a security boundary. The gate therefore fails
+ * closed. Only a marker exactly equal to the configured native marker is exempt; the
+ * web marker, an absent or empty marker, and any unrecognised value are all treated
+ * as web. Requests with no login session (the REST {@code /otp/send} and
+ * {@code /signup/complete} endpoints) carry no marker and are always treated as web.
  */
 @Component
 @RequiredArgsConstructor
@@ -65,26 +66,20 @@ public class RegistrationGuard {
 
     /**
      * Rejects an OTP dispatch for a web flow whose phone is neither a known account
-     * nor allowlisted. No-op when the gate is disabled or the flow is a non-web
-     * (native app) client. Called before the SMS is sent, so a blocked number never
+     * nor allowlisted. No-op when the gate is disabled or the session carries the
+     * exact native marker. Called before the SMS is sent, so a blocked number never
      * consumes an SMS credit.
      *
      * @param session       the interactive login session (its downstream marker
-     *                      decides web-vs-native); may be {@code null} for the legacy
-     *                      REST endpoint, which is then treated as a web flow
+     *                      decides web-vs-native); may be {@code null} for the REST
+     *                      endpoint, which is then treated as a web flow
      * @param phoneNumber   the phone the OTP would be sent to (any form; normalized
      *                      here)
      * @throws LoginFlowException {@code 403 registration_not_approved} when a web
      *                            flow's phone is unknown and not allowlisted
      */
     public void assertOtpAllowed(LoginSession session, String phoneNumber) {
-        if (!isEnabled()) {
-            return;
-        }
-        // Native app flows are exempt: beta testers may register brand-new numbers
-        // through the apps. Everything else (web, or an
-        // absent marker) is gated.
-        if (session != null && !isWebFlow(session)) {
+        if (!isEnabled() || isNativeFlow(session)) {
             return;
         }
         if (isKnownNumber(phoneNumber)) {
@@ -93,26 +88,40 @@ public class RegistrationGuard {
         throw notApproved();
     }
 
-    /** Legacy REST OTP-send entry point: no login session, always treated as web. */
+    /** REST OTP-send entry point: no login session, always treated as web. */
     public void assertOtpAllowed(String phoneNumber) {
         assertOtpAllowed(null, phoneNumber);
     }
 
     /**
-     * Rejects a new-account signup whose phone is not on the web allowlist.
-     * No-op when the gate is disabled or the signup is from a non-web client.
+     * Rejects a new-account signup from an interactive session whose phone is not on
+     * the web allowlist. No-op when the gate is disabled or the session carries the
+     * exact native marker.
      *
      * @throws LoginFlowException {@code 403 registration_not_approved} when a web
      *                            signup's phone is not allowlisted
      */
     public void assertAllowedForNewUser(LoginSession session) {
-        if (!isEnabled()) {
+        assertAllowedForNewUser(session, session.getPhoneNumber());
+    }
+
+    /**
+     * REST signup entry point ({@code /signup/complete}): no login session, always
+     * treated as web, so a new account is created only for an allowlisted phone.
+     * No-op when the gate is disabled.
+     *
+     * @throws LoginFlowException {@code 403 registration_not_approved} when the phone
+     *                            is not allowlisted
+     */
+    public void assertAllowedForNewUser(String phoneNumber) {
+        assertAllowedForNewUser(null, phoneNumber);
+    }
+
+    private void assertAllowedForNewUser(LoginSession session, String phoneNumber) {
+        if (!isEnabled() || isNativeFlow(session)) {
             return;
         }
-        if (!isWebFlow(session)) {
-            return;
-        }
-        if (!isPhoneAllowlisted(session.getPhoneNumber())) {
+        if (!isPhoneAllowlisted(phoneNumber)) {
             throw notApproved();
         }
     }
@@ -124,12 +133,16 @@ public class RegistrationGuard {
     }
 
     /**
-     * A session is a web flow (and therefore gated) when its downstream marker is the
-     * configured web marker or is absent. Fail closed: an absent marker is web.
+     * Only a session whose downstream marker is exactly the configured native marker
+     * is exempt. No session, no marker, an empty marker, a differently cased or
+     * otherwise unrecognised value, and the web marker all count as web.
      */
-    private boolean isWebFlow(LoginSession session) {
-        String downstream = session.getDownstreamClient();
-        return downstream == null || downstream.equals(properties.getRegistration().getWebClientMarker());
+    private boolean isNativeFlow(LoginSession session) {
+        if (session == null) {
+            return false;
+        }
+        String nativeMarker = properties.getRegistration().getNativeClientMarker();
+        return nativeMarker != null && nativeMarker.equals(session.getDownstreamClient());
     }
 
     /**
@@ -149,13 +162,13 @@ public class RegistrationGuard {
         return matrixAdminClient.findUserIdByPhone(normalized).isPresent();
     }
 
-    private boolean isPhoneAllowlisted(String sessionPhone) {
+    private boolean isPhoneAllowlisted(String phoneNumber) {
         LoginFlowProperties.Registration registration = properties.getRegistration();
         List<String> allowlist = registration.getWebAllowlist();
         if (allowlist == null || allowlist.isEmpty()) {
             return false;
         }
-        String normalizedPhone = phoneNumberNormalizer.toE164(sessionPhone);
+        String normalizedPhone = phoneNumberNormalizer.toE164(phoneNumber);
         Set<String> normalizedAllowlist = new HashSet<>();
         for (String entry : allowlist) {
             if (entry == null || entry.isBlank()) {

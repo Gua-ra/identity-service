@@ -968,6 +968,21 @@ class LoginFlowControllerTest {
     }
 
     @Test
+    void newSignupWithUnrecognisedDownstreamMarkerIsGatedAsWeb() throws Exception {
+        when(properties.getRegistration()).thenReturn(enabledAllowlist("+15559999999"));
+        LoginSession session = session(Phase.PROFILE_REQUIRED);
+        // Only the exact native marker is exempt; any other value counts as web.
+        session.setDownstreamClient("Native");
+        stubNewSignupWith(session);
+
+        performProfile()
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("registration_not_approved"));
+
+        verify(directoryService, org.mockito.Mockito.never()).upsertByDigest(any(), any(), any(), any());
+    }
+
+    @Test
     void newWebSignupIsCreatedWhenAllowlistDisabled() throws Exception {
         // Default registration (disabled) from setUp(): guard is open regardless of phone.
         LoginSession session = session(Phase.PROFILE_REQUIRED);
