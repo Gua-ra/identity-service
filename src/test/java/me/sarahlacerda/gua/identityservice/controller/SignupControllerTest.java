@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.test.web.servlet.MockMvc;
@@ -21,6 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import me.sarahlacerda.gua.identityservice.controller.dto.OtpVerifyRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.SignupCompleteRequest;
 import me.sarahlacerda.gua.identityservice.domain.MatrixSession;
+import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.service.IdentityOrchestrationService;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService.DeviceMetadata;
 
@@ -38,6 +40,7 @@ class SignupControllerTest {
         objectMapper = new ObjectMapper();
         SignupController controller = new SignupController(orchestrationService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
+                .setControllerAdvice(new RestExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter())
                 .build();
     }
@@ -66,6 +69,25 @@ class SignupControllerTest {
                         is("token")))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.userId",
                         is("@alice:gua.global")));
+    }
+
+    @Test
+    void completeSignupReturnsForbiddenWhenRegistrationGateRefusesNumber() throws Exception {
+        SignupCompleteRequest request = new SignupCompleteRequest();
+        request.setSignupToken("signup-abc");
+        request.setUsername("alice");
+        request.setDisplayName("Alice L.");
+
+        when(orchestrationService.completeSignup(eq("signup-abc"), eq("alice"), eq("Alice L."), any(), any()))
+                .thenThrow(new LoginFlowException(HttpStatus.FORBIDDEN, "registration_not_approved",
+                        "This number is not approved for web sign-up yet."));
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/signup/complete")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(request)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code",
+                        is("registration_not_approved")));
     }
 
     @Test

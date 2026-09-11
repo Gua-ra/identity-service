@@ -81,7 +81,7 @@ public class OidcAuthorizationController {
             @Parameter(description = "Optional login hint forwarded verbatim by MAS. Either an E.164 phone number to pre-fill the login UI, or the reserved value `passkey` (case-insensitive), which records a passkey sign-in intent on the session and is never treated as a phone number.") @RequestParam(value = "login_hint", required = false) String loginHint,
             @Parameter(description = "OIDC prompt parameter. `login` requests re-authentication of an already signed-in user (login-only).") @RequestParam(value = "prompt", required = false) String prompt,
             @Parameter(description = "OIDC id_token_hint: a previously issued ID token identifying the already-authenticated user for re-authentication.") @RequestParam(value = "id_token_hint", required = false) String idTokenHint,
-            @Parameter(description = "Downstream client MAS is authenticating for (`web` for the web client, `native` for the apps). Forwarded by MAS and used to gate web signups behind the registration allowlist.") @RequestParam(value = "gua_downstream", required = false) String guaDownstream) {
+            @Parameter(description = "Downstream client MAS is authenticating for (`web` for the web client, `native` for the apps). Forwarded by MAS and used to gate web signups behind the registration allowlist. Only the configured native marker (default `native`) exempts the flow; an absent or any other value is treated as web.") @RequestParam(value = "gua_downstream", required = false) String guaDownstream) {
         if (!"code".equals(responseType)) {
             throw new OidcInvalidRequestException("unsupported_response_type", "Only response_type=code is supported");
         }

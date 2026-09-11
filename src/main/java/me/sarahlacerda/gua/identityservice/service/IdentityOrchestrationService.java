@@ -40,6 +40,7 @@ public class IdentityOrchestrationService {
     private final DeviceNotificationService deviceNotificationService;
     private final UsernamePolicy usernamePolicy;
     private final MeterRegistry metrics;
+    private final RegistrationGuard registrationGuard;
 
     public void sendOtp(String e164PhoneNumber, String requesterIp, String language) {
         otpService.sendOtp(e164PhoneNumber, requesterIp, language);
@@ -152,6 +153,12 @@ public class IdentityOrchestrationService {
         final String userId = matrixProvisioningService.buildUserId(localpart);
 
         final String phone = signupTokenService.peek(signupToken);
+        // Invite-only web gate (inert unless enabled). This REST path has no login
+        // session or downstream marker, so it is always treated as web: a new account
+        // is created only for an allowlisted phone, the same rule the interactive
+        // /login/profile step applies. Checked before the token is consumed, so a
+        // refusal provisions nothing.
+        registrationGuard.assertAllowedForNewUser(phone);
         final String digest = phoneNumberHasher.digest(phone);
 
         if (directoryService.findByDigest(digest).isPresent()) {
