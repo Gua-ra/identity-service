@@ -31,6 +31,28 @@ identity:
     phone-change-cooldown: ${IDENTITY_SECURITY_PHONE_CHANGE_COOLDOWN:PT24H}
     phone-change-challenge-ttl: ${IDENTITY_SECURITY_PHONE_CHANGE_CHALLENGE_TTL:PT10M}
     max-phone-change-otp-attempts: ${IDENTITY_SECURITY_MAX_PHONE_CHANGE_OTP_ATTEMPTS:5}
+  # Account genesis and the accountId (ADM-008 Phase 3). Every flag is off by default: a deployment
+  # that sets none of them behaves exactly as it did before the feature existed. Nothing here is read
+  # for routing or for login in this phase.
+  genesis:
+    # Master switch. Off: POST /account/genesis answers 503, the "gua:" login-hint grammar is not
+    # parsed, and no account is given a genesis row.
+    enabled: ${IDENTITY_GENESIS_ENABLED:false}
+    # Whether ids may be issued under recovery framework 0x01. Off outside dev (ADM-008 decision 4):
+    # 0x01 commits no delay bounds and its recovery key shares the device store with the key it would
+    # veto, so production issuance waits on ADM-002 D1 and Q6. Dev sets this true and treats the ids
+    # it mints as disposable.
+    production-issuance: ${IDENTITY_GENESIS_PRODUCTION_ISSUANCE:false}
+    # How long a registered but unattached genesis stays attachable.
+    pending-ttl: ${IDENTITY_GENESIS_PENDING_TTL:PT30M}
+    # Refuse a native signup that presents no attach handle, instead of giving it a bootstrap id.
+    # Flip only once the clients ship genesis and are observed presenting handles.
+    require-for-native: ${IDENTITY_GENESIS_REQUIRE_FOR_NATIVE:false}
+    bootstrap-backfill:
+      # Mint a bootstrap accountId for every existing account that has none, at startup. Idempotent
+      # and resumable, so it is safe to leave on.
+      enabled: ${IDENTITY_GENESIS_BOOTSTRAP_BACKFILL_ENABLED:false}
+      batch-size: ${IDENTITY_GENESIS_BOOTSTRAP_BACKFILL_BATCH_SIZE:500}
   rate-limits:
     enabled: ${IDENTITY_RATE_LIMITS_ENABLED:true}
     default-config:
@@ -48,6 +70,13 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_OTP_VERIFY_LIMIT:10}
         refresh-period: ${IDENTITY_RATE_LIMIT_OTP_VERIFY_REFRESH:PT1M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_OTP_VERIFY_TIMEOUT:PT0S}
+      # Open and unauthenticated, and each call writes a pending row, so it is bounded per address the
+      # same way /otp/verify is. Registering costs one Ed25519 verification.
+      - path: /account/genesis
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_GENESIS_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_GENESIS_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_ACCOUNT_GENESIS_TIMEOUT:PT0S}
       - path: /signup/complete
         methods: [POST]
         limit-for-period: ${IDENTITY_RATE_LIMIT_SIGNUP_COMPLETE_LIMIT:10}
