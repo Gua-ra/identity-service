@@ -3,8 +3,6 @@ package me.sarahlacerda.gua.identityservice.service;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.List;
-import java.util.Locale;
-import java.util.UUID;
 
 import lombok.RequiredArgsConstructor;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
@@ -23,36 +21,6 @@ public class MatrixProvisioningService {
     private final MatrixAdminClient matrixAdminClient;
     private final HomeserverRegistry homeserverRegistry;
     private final SecureRandom secureRandom = new SecureRandom();
-
-    /**
-     * Generates an opaque, prefixed localpart for a brand-new account on the given
-     * homeserver. Reached only from the legacy non-interactive authorize branch,
-     * which ADM-001 L1a schedules for removal. The interactive login path does not
-     * use it: there the chosen handle is the MXID localpart and the OIDC subject is
-     * the full MXID (see LoginFlowController), which is the starting point for any
-     * subject re-keying (ADM-001 S6). The opaque-MXID model remains a roadmap item.
-     */
-    public String generateOpaqueUserId(Homeserver homeserver) {
-        return homeserver.userId(generateOpaqueLocalpart());
-    }
-
-    /** Back-compatible overload: places on the default homeserver. */
-    public String generateOpaqueUserId() {
-        return generateOpaqueUserId(homeserverRegistry.getDefault());
-    }
-
-    private String generateOpaqueLocalpart() {
-        String prefix = properties.getMatrix().getUserLocalpartPrefix();
-        if (prefix == null) {
-            prefix = "";
-        }
-        prefix = prefix.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9._=/-]", "");
-        if (prefix.isBlank() || prefix.contains(".") || prefix.contains(":")) {
-            prefix = "u";
-        }
-        String random = UUID.randomUUID().toString().replace("-", "");
-        return prefix + random;
-    }
 
     /** Builds the full MXID for a localpart on a specific homeserver. */
     public String buildUserId(String localpart, Homeserver homeserver) {

@@ -138,7 +138,6 @@ class IdentityOrchestrationServiceTest {
                 VerifyOtpResult result = service.verifyOtpAndSignIn(phone, "000000", "111111", metadata);
 
                 verify(signupTokenService, never()).issue(any());
-                verify(matrixProvisioningService, never()).generateOpaqueUserId();
                 verify(userSecurityService).validatePinOrThrow(existingEntry.getUserId(), "111111");
                 verify(userSecurityService, never()).setInitialPin(any(), any());
                 verify(directoryService).upsertByDigest(eq(digest), anyString(), eq(existingEntry.getUserId()),

@@ -109,7 +109,6 @@ class AuthFlowIntegrationTest {
         registry.add("identity.matrix.client-api-base-url", () -> wireMock.baseUrl());
         registry.add("identity.matrix.homeserver-domain", () -> "example.com");
         registry.add("identity.matrix.admin-access-token", () -> "test-admin-token");
-        registry.add("identity.matrix.user-localpart-prefix", () -> "gua");
         registry.add("identity.directory.pepper", () -> "test-pepper");
         registry.add("identity.sms.twilio.enabled", () -> "false");
         registry.add("identity.rate-limits.enabled", () -> "false");

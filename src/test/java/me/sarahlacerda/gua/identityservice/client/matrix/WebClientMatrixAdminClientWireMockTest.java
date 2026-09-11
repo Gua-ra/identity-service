@@ -45,7 +45,6 @@ class WebClientMatrixAdminClientWireMockTest {
         matrix.setClientApiBaseUrl(wireMock.baseUrl());
         matrix.setHomeserverDomain("example.com");
         matrix.setAdminAccessToken("admin-token-abc");
-        matrix.setUserLocalpartPrefix("gua");
 
         client = new WebClientMatrixAdminClient(WebClient.builder(), properties);
     }
