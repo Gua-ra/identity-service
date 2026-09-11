@@ -34,9 +34,13 @@ public class IdentityServiceProperties {
     private final ResolverProperties resolver = new ResolverProperties();
 
     /**
-     * gua-resolver integration: publish this homeserver's accounts into the shared phone-&gt;homeserver
-     * directory. All blank = disabled (single-homeserver dev works without it). signingPrivateKey is this
-     * homeserver's Ed25519 membership credential (base64 PKCS#8), injected from a Secret.
+     * gua-resolver integration: publish this homeserver's accounts into the member-written
+     * phone-&gt;homeserver directory (POST /directory/entries). That write path is the one
+     * <a href="https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md">ADM-001</a> L1b removes;
+     * these properties stay only until the resolver deletion lands. All blank = disabled
+     * (single-homeserver dev works without it). signingPrivateKey is this homeserver's Ed25519
+     * membership credential (base64 PKCS#8), injected from a Secret; it identifies the writing member
+     * and nothing more.
      */
     @Getter
     @Setter
@@ -100,7 +104,7 @@ public class IdentityServiceProperties {
          * and minting duplicate accounts). When set to the expected, non-reversible
          * fingerprint of the live pepper (see
          * {@code DirectoryPepperPinValidator}), the service FAILS FAST on startup if
-         * the configured pepper does not match — so an accidental rotation is caught
+         * the configured pepper does not match, so an accidental rotation is caught
          * loudly instead of silently corrupting identities. Leave blank in dev; pin
          * it in every long-lived environment. This is a fingerprint, never the pepper
          * itself, so it is safe to commit/store.
@@ -112,10 +116,13 @@ public class IdentityServiceProperties {
     }
 
     /**
-     * Routing / homeserver-registry configuration. When {@code homeservers} is
-     * empty, the registry synthesises a single homeserver from the legacy
-     * {@code identity.matrix.*} properties, so existing single-homeserver
-     * deployments keep working with no config change.
+     * Per-deployment routing / homeserver-registry configuration: the homeservers
+     * this deployment provisions accounts to and the local rule for choosing one.
+     * This is local configuration, not the federation roster, and the choice it
+     * drives is not the committed placement of ADM-001 L6. When
+     * {@code homeservers} is empty, the registry synthesises a single homeserver
+     * from the legacy {@code identity.matrix.*} properties, so existing
+     * single-homeserver deployments keep working with no config change.
      */
     @Getter
     @Setter

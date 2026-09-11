@@ -16,8 +16,12 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Home
 import me.sarahlacerda.gua.identityservice.domain.Homeserver;
 
 /**
- * Authoritative, in-memory registry of the homeservers the Gua federation can
- * place accounts on.
+ * In-memory registry of the homeservers this deployment provisions accounts to,
+ * built from local configuration. It is not the federation membership, which is
+ * the resolver's roster, and a homeserver chosen from it is a local routing
+ * choice, not a placement record: those are the committed placements of
+ * <a href="https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md">ADM-001</a>
+ * L6, which nothing here implements.
  *
  * <p>Back-compatible by design: when {@code identity.routing.homeservers} is not
  * configured, the registry synthesises a single homeserver from the legacy

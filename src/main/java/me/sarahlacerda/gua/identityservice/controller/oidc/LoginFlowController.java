@@ -221,7 +221,7 @@ public class LoginFlowController {
     private ResponseEntity<LoginStateResponse> routeExistingUser(
             String sessionId, LoginSession session, String userId, String displayName) {
         // On a re-authentication (login-only) the verified phone must belong to the
-        // already-authenticated user. A different owner is rejected — the change-phone
+        // already-authenticated user. A different owner is rejected: the change-phone
         // flow, where the new number is intentionally not yet the user's, runs through a
         // separate endpoint and never sets reauthUserId, so it is unaffected.
         if (session.getReauthUserId() != null && !session.getReauthUserId().equals(userId)) {
@@ -286,13 +286,16 @@ public class LoginFlowController {
         registrationGuard.assertAllowedForNewUser(session);
 
         String localpart = usernamePolicy.normalizeAndValidate(request.username());
-        // Global-username uniqueness across the Gua federation is authoritative here
-        // (the per-homeserver userExists check below only sees one homeserver).
+        // Username uniqueness is enforced within this deployment's directory (the
+        // per-homeserver userExists check below only sees one homeserver). It is not
+        // federation-wide: that is a property of the sequenced binding log in ADM-001
+        // (L11, L12), which nothing here implements.
         if (directoryService.isUsernameTaken(localpart)) {
             throw new UsernameTakenException("Username already taken");
         }
 
-        // Routing layer decides which homeserver this new account lives on.
+        // This deployment's router picks the homeserver the new account is created on:
+        // a local choice, not the committed placement of ADM-001 L6.
         Homeserver homeserver = homeserverRouter
                 .selectForNewAccount(AccountPlacementContext.forPhone(session.getPhoneNumber()));
         if (matrixAdminClient.userExists(matrixProvisioningService.buildUserId(localpart, homeserver))) {
@@ -504,7 +507,7 @@ public class LoginFlowController {
     }
 
     private ResponseEntity<LoginStateResponse> advanceToPasskeySetup(String sessionId, LoginSession session) {
-        // Don't re-offer passkey setup to an account that already has one — re-registering the same
+        // Don't re-offer passkey setup to an account that already has one: re-registering the same
         // device only fails. Such a user is done authenticating; complete the login straight through.
         if (passkeyService.isEnabled() && passkeyService.hasPasskey(session.getUserId())) {
             return complete(sessionId, session);

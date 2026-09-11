@@ -26,9 +26,11 @@ public class MatrixProvisioningService {
 
     /**
      * Generates an opaque, prefixed localpart for a brand-new account on the given
-     * homeserver. The localpart is intentionally NOT the user's chosen handle:
-     * under Gua's routing model the human-readable username lives in the directory
-     * (as a global alias), decoupled from the MXID.
+     * homeserver. Reached only from the legacy non-interactive authorize branch,
+     * which ADM-001 L1a schedules for removal. The interactive login path does not
+     * use it: there the chosen handle is the MXID localpart and the OIDC subject is
+     * the full MXID (see LoginFlowController), which is the starting point for any
+     * subject re-keying (ADM-001 S6). The opaque-MXID model remains a roadmap item.
      */
     public String generateOpaqueUserId(Homeserver homeserver) {
         return homeserver.userId(generateOpaqueLocalpart());
@@ -83,8 +85,9 @@ public class MatrixProvisioningService {
 
     /**
      * Returns the E.164 numbers currently linked to {@code userId} on the homeserver,
-     * excluding {@code keep}. Read-only — used to capture the old number(s) before a
-     * phone change so they can be de-discovered at the federation (resolver) layer.
+     * excluding {@code keep}. Read-only: used to capture the old number(s) before a
+     * phone change so {@code ResolverDirectoryClient} can attempt to unpublish them
+     * (a DELETE the resolver does not implement today).
      */
     public List<String> getLinkedPhonesExcluding(String userId, String keep) {
         return matrixAdminClient.getLinkedPhones(userId).stream()
