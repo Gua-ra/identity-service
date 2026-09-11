@@ -57,6 +57,12 @@ class IdentityOrchestrationServiceTest {
         private TrustedDeviceService trustedDeviceService;
         @Mock
         private DeviceNotificationService deviceNotificationService;
+        /**
+         * Account genesis is off by default here (a mock answers false), so these tests assert the
+         * behaviour of the REST signup path exactly as it was before the feature existed.
+         */
+        @Mock
+        private me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService accountGenesisService;
 
         private final UsernamePolicy usernamePolicy = new UsernamePolicy();
         private final io.micrometer.core.instrument.MeterRegistry meterRegistry =
@@ -85,7 +91,8 @@ class IdentityOrchestrationServiceTest {
                                 usernamePolicy,
                                 meterRegistry,
                                 new RegistrationGuard(loginFlowProperties, new PhoneNumberNormalizer(),
-                                                directoryService, phoneNumberHasher, matrixAdminClient));
+                                                directoryService, phoneNumberHasher, matrixAdminClient),
+                                accountGenesisService);
         }
 
         @Test

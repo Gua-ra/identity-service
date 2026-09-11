@@ -49,6 +49,8 @@ import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
 import me.sarahlacerda.gua.identityservice.service.RegistrationGuard;
+import me.sarahlacerda.gua.identityservice.service.account.AccountCreationService;
+import me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService;
 import me.sarahlacerda.gua.identityservice.service.routing.AccountPlacementContext;
 import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRouter;
 import me.sarahlacerda.gua.identityservice.service.UsernamePolicy;
@@ -102,6 +104,8 @@ public class LoginFlowController {
     private final PasskeyService passkeyService;
     private final RegistrationGuard registrationGuard;
     private final AccountLocalpartResolver accountLocalparts;
+    private final AccountGenesisService accountGenesisService;
+    private final AccountCreationService accountCreationService;
 
     @GetMapping("/context")
     @Operation(summary = "Fetch the current login state", description = "Returns the current step, the login intent (PHONE or PASSKEY, from the OIDC login_hint), a CSRF token to echo on subsequent calls, and the masked phone when known.")
@@ -213,8 +217,45 @@ public class LoginFlowController {
         // Genuine no-match anywhere: brand-new user; choose a username + display name.
         session.setNewUser(true);
         session.setPhase(Phase.PROFILE_REQUIRED);
+        issueGenesisAttachChallenge(session);
         loginSessionService.save(sessionId, session);
         return ResponseEntity.ok(state(session, null));
+    }
+
+    /**
+     * Issues the bytes a client must sign to attach its account genesis, when a session carrying a
+     * handle enters the profile step (ADM-008 decision 6).
+     *
+     * <p>Issued once per profile step: a session that already holds a challenge keeps it, so reloading
+     * the UI does not invalidate a proof the client has already computed. The value lives only on the
+     * server-side session, is handed to the client to sign, and is never accepted back as a lookup key.
+     */
+    private void issueGenesisAttachChallenge(LoginSession session) {
+        if (!accountGenesisService.isEnabled()
+                || !StringUtils.hasText(session.getGenesisAttachHandle())
+                || StringUtils.hasText(session.getGenesisAttachChallenge())) {
+            return;
+        }
+        session.setGenesisAttachChallenge(accountGenesisService.issueAttachChallenge());
+    }
+
+    /**
+     * What the profile step knows about this session's account genesis. The handle and the challenge are
+     * read from the server-side session; only the proof comes from the client. Returns {@code null} when
+     * the feature is off, which leaves the account-creation path exactly as it was before it existed.
+     */
+    private AccountCreationService.GenesisAttachment genesisAttachment(LoginSession session, String attachProof) {
+        if (!accountGenesisService.isEnabled()) {
+            return null;
+        }
+        String nativeMarker = properties.getRegistration() == null ? null
+                : properties.getRegistration().getNativeClientMarker();
+        boolean nativeClient = nativeMarker != null && nativeMarker.equals(session.getDownstreamClient());
+        return new AccountCreationService.GenesisAttachment(
+                session.getGenesisAttachHandle(),
+                session.getGenesisAttachChallenge(),
+                attachProof,
+                nativeClient);
     }
 
     /**
@@ -322,13 +363,20 @@ public class LoginFlowController {
         String digest = phoneNumberHasher.digest(session.getPhoneNumber());
         String maskedPhone = phoneNumberMasker.mask(session.getPhoneNumber());
         try {
-            directoryService.upsertByDigest(digest, maskedPhone, userId, displayName);
-            // Record the routing decision + reserve the global username alias.
-            directoryService.assignRouting(digest, homeserver.id(), localpart);
+            // The directory row, this deployment's routing choice and the account's accountId are
+            // written as one transaction. ADM-008 decision 6 puts the attach-proof verification inside
+            // the account-creation transaction, so a handle that was presented and fails to attach rolls
+            // the whole signup back rather than silently downgrading to a bootstrap id.
+            accountCreationService.createAccount(digest, maskedPhone, userId, displayName, homeserver.id(),
+                    localpart, genesisAttachment(session, request.attachProof()));
         } catch (DataIntegrityViolationException ex) {
             throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
         }
 
+        // Burned only by a successful attach: a failed proof leaves the challenge in place so the client
+        // can retry inside this session, and it dies with the session either way.
+        session.setGenesisAttachHandle(null);
+        session.setGenesisAttachChallenge(null);
         session.setUserId(userId);
         session.setDisplayName(displayName);
         session.setPreferredUsername(localpart);
@@ -571,7 +619,8 @@ public class LoginFlowController {
                 session.getPhoneHint(),
                 session.getCsrfToken(),
                 session.isNewUser(),
-                redirectUrl);
+                redirectUrl,
+                session.getGenesisAttachChallenge());
     }
 
     private static String maskPhone(String phone) {
@@ -610,7 +659,12 @@ public class LoginFlowController {
     public record PinSetupRequest(String pin, boolean skip) {
     }
 
-    public record ProfileRequest(@NotBlank String username, String displayName) {
+    /**
+     * {@code attachProof} is the client's Ed25519 signature, base64url, over the attach-proof domain,
+     * the challenge this session was issued, and the raw accountId bytes. Absent for a signup that is
+     * not attaching a genesis, which takes the bootstrap branch and is not a failure.
+     */
+    public record ProfileRequest(@NotBlank String username, String displayName, String attachProof) {
     }
 
     public record PasskeyCredentialRequest(@NotNull JsonNode credential) {
@@ -629,6 +683,12 @@ public class LoginFlowController {
             String phoneHint,
             String csrfToken,
             boolean newUser,
-            String redirectUrl) {
+            String redirectUrl,
+            /**
+             * The 32 server-chosen bytes, base64url, this session's client must sign to attach its
+             * account genesis. Null, and omitted from the JSON, for every session that is not attaching
+             * one, so a client that knows nothing about genesis sees exactly the response it saw before.
+             */
+            String genesisAttachChallenge) {
     }
 }

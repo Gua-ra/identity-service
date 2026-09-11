@@ -58,6 +58,10 @@ import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 @AutoConfigureMockMvc(addFilters = false)
 class OidcAuthorizationControllerTest {
 
+    // The controller now also reads IdentityServiceProperties, which the slice already provides from
+    // @EnableConfigurationProperties. Account genesis is off in it by default, so the "gua:" login-hint
+    // grammar is not parsed here and every assertion below is the behaviour from before it existed.
+
     private static final String CALLBACK = "https://client.example.com/callback";
     private static final String PKCE_CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 

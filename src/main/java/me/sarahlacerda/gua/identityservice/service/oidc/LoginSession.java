@@ -121,6 +121,25 @@ public class LoginSession {
     private boolean enroll;
 
     /**
+     * Single-use attach handle taken from a {@code gua:} login hint, naming an {@code AccountGenesis}
+     * this client registered at {@code POST /account/genesis} (ADM-008 decision 6). Null when the hint
+     * carried none, which is the bootstrap branch and not a failure.
+     *
+     * <p>A handle alone attaches nothing. Anyone can compose an authorize URL, so this value is
+     * attacker-controlled in both directions; it only names which pending registration the attach step
+     * should look up, and the attach still has to be proved by {@link #genesisAttachChallenge}.
+     */
+    private String genesisAttachHandle;
+
+    /**
+     * The 32 server-chosen CSPRNG bytes, base64url, that the client must sign to attach the genesis
+     * above. Issued once when this session enters the profile step, held here on the server side, and
+     * never accepted from the client as a lookup key. Burned only by a successful attach, and gone when
+     * the session expires, which is at or under the handle's own 30-minute TTL.
+     */
+    private String genesisAttachChallenge;
+
+    /**
      * Double-submit CSRF token bound to this session and required on state-changing
      * calls.
      */

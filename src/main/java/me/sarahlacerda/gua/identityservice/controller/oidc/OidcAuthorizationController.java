@@ -4,7 +4,10 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -29,7 +32,9 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
+import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
+import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.exception.OidcInvalidRequestException;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
@@ -58,6 +63,21 @@ public class OidcAuthorizationController {
     private final OidcClientService clientService;
     private final LoginSessionService loginSessionService;
     private final LoginFlowProperties loginProperties;
+    private final IdentityServiceProperties identityProperties;
+
+    /**
+     * Prefix of the structured login hint the first-party clients send (ADM-008 decision 6). Parsed only
+     * while {@code identity.genesis.enabled} is on; with the flag off a {@code gua:} hint falls through
+     * to {@link #normalizeLoginHint}, which yields no prefill, exactly as before the grammar existed.
+     */
+    private static final String GUA_HINT_PREFIX = "gua:";
+
+    /** The whole grammar. Any other key, or a repeated one, is malformed. */
+    private static final Set<String> GUA_HINT_KEYS = Set.of("phone", "intent", "genesis");
+
+    /** An attach handle is 32 CSPRNG bytes as unpadded base64url. */
+    private static final java.util.regex.Pattern ATTACH_HANDLE =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9_-]{16,128}$");
 
     @GetMapping("/oauth2/authorize")
     @Operation(summary = "Initiate the OAuth 2.0 authorization code flow", description = "Entry point used by Matrix Authentication Service. Validates the OIDC request, starts a "
@@ -105,11 +125,13 @@ public class OidcAuthorizationController {
         session.setCodeChallenge(codeChallenge);
         session.setCodeChallengeMethod(codeChallengeMethod);
         session.setPhase(LoginSession.Phase.PHONE);
-        // The hint is either the reserved passkey intent or a phone to pre-fill, never
-        // both: the intent marker must not leak into the phone field.
+        // The hint is the reserved passkey marker, a structured "gua:" hint, or a phone to pre-fill,
+        // never more than one: the intent marker must not leak into the phone field.
         if (isPasskeyLoginHint(loginHint)) {
             session.setIntent(LoginSession.Intent.PASSKEY);
             session.setPhoneHint(null);
+        } else if (isGuaLoginHint(loginHint)) {
+            applyGuaLoginHint(session, loginHint);
         } else {
             session.setIntent(LoginSession.Intent.PHONE);
             session.setPhoneHint(normalizeLoginHint(loginHint));
@@ -252,6 +274,71 @@ public class OidcAuthorizationController {
     /** True when the hint is exactly the reserved passkey intent marker (trimmed, any case). */
     private static boolean isPasskeyLoginHint(String loginHint) {
         return loginHint != null && PASSKEY_LOGIN_HINT.equalsIgnoreCase(loginHint.trim());
+    }
+
+    /**
+     * True for a {@code gua:} prefixed hint while the feature is on. The grammar applies only to
+     * prefixed hints, and only then: the reserved value {@code passkey} keeps its meaning, and every
+     * other hint keeps today's behaviour.
+     */
+    private boolean isGuaLoginHint(String loginHint) {
+        return identityProperties.getGenesis().isEnabled()
+                && loginHint != null
+                && loginHint.trim().toLowerCase(Locale.ROOT).startsWith(GUA_HINT_PREFIX);
+    }
+
+    /**
+     * Parses {@code gua:phone=<E.164>;genesis=<handle>} (or {@code gua:intent=passkey}) onto the session.
+     *
+     * <p>Strict by design, as ADM-008 decision 6 requires: an unparsable hint, an unknown or duplicated
+     * key and a malformed {@code genesis} value are refused rather than silently ignored, because
+     * quietly dropping a handle is the silent downgrade the decision forbids. The handle itself is only
+     * recorded here; it authorizes nothing until an attach proof is verified at the profile step.
+     */
+    private void applyGuaLoginHint(LoginSession session, String loginHint) {
+        String body = loginHint.trim().substring(GUA_HINT_PREFIX.length());
+        Map<String, String> pairs = new LinkedHashMap<>();
+        for (String part : body.split(";", -1)) {
+            int separator = part.indexOf('=');
+            if (part.isBlank() || separator <= 0 || separator == part.length() - 1) {
+                throw malformedLoginHint();
+            }
+            String key = part.substring(0, separator).trim().toLowerCase(Locale.ROOT);
+            String value = part.substring(separator + 1).trim();
+            if (!GUA_HINT_KEYS.contains(key) || pairs.put(key, value) != null) {
+                throw malformedLoginHint();
+            }
+        }
+
+        String intent = pairs.get("intent");
+        if (intent != null && !PASSKEY_LOGIN_HINT.equalsIgnoreCase(intent)) {
+            throw malformedLoginHint();
+        }
+        session.setIntent(intent == null ? LoginSession.Intent.PHONE : LoginSession.Intent.PASSKEY);
+
+        String phone = pairs.get("phone");
+        if (phone != null) {
+            String normalized = normalizeLoginHint(phone);
+            if (normalized == null) {
+                throw malformedLoginHint();
+            }
+            // A passkey sign-in opens the assertion straight away, so the phone field is not shown and
+            // the marker must not leak into it.
+            session.setPhoneHint(session.getIntent() == LoginSession.Intent.PASSKEY ? null : normalized);
+        }
+
+        String genesis = pairs.get("genesis");
+        if (genesis != null) {
+            if (!ATTACH_HANDLE.matcher(genesis).matches()) {
+                throw malformedLoginHint();
+            }
+            session.setGenesisAttachHandle(genesis);
+        }
+    }
+
+    private static LoginFlowException malformedLoginHint() {
+        return new LoginFlowException(HttpStatus.BAD_REQUEST, "invalid_login_hint",
+                "The login hint is malformed.");
     }
 
     /**
