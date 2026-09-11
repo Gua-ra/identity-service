@@ -1,6 +1,7 @@
 package me.sarahlacerda.gua.identityservice.controller.oidc;
 
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -40,6 +41,7 @@ import me.sarahlacerda.gua.identityservice.domain.Homeserver;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneAlreadyLinkedException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
+import me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.MatrixProvisioningService;
 import me.sarahlacerda.gua.identityservice.service.OtpService;
@@ -99,6 +101,7 @@ public class LoginFlowController {
     private final OidcAuthorizationService authorizationService;
     private final PasskeyService passkeyService;
     private final RegistrationGuard registrationGuard;
+    private final AccountLocalpartResolver accountLocalparts;
 
     @GetMapping("/context")
     @Operation(summary = "Fetch the current login state", description = "Returns the current step, the login intent (PHONE or PASSKEY, from the OIDC login_hint), a CSRF token to echo on subsequent calls, and the masked phone when known.")
@@ -176,7 +179,7 @@ public class LoginFlowController {
         String digest = phoneNumberHasher.digest(session.getPhoneNumber());
         Optional<DirectoryEntry> existing = directoryService.findByDigest(digest);
         if (existing.isPresent()) {
-            return routeExistingUser(sessionId, session, existing.get().getUserId(), existing.get().getDisplayName());
+            return routeExistingUser(sessionId, session, existing.get().getUserId(), existing.get());
         }
 
         // The peppered phone digest missed. Before treating this as a brand-new
@@ -192,9 +195,12 @@ public class LoginFlowController {
                     + "homeserver phone binding and healing the directory row");
             // Heal the directory row so future logins resolve via the fast digest path.
             healDirectoryRow(digest, session.getPhoneNumber(), userId);
-            DirectoryEntry healed = directoryService.findByDigest(digest).orElse(null);
-            String displayName = healed != null ? healed.getDisplayName() : null;
-            return routeExistingUser(sessionId, session, userId, displayName);
+            // The healed row carries no stored username, so its localpart takes the MXID
+            // fallback in AccountLocalpartResolver. A failed heal leaves no row at all.
+            DirectoryEntry healed = directoryService.findByDigest(digest)
+                    .filter(row -> userId.equals(row.getUserId()))
+                    .orElse(null);
+            return routeExistingUser(sessionId, session, userId, healed);
         }
 
         // Re-authentication is LOGIN-ONLY: a phone that resolves to no existing account
@@ -214,12 +220,15 @@ public class LoginFlowController {
     /**
      * Routes an authenticated returning user (resolved either from the directory
      * digest or the homeserver phone-binding fallback) to the PIN step or straight
-     * to passkey setup. Always marks the session as an existing user and re-emits a
-     * localpart from the stable MXID, which MAS imports as {@code preferred_username}
-     * on the first delegated login.
+     * to passkey setup. Always marks the session as an existing user and emits the
+     * account's stored localpart, which MAS imports as {@code preferred_username} on the
+     * first delegated login. The localpart is read from the directory row, never
+     * derived from {@code userId} (ADM-001 S6); see {@link AccountLocalpartResolver}.
+     *
+     * @param entry the account's directory row, or {@code null} when none is stored
      */
     private ResponseEntity<LoginStateResponse> routeExistingUser(
-            String sessionId, LoginSession session, String userId, String displayName) {
+            String sessionId, LoginSession session, String userId, DirectoryEntry entry) {
         // On a re-authentication (login-only) the verified phone must belong to the
         // already-authenticated user. A different owner is rejected: the change-phone
         // flow, where the new number is intentionally not yet the user's, runs through a
@@ -227,11 +236,14 @@ public class LoginFlowController {
         if (session.getReauthUserId() != null && !session.getReauthUserId().equals(userId)) {
             throw reauthMismatch();
         }
-        session.setUserId(userId);
-        session.setDisplayName(displayName);
         // Returning users are still NEW to MAS on their first delegated login, which
-        // requires a localpart. Re-emit it from the stable MXID we already store.
-        session.setPreferredUsername(localpartOf(userId));
+        // requires a localpart. Resolve it before touching the session, so a refusal
+        // leaves nothing saved and no authorization code can follow.
+        String preferredUsername = accountLocalparts.forExistingAccount(userId,
+                entry != null ? List.of(entry) : List.of());
+        session.setUserId(userId);
+        session.setDisplayName(entry != null ? entry.getDisplayName() : null);
+        session.setPreferredUsername(preferredUsername);
         session.setNewUser(false);
         if (userSecurityService.hasPin(userId)) {
             session.setPhase(Phase.PIN_REQUIRED);
@@ -424,14 +436,13 @@ public class LoginFlowController {
             throw reauthMismatch();
         }
 
+        // Returning users are still new to MAS on their first delegated login, which needs a
+        // localpart (MAS imports it as preferred_username): the directory's stored handle, or
+        // the strict MXID fallback when none is stored (AccountLocalpartResolver).
+        String preferredUsername = accountLocalparts.forExistingAccount(userId, List.of(entry));
         session.setUserId(userId);
         session.setDisplayName(entry.getDisplayName());
-        // Returning users are still new to MAS on their first delegated login, which needs a
-        // localpart (MAS imports it as preferred_username). Prefer the directory's global
-        // handle, falling back to the localpart of the stable MXID.
-        session.setPreferredUsername(StringUtils.hasText(entry.getUsername())
-                ? entry.getUsername()
-                : localpartOf(userId));
+        session.setPreferredUsername(preferredUsername);
         session.setNewUser(false);
         // Intentional OTP bypass: a proven existing user signs in straight through.
         return complete(sessionId, session);
@@ -561,19 +572,6 @@ public class LoginFlowController {
                 session.getCsrfToken(),
                 session.isNewUser(),
                 redirectUrl);
-    }
-
-    /**
-     * Extracts the localpart from a Matrix user id, e.g.
-     * {@code @alice:dev.local -> alice}.
-     */
-    private static String localpartOf(String matrixUserId) {
-        if (matrixUserId == null || matrixUserId.isBlank()) {
-            return null;
-        }
-        String value = matrixUserId.startsWith("@") ? matrixUserId.substring(1) : matrixUserId;
-        int colon = value.indexOf(':');
-        return colon >= 0 ? value.substring(0, colon) : value;
     }
 
     private static String maskPhone(String phone) {

@@ -39,6 +39,7 @@ import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinOperationException;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
+import me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.Phase;
@@ -61,6 +62,7 @@ public class SecurityController {
     private final LoginFlowProperties loginProperties;
     private final OidcProperties oidcProperties;
     private final PasskeyService passkeyService;
+    private final AccountLocalpartResolver accountLocalparts;
 
     @GetMapping("/pin/status")
     @Operation(summary = "Check whether the authenticated user has a PIN set", description = "Returns hasPin=true once the user has configured a security PIN. Used by clients to drive the 'set up two-step verification' nudge.", security = @SecurityRequirement(name = "oidcAccessToken"))
@@ -177,6 +179,11 @@ public class SecurityController {
                     "This account already has a passkey.");
         }
 
+        // Same localpart source as login (ADM-001 S6). An enrollment session never issues
+        // an authorization code, but it must not carry a value login would refuse.
+        List<DirectoryEntry> entries = directoryService.findByUserId(userId);
+        String preferredUsername = accountLocalparts.forExistingAccount(userId, entries);
+
         LoginSession session = new LoginSession();
         session.setUserId(userId);
         // Mark this as an enrollment (not an OIDC login): there is no authorize request,
@@ -187,8 +194,8 @@ public class SecurityController {
         // contract in LoginFlowController so the enroll flow can never degrade into an
         // open signup/login even though the user is dropped straight at passkey setup.
         session.setReauthUserId(userId);
-        session.setDisplayName(displayNameFor(userId));
-        session.setPreferredUsername(localpartOf(userId));
+        session.setDisplayName(displayNameFor(entries, preferredUsername));
+        session.setPreferredUsername(preferredUsername);
         // The app scheme the OIDC client uses; only echoed back if the ceremony reaches
         // completion, and never reachable as an open login (reauthUserId is set above).
         session.setRedirectUri(loginProperties.getEnroll().getRedirectUri());
@@ -210,28 +217,14 @@ public class SecurityController {
 
     /**
      * Resolves a human-friendly display name for the passkey credential from the
-     * user's directory entry, falling back to the localpart of the MXID when the
-     * directory has no row (or no display name) for the user.
+     * user's directory rows, falling back to the account's localpart when the
+     * directory has no display name for the user.
      */
-    private String displayNameFor(String userId) {
-        List<DirectoryEntry> entries = directoryService.findByUserId(userId);
+    private static String displayNameFor(List<DirectoryEntry> entries, String localpart) {
         return entries.stream()
                 .map(DirectoryEntry::getDisplayName)
                 .filter(name -> name != null && !name.isBlank())
                 .findFirst()
-                .orElseGet(() -> localpartOf(userId));
-    }
-
-    /**
-     * Extracts the localpart from a Matrix user id, e.g.
-     * {@code @alice:dev.local -> alice}.
-     */
-    private static String localpartOf(String matrixUserId) {
-        if (matrixUserId == null || matrixUserId.isBlank()) {
-            return null;
-        }
-        String value = matrixUserId.startsWith("@") ? matrixUserId.substring(1) : matrixUserId;
-        int colon = value.indexOf(':');
-        return colon >= 0 ? value.substring(0, colon) : value;
+                .orElse(localpart);
     }
 }
