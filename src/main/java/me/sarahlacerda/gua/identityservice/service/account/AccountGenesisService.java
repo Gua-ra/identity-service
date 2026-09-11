@@ -134,6 +134,12 @@ public class AccountGenesisService {
             log.info("Registered a pending account genesis");
         }
 
+        // Housekeeping on a write path rather than a scheduled job: nothing in this application enables
+        // scheduling, and turning it on for this one sweep would start a scheduler for everything else
+        // too. Expired registrations are already refused at attach time, so this only stops them piling
+        // up, and running it here means it happens exactly when new ones are being created.
+        sweepExpired();
+
         return new AccountGenesisRegisterResponse(accountId.value(), handle, expiresAt);
     }
 

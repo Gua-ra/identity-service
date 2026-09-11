@@ -116,6 +116,25 @@ class AccountGenesisServiceTest {
     }
 
     @Test
+    void aSuccessfulRegistrationSweepsExpiredPendingRows() {
+        // There is no scheduler in this application, so the sweep rides along on the write path.
+        service.register(b64(canonicalBytes), validProof());
+
+        verify(repository).deleteExpiredPending(any(), any());
+    }
+
+    @Test
+    void aRefusedRegistrationWritesNothingAtAll() {
+        properties.getGenesis().setEnabled(false);
+
+        assertThatThrownBy(() -> service.register(b64(canonicalBytes), validProof()))
+                .isInstanceOf(GenesisRegistrationException.class);
+
+        verify(repository, never()).save(any());
+        verify(repository, never()).deleteExpiredPending(any(), any());
+    }
+
+    @Test
     void theEndpointIsUnavailableWhileTheFeatureIsOff() {
         properties.getGenesis().setEnabled(false);
 
