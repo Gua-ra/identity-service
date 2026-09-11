@@ -368,6 +368,45 @@ class AuthFlowIntegrationTest {
         assertThat(authorizationCodeCount()).isEqualTo(codesBefore);
     }
 
+    /**
+     * The native apps start a passkey sign-in by sending the reserved
+     * {@code login_hint=passkey}, which MAS forwards verbatim. End to end over HTTP:
+     * the session parks at the phone step flagged with the PASSKEY intent, nothing is
+     * mistaken for a phone number, and the passkey assertion endpoint answers from
+     * that very session with a fresh challenge.
+     */
+    @Test
+    void passkeyLoginHintParksPasskeyIntentAndOffersAssertionOptions() throws Exception {
+        StringBuilder sb = new StringBuilder(baseUrl).append("/oauth2/authorize?");
+        appendParam(sb, "response_type", "code");
+        appendParam(sb, "client_id", CLIENT_ID);
+        appendParam(sb, "redirect_uri", REDIRECT_URI);
+        appendParam(sb, "scope", "openid profile phone");
+        appendParam(sb, "state", "state-passkey");
+        appendParam(sb, "login_hint", "passkey");
+        appendParam(sb, "code_challenge", s256(randomVerifier()));
+        appendParam(sb, "code_challenge_method", "S256");
+        sb.setLength(sb.length() - 1);
+
+        ResponseEntity<String> response = restTemplate.exchange(URI.create(sb.toString()), HttpMethod.GET,
+                HttpEntity.EMPTY, String.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FOUND);
+        assertThat(response.getHeaders().getLocation()).hasToString(LOGIN_UI);
+
+        LoginClient anonymous = new LoginClient(loginCookie(response.getHeaders()), null);
+        Map<?, ?> context = anonymous.get("/login/context");
+        assertThat(context.get("phase")).isEqualTo("PHONE");
+        assertThat(context.get("intent")).isEqualTo("PASSKEY");
+        assertThat(context.get("phoneHint")).isNull();
+        assertThat(context.get("maskedPhone")).isNull();
+
+        LoginClient login = new LoginClient(anonymous.cookie, (String) context.get("csrfToken"));
+        Map<?, ?> options = login.post("/login/passkey/auth/options", Map.of());
+        Map<?, ?> publicKey = (Map<?, ?>) options.get("publicKey");
+        assertThat(publicKey).as("assertion options: %s", options).isNotNull();
+        assertThat((String) publicKey.get("challenge")).isNotBlank();
+    }
+
     // --- Interactive flow driver ------------------------------------------------
 
     /**
@@ -409,6 +448,7 @@ class AuthFlowIntegrationTest {
         LoginClient login = new LoginClient(loginCookie(response.getHeaders()), null);
         Map<?, ?> context = login.get("/login/context");
         assertThat(context.get("phase")).isEqualTo("PHONE");
+        assertThat(context.get("intent")).isEqualTo("PHONE");
         String csrf = (String) context.get("csrfToken");
         assertThat(csrf).isNotBlank();
         return new LoginClient(login.cookie, csrf);

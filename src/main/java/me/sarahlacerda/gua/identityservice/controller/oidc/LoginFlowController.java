@@ -101,7 +101,7 @@ public class LoginFlowController {
     private final RegistrationGuard registrationGuard;
 
     @GetMapping("/context")
-    @Operation(summary = "Fetch the current login state", description = "Returns the current step, a CSRF token to echo on subsequent calls, and the masked phone when known.")
+    @Operation(summary = "Fetch the current login state", description = "Returns the current step, the login intent (PHONE or PASSKEY, from the OIDC login_hint), a CSRF token to echo on subsequent calls, and the masked phone when known.")
     public ResponseEntity<LoginStateResponse> context(
             @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId) {
         LoginSession session = requireSession(sessionId);
@@ -554,6 +554,7 @@ public class LoginFlowController {
     private LoginStateResponse state(LoginSession session, String redirectUrl) {
         return new LoginStateResponse(
                 session.getPhase().name(),
+                session.getIntent().name(),
                 session.getClientId(),
                 maskPhone(session.getPhoneNumber()),
                 session.getPhoneHint(),
@@ -623,6 +624,8 @@ public class LoginFlowController {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record LoginStateResponse(
             String phase,
+            /** {@code PHONE} or {@code PASSKEY}; clients that predate the field treat it as {@code PHONE}. */
+            String intent,
             String clientId,
             String maskedPhone,
             String phoneHint,
