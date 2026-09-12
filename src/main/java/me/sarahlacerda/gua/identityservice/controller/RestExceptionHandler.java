@@ -11,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.FieldError;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -242,6 +243,18 @@ public class RestExceptionHandler {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                                 .header("WWW-Authenticate", "Basic realm=\"oauth2\"")
                                 .body(new ErrorResponse("invalid_client", ex.getMessage()));
+        }
+
+        /**
+         * A request whose body is missing or is not readable as JSON. Without this the
+         * catch-all below turns a malformed request into a 500, which blames the server
+         * for the caller's mistake and tells the caller nothing.
+         */
+        @ExceptionHandler(HttpMessageNotReadableException.class)
+        public ResponseEntity<ErrorResponse> handleUnreadableBody(HttpMessageNotReadableException ex) {
+                log.debug("Unreadable request body", ex);
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .body(new ErrorResponse("malformed_request", "Request body is missing or is not valid JSON."));
         }
 
         @ExceptionHandler(MethodArgumentNotValidException.class)
