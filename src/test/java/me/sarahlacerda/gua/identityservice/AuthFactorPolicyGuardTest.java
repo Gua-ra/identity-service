@@ -230,6 +230,145 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
+     * The factor report on the interactive login state is allow-listed by phase, and the allow
+     * list holds no step that a caller reaches by typing a phone number.
+     *
+     * <p>
+     * Reporting it at the phone or OTP step would be an enumeration oracle: those sessions hold
+     * a submitted number and nothing proved, so "does this account hold a passkey" asked there
+     * is answerable about anybody, by anybody, for one unverified request. An allow list is the
+     * shape that fails safe. Two exclusions would leave a phase added later reporting by default
+     * because nobody remembered to add it to the list.
+     */
+    @Test
+    void theLoginStateReportsFactorsOnlyFromPhasesThatHaveResolvedTheSubject() throws IOException {
+        String source = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
+        int allowList = source.indexOf("FACTOR_REPORT_PHASES =");
+        assertThat(allowList).isPositive();
+        String declaration = source.substring(allowList, source.indexOf(";", allowList));
+
+        assertThat(declaration).doesNotContain("Phase.PHONE");
+        assertThat(declaration).doesNotContain("Phase.OTP_SENT");
+        assertThat(declaration).contains("Phase.PIN_REQUIRED");
+
+        // And the phase alone is not enough: the report is keyed by the subject the session
+        // actually resolved, never by the number that was submitted to reach it.
+        String publishable = methodBody(source, "private AuthFactorPolicy.RegisteredFactors publishableFactors(");
+        assertThat(publishable).contains("FACTOR_REPORT_PHASES.contains(session.getPhase())");
+        assertThat(publishable).contains("StringUtils.hasText(session.getUserId())");
+        assertThat(publishable).contains("session.getUserId()");
+        assertThat(publishable).doesNotContain("getPhoneNumber");
+    }
+
+    /**
+     * The bearer-gated status endpoint answers for whoever the token says, and takes nothing
+     * from the caller to key it by. The same report behind a submitted identifier would be the
+     * same oracle in a different place.
+     */
+    @Test
+    void theBearerFactorReportIsKeyedOnlyByTheAuthenticatedSubject() throws IOException {
+        String source = read(MAIN.resolve("controller/security/SecurityController.java"));
+
+        // An empty parameter list on a path with no variables: there is nothing submitted for
+        // this to be keyed by, which is the assertion.
+        assertThat(source).contains("@GetMapping(\"/pin/status\")");
+        assertThat(source).contains("public ResponseEntity<PinStatusResponse> pinStatus() {");
+
+        String pinStatus = methodBody(source, "public ResponseEntity<PinStatusResponse> pinStatus() {");
+        assertThat(pinStatus).contains("authenticatedUserAccessor.requireCurrentUserId()");
+        assertThat(pinStatus).doesNotContain("request.");
+        assertThat(pinStatus).doesNotContain("@RequestParam");
+        assertThat(pinStatus).doesNotContain("@PathVariable");
+    }
+
+    /**
+     * The sign-in assertion reaches the PIN step, which is where the people who would most want
+     * it end up, and never the profile step, which belongs to a session that matched no account.
+     * An assertion accepted there would be an assertion reaching account creation.
+     */
+    @Test
+    void theSignInAssertionReachesThePinStepAndNeverTheProfileStep() throws IOException {
+        String source = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
+        String phases = methodBody(source, "private void requireAssertionPhase(");
+
+        assertThat(phases).contains("Phase.PIN_REQUIRED");
+        assertThat(phases).doesNotContain("Phase.PROFILE_REQUIRED");
+        assertThat(phases).doesNotContain("Phase.PASSKEY_SETUP");
+    }
+
+    /**
+     * An enrollment session carries no OIDC request and so has no authorization code to issue.
+     * It is kept out of the sign-in ceremony by name, not only by which step it happens to be
+     * sitting on, so widening the phase set again cannot quietly turn one into a login.
+     */
+    @Test
+    void anEnrollmentSessionIsRefusedTheSignInCeremonyByName() throws IOException {
+        String source = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
+
+        assertThat(methodBody(source, "public ResponseEntity<PasskeyOptionsResponse> startPasskeyAuthentication("))
+                .contains("refuseEnrollmentSignIn(session)");
+        assertThat(methodBody(source, "public ResponseEntity<LoginStateResponse> finishPasskeyAuthentication("))
+                .contains("refuseEnrollmentSignIn(session)");
+        assertThat(methodBody(source, "private void refuseEnrollmentSignIn(")).contains("session.isEnroll()");
+    }
+
+    /**
+     * Signup order: the passkey is offered first and the PIN step is what a new account falls
+     * back to. The PIN must stay REACHABLE, because a device with no usable authenticator would
+     * otherwise finish onboarding holding nothing, so the fallback edge is asserted as
+     * explicitly as the order is.
+     */
+    @Test
+    void signupOffersThePasskeyFirstAndKeepsThePinStepReachable() throws IOException {
+        String source = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
+
+        // The profile step no longer names the PIN at all: it hands over to the routing below.
+        String profile = methodBody(source, "public ResponseEntity<LoginStateResponse> submitProfile(");
+        assertThat(profile).contains("offerPasskeyBeforePin(sessionId, session)");
+        assertThat(profile).doesNotContain("Phase.PIN_SETUP");
+
+        // Which offers the passkey, and falls back to the PIN step on a deployment that has no
+        // passkeys to offer. That condition is read from configuration, never from the request.
+        String offer = methodBody(source, "private ResponseEntity<LoginStateResponse> offerPasskeyBeforePin(");
+        assertThat(offer).contains("authFactorPolicy.passkeysSupported()");
+        assertThat(offer).contains("advanceToPinSetup(sessionId, session)");
+        assertThat(offer).contains("Phase.PASSKEY_SETUP");
+
+        // Leaving the offer without a credential sends a new account to the PIN step, not to the
+        // end of the flow. Declined, failed and impossible all arrive at this one endpoint.
+        String skip = methodBody(source, "public ResponseEntity<LoginStateResponse> skipPasskeySetup(");
+        assertThat(skip.indexOf("advanceToPinSetup(sessionId, session)"))
+                .isGreaterThan(0)
+                .isLessThan(skip.indexOf("return complete(sessionId, session)"));
+        assertThat(skip).contains("session.isNewUser()");
+
+        // And the PIN step is the end of signup, so it cannot route back to the offer it was
+        // reached from.
+        String pinSetup = methodBody(source, "public ResponseEntity<LoginStateResponse> submitPinSetup(");
+        assertThat(pinSetup).doesNotContain("advanceToPasskeySetup");
+        assertThat(pinSetup).contains("complete(sessionId, session)");
+    }
+
+    /**
+     * Every state-changing step still carries the double-submit check. The flow was reordered,
+     * not loosened, and a step that quietly lost its CSRF check would be reachable from any
+     * page the user's browser can be made to load.
+     */
+    @Test
+    void everyStateChangingLoginStepStillChecksTheCsrfToken() throws IOException {
+        String source = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
+
+        for (String method : new String[] {
+                "public ResponseEntity<LoginStateResponse> submitProfile(",
+                "public ResponseEntity<LoginStateResponse> submitPinSetup(",
+                "public ResponseEntity<LoginStateResponse> skipPasskeySetup(",
+                "public ResponseEntity<PasskeyOptionsResponse> startPasskeyAuthentication(",
+                "public ResponseEntity<LoginStateResponse> finishPasskeyAuthentication(" }) {
+            assertThat(methodBody(source, method)).as("CSRF check in %s", method).contains("requireCsrf(session, csrf)");
+        }
+    }
+
+    /**
      * Returns the source of one method, from its signature to the first line that closes at
      * method indentation, so ordering assertions cannot accidentally match text elsewhere in
      * the file.

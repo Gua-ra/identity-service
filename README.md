@@ -188,7 +188,7 @@ Interactive docs: **`/swagger-ui.html`** (OpenAPI JSON at `/api-docs`). Endpoint
 | `GET /signup/check-username` | Public | Real-time username availability check (format/reserved rules + Matrix lookup). Does not mutate state. |
 | `POST /signup/complete` | Public¹ | Exchange a `signupToken` for a provisioned Matrix user with chosen username/display name. |
 | `POST /signin/verify-pin` | Public¹ | Exchange a `pinChallengeToken` + PIN for a Matrix session (second leg of 2SV sign-in). |
-| `POST /login/passkey/auth/options` | Session² | Start **passkey sign-in** for a returning user: WebAuthn assertion options, offered at the start of the login flow before OTP verification. |
+| `POST /login/passkey/auth/options` | Session² | Start **passkey sign-in** for a returning user: WebAuthn assertion options, offered at the phone and OTP steps and at the PIN step. |
 | `POST /login/passkey/auth/verify` | Session² | Verify the passkey assertion and complete sign-in without an SMS code. Only ever resolves to an existing account, never creates one. |
 
 ¹ No bearer token, but gated by the single-use token issued from `/otp/verify`.
@@ -239,7 +239,7 @@ A passkey is the preferred strong factor and the account PIN is the fallback for
 
 | Question | Answer | Who asks |
 | --- | --- | --- |
-| Preferred factor | `PASSKEY` → `PIN` → `PHONE_OTP`, whichever the account holds first | `GET /security/pin/status` |
+| Preferred factor | `PASSKEY` → `PIN` → `PHONE_OTP`, whichever the account holds first | `GET /security/pin/status`, and the interactive login state once its subject is resolved |
 | Login fallbacks | Phone OTP always, plus the PIN step exactly when a PIN is set | interactive login, native `/otp/verify` sign-in |
 | Step-up for a phone change | `PASSKEY` then `PIN`, hard block when neither is produced | `POST /account/phone/change/start` |
 | Recovery | Restores the `PIN`, proven by `PHONE_OTP` | `POST /security/pin/reset` |
@@ -248,6 +248,10 @@ A passkey is the preferred strong factor and the account PIN is the fallback for
 
 - **No self-attested downgrade.** There is no field anywhere for a client to say "my passkey is unavailable, ask me for something else". Anyone holding a session could set it, so it would not describe a device, it would request the weaker factor.
 - **No registered-passkey requirement, and no registered-passkey skip.** A registered credential is not a usable one. It can be left on a lost phone or dropped by a credential manager, and nothing in this service can remove or replace it. So a registered passkey never removes the PIN fallback underneath it, never makes the PIN step skippable on login, and never gates PIN recovery. Each of those would turn a credential that quietly stopped working into an account with no way in and no way back.
+
+**Where the inventory is published, and where it must not be.** A client can only offer the right factor first if it is told which ones the account holds, so `passkeyRegistered` and `preferredFactor` appear in two places: `GET /security/pin/status`, which is bearer-gated and answers only for the subject in the token; and the interactive login state, but only from a step the flow cannot reach without an OTP or an assertion having resolved the subject (`PIN_REQUIRED`, `PIN_SETUP`, `PASSKEY_SETUP`), and only when the session actually carries that subject. Both fields are absent from the JSON before then.
+
+The phone and OTP steps are excluded, and that exclusion is the point. At those steps the session holds a number somebody typed and nothing they have proved, so answering *does this account hold a passkey* there would answer it for any number at all, for the price of one unverified request: an enumeration oracle over who holds what. The phases that may report are written as an allow list rather than as a pair of exclusions, so a step added later publishes nothing until somebody decides it should, and a guard test fails if `PHONE` or `OTP_SENT` ever joins it.
 
 The consequence is deliberate and worth stating plainly: recovery is the one place where the product rule is not fully met. PIN recovery on an account that also holds a passkey is allowed, so recovery does not yet prove the stronger factor is genuinely gone. It cannot be closed by refusing recovery, for the reason above; it needs a recovery protocol that can tell a lost PIN apart from a takeover, and that does not exist yet. Until it does, the request is recorded as such so the event can be found later. Recorded is not prevented.
 
@@ -352,18 +356,20 @@ For browser-based login (the path used by MAS and the Gua apps), the identity se
 
 | Method & path | Purpose |
 | --- | --- |
-| `GET /login/context` | Current step, masked phone, CSRF token, and `intent` (`PHONE` or `PASSKEY`, from the `login_hint`; a missing field means `PHONE`). |
+| `GET /login/context` | Current step, masked phone, CSRF token, `intent` (`PHONE` or `PASSKEY`, from the `login_hint`; a missing field means `PHONE`), and, once the subject is resolved, `passkeyRegistered` + `preferredFactor`. |
 | `POST /login/phone` | Submit the phone number; dispatches an OTP. |
 | `POST /login/otp` | Verify the OTP; routes to the PIN step (returning two-step user), the profile step (new user), or completes login. |
 | `POST /login/pin` | Verify the account PIN (returning two-step user). |
 | `POST /login/profile` | Choose username + display name (new user). |
-| `POST /login/pin-setup` | Offer a new user two-step verification: send a `pin` to enable it, or `skip: true` to continue without one. |
+| `POST /login/pin-setup` | Two-step verification for a new account that is not finishing with a passkey: send a `pin` to enable it, or `skip: true` to continue without one. |
 | `POST /login/passkey/register/options` · `…/register/verify` | Register a passkey for the account (WebAuthn create). |
-| `POST /login/passkey/setup-skip` | Decline passkey setup and complete login. |
-| `POST /login/passkey/auth/options` · `…/auth/verify` | Sign in with an existing passkey (WebAuthn get). |
+| `POST /login/passkey/setup-skip` | Leave the passkey offer without registering one (declined, failed, or no authenticator). A new account goes on to `PIN_SETUP`; everyone else completes. |
+| `POST /login/passkey/auth/options` · `…/auth/verify` | Sign in with an existing passkey (WebAuthn get). Reachable from `PHONE`, `OTP_SENT` and `PIN_REQUIRED`. |
 | `GET /login/passkey/enroll/{token}` | One-time web-view handoff for in-app passkey enrollment started at `POST /security/passkey/enroll/start` (see [Passkeys](#passkeys)). |
 
-New users are walked through profile → `PIN_SETUP` (optional two-step verification) → `PASSKEY_SETUP`; returning users reach `PASSKEY_SETUP` once phone (and any PIN) verification completes, unless the account already has a passkey. Both setup steps can be skipped. A returning user may instead authenticate with a passkey via the `…/auth/*` endpoints.
+New users are walked through profile → `PASSKEY_SETUP` → done, and reach `PIN_SETUP` only when the passkey does not happen: the offer is left without a credential (declined, refused by the authenticator, or no authenticator to run it), or the deployment has passkeys switched off, in which case the profile step routes straight there. That is the product rule in the flow itself, since the PIN is the fallback for whoever cannot use a passkey rather than the first thing a new account is asked for. Leaving the offer never routes to completion for a new account, so a device with no usable authenticator still reaches a step where it can set a second factor; the step itself stays optional, exactly as it was. Returning users reach `PASSKEY_SETUP` once phone (and any PIN) verification completes, unless the account already has a passkey, and complete when they decline.
+
+A returning user may instead authenticate with a passkey via the `…/auth/*` endpoints, which are reachable from the phone step, the OTP step **and the PIN step**. That last one matters: being asked for a PIN is what the flow does to an account that has one, which is exactly the population that would want the stronger factor, and until now the PIN step answered an attempt to use a passkey with a conflict. Admitting it takes nothing away, because the same assertion already completes the same login one step earlier. Two limits hold whatever the step: the profile step is never admitted (an assertion there would reach account creation) and neither is an in-app enrollment session (it carries no OIDC request, so it must keep issuing no authorization code). A session that has already resolved its subject, which is every session at the PIN step, additionally requires the assertion to resolve to that same account.
 
 On success an authorization code is issued, the login session is consumed (and its cookie cleared), and the response carries `redirectUrl` for the UI to navigate back to the client, which exchanges the code at `/oauth2/token`. For new users the chosen handle is emitted as the `preferred_username` claim so MAS uses it as the Matrix localpart on first provisioning. Returning users emit the username stored in the directory at signup, never a value derived from the user id; an account with no stored username falls back to the localpart of a well-formed Matrix user id, and the login is refused with `account_identity_inconsistent` when that value fails the username format or is another account's stored username (ADM-001 S6). The OIDC `sub` is the account's full Matrix user id on the homeserver chosen at signup (localpart plus homeserver domain). It is stable, but homeserver-scoped rather than opaque, which is why re-keying subjects is an explicit step in the migration plan.
 

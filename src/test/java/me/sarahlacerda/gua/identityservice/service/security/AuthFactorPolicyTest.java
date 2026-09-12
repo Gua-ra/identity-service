@@ -47,6 +47,29 @@ class AuthFactorPolicyTest {
         assertThat(policy().passkeyRegistered(USER)).isFalse();
     }
 
+    /**
+     * Deployment capability, not account state. It is the one sense in which a passkey can be
+     * "unavailable" that the server settles on its own, which is exactly why signup may act on
+     * it: nobody asserted it, it was read from configuration.
+     */
+    @Test
+    void passkeysSupportedReportsTheDeploymentAndAsksNothingAboutTheAccount() {
+        when(passkeyService.isEnabled()).thenReturn(true);
+
+        assertThat(policy().passkeysSupported()).isTrue();
+
+        org.mockito.Mockito.verify(passkeyService, org.mockito.Mockito.never()).hasPasskey(
+                org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verifyNoInteractions(userSecurityService);
+    }
+
+    @Test
+    void passkeysAreUnsupportedWhenTheDeploymentHasThemSwitchedOff() {
+        when(passkeyService.isEnabled()).thenReturn(false);
+
+        assertThat(policy().passkeysSupported()).isFalse();
+    }
+
     @Test
     void preferredFactorRanksPasskeyThenPinThenPhone() {
         when(passkeyService.isEnabled()).thenReturn(true);
