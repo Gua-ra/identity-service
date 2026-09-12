@@ -84,6 +84,16 @@ class LoginFlowControllerTest {
             return new AccountLocalpartResolver(directoryService);
         }
 
+        // The real factor policy over the mocked UserSecurityService / PasskeyService, so the
+        // PIN step and the "already has a passkey" question are decided by the component the
+        // application uses. The existing hasPin / hasPasskey stubs below drive it unchanged.
+        @org.springframework.context.annotation.Bean
+        me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy authFactorPolicy(
+                UserSecurityService userSecurityService, PasskeyService passkeyService) {
+            return new me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy(
+                    userSecurityService, passkeyService);
+        }
+
         // The real account-creation service, so the directory writes these tests assert on are the ones
         // the signup path actually performs. Account genesis is mocked and off, so it contributes
         // nothing here: that is the "flag off changes nothing" case, exercised by every test below.

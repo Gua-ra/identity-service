@@ -60,6 +60,7 @@ import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationCode;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationService;
+import me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 
@@ -97,6 +98,7 @@ public class LoginFlowController {
     private final PhoneNumberNormalizer phoneNumberNormalizer;
     private final HomeserverRouter homeserverRouter;
     private final UserSecurityService userSecurityService;
+    private final AuthFactorPolicy authFactorPolicy;
     private final MatrixProvisioningService matrixProvisioningService;
     private final MatrixAdminClient matrixAdminClient;
     private final UsernamePolicy usernamePolicy;
@@ -287,7 +289,11 @@ public class LoginFlowController {
         session.setDisplayName(entry != null ? entry.getDisplayName() : null);
         session.setPreferredUsername(preferredUsername);
         session.setNewUser(false);
-        if (userSecurityService.hasPin(userId)) {
+        // One answer for "does this account need the PIN step", shared with the native
+        // sign-in path and with the phone-change step-up. A registered passkey neither adds
+        // this step nor removes it: skipping it would let a device stand in for knowledge,
+        // and demanding it would strand a user whose credential broke.
+        if (authFactorPolicy.loginPolicy(userId).pinStepRequired()) {
             session.setPhase(Phase.PIN_REQUIRED);
             loginSessionService.save(sessionId, session);
             return ResponseEntity.ok(state(session, null));
@@ -593,7 +599,9 @@ public class LoginFlowController {
     private ResponseEntity<LoginStateResponse> advanceToPasskeySetup(String sessionId, LoginSession session) {
         // Don't re-offer passkey setup to an account that already has one: re-registering the same
         // device only fails. Such a user is done authenticating; complete the login straight through.
-        if (passkeyService.isEnabled() && passkeyService.hasPasskey(session.getUserId())) {
+        // The "already has one" question is AuthFactorPolicy's, so this and the settings entry
+        // point at POST /security/passkey/enroll/start cannot answer it differently.
+        if (authFactorPolicy.passkeyRegistered(session.getUserId())) {
             return complete(sessionId, session);
         }
         session.setPhase(Phase.PASSKEY_SETUP);

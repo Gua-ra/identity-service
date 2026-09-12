@@ -119,6 +119,43 @@ class PasskeyServiceStepUpTest {
     }
 
     @Test
+    void aRefusedStepUpAssertionBurnsItsChallenge() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(repository.existsByUserId(USER)).thenReturn(true);
+        when(repository.findByUserId(USER)).thenReturn(List.of(credential()));
+        service.startStepUpAssertion("step-1", USER);
+        ArgumentCaptor<String> stored = ArgumentCaptor.forClass(String.class);
+        verify(valueOperations).set(eq("passkey:stepup:step-1"), stored.capture(), any());
+        when(valueOperations.get("passkey:stepup:step-1")).thenReturn(stored.getValue());
+
+        // A response the ceremony will not accept.
+        assertThatThrownBy(() -> service.finishStepUpAssertion("step-1", JsonNodeFactory.instance.objectNode()))
+                .isInstanceOf(LoginFlowException.class);
+
+        // One challenge, one attempt. A challenge that outlived a refusal could be presented
+        // again until its TTL ran out, which turns the short single-use window into a retry
+        // window and makes a failed attempt free.
+        verify(redisTemplate).delete("passkey:stepup:step-1");
+    }
+
+    @Test
+    void aRefusedSignInAssertionBurnsItsChallengeToo() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        service.startAuthentication("login-1");
+        ArgumentCaptor<String> stored = ArgumentCaptor.forClass(String.class);
+        verify(valueOperations).set(eq("passkey:assertion:login-1"), stored.capture(), any());
+        when(valueOperations.get("passkey:assertion:login-1")).thenReturn(stored.getValue());
+
+        assertThatThrownBy(() -> service.finishAuthentication("login-1", JsonNodeFactory.instance.objectNode()))
+                .isInstanceOf(LoginFlowException.class);
+
+        // Sign-in keeps the lower user-verification bar, but single use is not a bar, it is
+        // what a challenge is. Both ceremonies redeem through the same method and neither can
+        // return or throw past the burn.
+        verify(redisTemplate).delete("passkey:assertion:login-1");
+    }
+
+    @Test
     void theStepUpCeremonyIsUnavailableWhenPasskeysAreOff() {
         properties.getPasskeys().setEnabled(false);
 
