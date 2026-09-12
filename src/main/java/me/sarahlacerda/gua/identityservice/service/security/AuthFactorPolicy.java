@@ -90,6 +90,24 @@ public class AuthFactorPolicy {
         return passkeyService.isEnabled() && passkeyService.hasPasskey(userId);
     }
 
+    /**
+     * Whether this deployment can run a passkey ceremony at all.
+     *
+     * <p>
+     * Deployment capability, not account state. It says nothing about what any account holds,
+     * and it is the only sense of "a passkey is unavailable" this service establishes on its
+     * own rather than being told: it is read from configuration, so no caller can assert it.
+     *
+     * <p>
+     * Signup asks it to decide whether to offer passkey enrollment before falling back to the
+     * PIN step. Offering a ceremony the deployment cannot run would leave a new account looking
+     * at a refusal with no second factor set, which is the same lockout shape approached from
+     * the other side.
+     */
+    public boolean passkeysSupported() {
+        return passkeyService.isEnabled();
+    }
+
     /** Whether the account has configured an account PIN. Server truth. */
     public boolean pinRegistered(String userId) {
         return userSecurityService.hasPin(userId);

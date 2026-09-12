@@ -1,8 +1,10 @@
 package me.sarahlacerda.gua.identityservice.controller.oidc;
 
+import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -89,6 +91,22 @@ public class LoginFlowController {
     private static final String CSRF_HEADER = "X-CSRF-Token";
     private static final String COOKIE_NAME_EXPR = "${idp.login.cookie-name:gua_login}";
 
+    /**
+     * The only steps whose state may carry the account's registered factors. Written as an
+     * allow list, not as a pair of exclusions, so a phase added later publishes nothing until
+     * somebody decides it should.
+     *
+     * <p>
+     * What it keeps out is an enumeration oracle. Before any of these steps the session holds a
+     * phone number the caller typed and nothing it has proved, so answering "does this account
+     * have a passkey" there would answer it for any number anyone cares to submit, turning the
+     * phone step into a lookup service for who holds what. Every phase listed here is past the
+     * point where an OTP or an assertion resolved the subject, and the report is additionally
+     * conditioned on that subject actually being on the session.
+     */
+    private static final Set<Phase> FACTOR_REPORT_PHASES =
+            EnumSet.of(Phase.PIN_REQUIRED, Phase.PIN_SETUP, Phase.PASSKEY_SETUP);
+
     private final LoginSessionService loginSessionService;
     private final LoginFlowProperties properties;
     private final OtpService otpService;
@@ -110,7 +128,7 @@ public class LoginFlowController {
     private final AccountCreationService accountCreationService;
 
     @GetMapping("/context")
-    @Operation(summary = "Fetch the current login state", description = "Returns the current step, the login intent (PHONE or PASSKEY, from the OIDC login_hint), a CSRF token to echo on subsequent calls, and the masked phone when known.")
+    @Operation(summary = "Fetch the current login state", description = "Returns the current step, the login intent (PHONE or PASSKEY, from the OIDC login_hint), a CSRF token to echo on subsequent calls, and the masked phone when known. Once the step is one the flow can only reach with the subject resolved, it also reports passkeyRegistered and preferredFactor for that account; both are absent before then, and in particular at the phone step, where the session holds a submitted number and nothing proved.")
     public ResponseEntity<LoginStateResponse> context(
             @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId) {
         LoginSession session = requireSession(sessionId);
@@ -356,7 +374,7 @@ public class LoginFlowController {
     }
 
     @PostMapping("/profile")
-    @Operation(summary = "Choose username and display name", description = "Finalizes a brand-new account: validates the username, reserves the handle, and completes login.")
+    @Operation(summary = "Choose username and display name", description = "Finalizes a brand-new account: validates the username, reserves the handle, and offers passkey enrollment. Falls through to the PIN setup step only on a deployment with passkeys switched off.")
     public ResponseEntity<LoginStateResponse> submitProfile(
             @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
             @RequestHeader(value = CSRF_HEADER, required = false) String csrf,
@@ -411,15 +429,15 @@ public class LoginFlowController {
         session.setUserId(userId);
         session.setDisplayName(displayName);
         session.setPreferredUsername(localpart);
-        // New accounts are offered two-step verification (PIN) before finishing.
+        // A new account is offered the passkey first and reaches the PIN step only when it
+        // cannot have one. The PIN is the fallback for people who cannot use a passkey, so it
+        // is not what a new account is asked for before anybody has tried the stronger factor.
         session.setNewUser(true);
-        session.setPhase(Phase.PIN_SETUP);
-        loginSessionService.save(sessionId, session);
-        return ResponseEntity.ok(state(session, null));
+        return offerPasskeyBeforePin(sessionId, session);
     }
 
     @PostMapping("/pin-setup")
-    @Operation(summary = "Set up (or skip) an account PIN", description = "Optional two-step verification step offered to brand-new accounts. Sends a PIN to enable it, or skip:true to continue without one.")
+    @Operation(summary = "Set up (or skip) an account PIN", description = "Two-step verification for a brand-new account that is not finishing with a passkey. Reached by declining the passkey offer, or directly from the profile step on a deployment with passkeys switched off. Send a pin to enable it, or skip:true to continue without one.")
     public ResponseEntity<LoginStateResponse> submitPinSetup(
             @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
             @RequestHeader(value = CSRF_HEADER, required = false) String csrf,
@@ -431,7 +449,10 @@ public class LoginFlowController {
         if (!request.skip() && StringUtils.hasText(request.pin())) {
             userSecurityService.setInitialPin(session.getUserId(), request.pin().trim());
         }
-        return advanceToPasskeySetup(sessionId, session);
+        // The passkey was already offered, before this step and not after it, so there is
+        // nothing further to offer here. Routing back to the offer would be a loop, since
+        // declining it is the only way into this step.
+        return complete(sessionId, session);
     }
 
     @PostMapping("/passkey/register/options")
@@ -461,7 +482,7 @@ public class LoginFlowController {
     }
 
     @PostMapping("/passkey/setup-skip")
-    @Operation(summary = "Skip passkey setup", description = "Completes login without associating a passkey.")
+    @Operation(summary = "Continue without a passkey", description = "Leaves the passkey offer without registering one, whether the user declined it, the ceremony failed, or the device has no authenticator to run it. A brand-new account goes on to the PIN setup step so it does not finish onboarding with no second factor at all; everyone else completes login.")
     public ResponseEntity<LoginStateResponse> skipPasskeySetup(
             @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
             @RequestHeader(value = CSRF_HEADER, required = false) String csrf) {
@@ -469,34 +490,60 @@ public class LoginFlowController {
         requireCsrf(session, csrf);
         requirePhase(session, Phase.PASSKEY_SETUP);
 
-        return session.isEnroll() ? completeEnrollment(sessionId, session) : complete(sessionId, session);
+        if (session.isEnroll()) {
+            return completeEnrollment(sessionId, session);
+        }
+        // Declined, refused by the authenticator, or impossible on this device: this service
+        // cannot tell those apart and does not try, because the only thing separating them is
+        // something the client would be saying about itself. All three arrive here and all
+        // three send a new account on to the PIN step instead of to completion.
+        //
+        // Arriving here hands out nothing weaker. The PIN reached this way is being SET on an
+        // account that holds no factor yet, not accepted in place of one that does, so this is
+        // not the shape the prohibited "my passkey is unavailable" downgrade takes: there is
+        // nothing here to downgrade from.
+        if (session.isNewUser() && !authFactorPolicy.pinRegistered(session.getUserId())) {
+            return advanceToPinSetup(sessionId, session);
+        }
+        return complete(sessionId, session);
     }
 
     @PostMapping("/passkey/auth/options")
-    @Operation(summary = "Start passkey sign-in", description = "Begins a passkey assertion from the phone step, letting a returning user with a registered passkey sign in without an OTP. Only ever resolves to a pre-existing account.")
+    @Operation(summary = "Start passkey sign-in", description = "Begins a passkey assertion, letting a returning user with a registered passkey sign in without an OTP. Available from the phone and OTP steps and from the PIN step, so a user who has already been asked for their PIN can still reach the stronger factor. Never available at the profile step, which belongs to an account that does not exist yet, and never in a passkey-enrollment session. Only ever resolves to a pre-existing account.")
     public ResponseEntity<PasskeyOptionsResponse> startPasskeyAuthentication(
             @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
             @RequestHeader(value = CSRF_HEADER, required = false) String csrf) {
         LoginSession session = requireSession(sessionId);
         requireCsrf(session, csrf);
-        // Offered at the very start of the flow ("sign in with a passkey"), before OTP.
-        requirePhase(session, Phase.PHONE, Phase.OTP_SENT);
+        refuseEnrollmentSignIn(session);
+        requireAssertionPhase(session);
 
         return ResponseEntity.ok(new PasskeyOptionsResponse(passkeyService.startAuthentication(sessionId)));
     }
 
     @PostMapping("/passkey/auth/verify")
-    @Operation(summary = "Finish passkey sign-in", description = "Verifies the WebAuthn assertion and, only when it resolves to an existing OTP-registered account with a phone on file, completes login — intentionally bypassing the OTP step. Never creates an account.")
+    @Operation(summary = "Finish passkey sign-in", description = "Verifies the WebAuthn assertion and, only when it resolves to an existing OTP-registered account with a phone on file, completes login, intentionally bypassing the steps that would otherwise remain. A session that has already resolved its subject, which is every session at the PIN step, additionally requires the assertion to resolve to that same account. Never creates an account.")
     public ResponseEntity<LoginStateResponse> finishPasskeyAuthentication(
             @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
             @RequestHeader(value = CSRF_HEADER, required = false) String csrf,
             @RequestBody @Valid PasskeyCredentialRequest request) {
         LoginSession session = requireSession(sessionId);
         requireCsrf(session, csrf);
-        requirePhase(session, Phase.PHONE, Phase.OTP_SENT);
+        refuseEnrollmentSignIn(session);
+        requireAssertionPhase(session);
 
         PasskeyService.PasskeyAuthentication auth = passkeyService.finishAuthentication(sessionId, request.credential());
         String userId = auth.userId();
+
+        // A session that already knows whose it is keeps that subject. The PIN step is reached
+        // only after an OTP proved this account, so an assertion resolving to a different one
+        // is not a second way into the same login, it is a different login wearing this
+        // session's state. Checked before anything is accepted and before the directory is
+        // read, so a mismatch is refused without a lookup.
+        if (StringUtils.hasText(session.getUserId()) && !session.getUserId().equals(userId)) {
+            throw new LoginFlowException(HttpStatus.FORBIDDEN, "passkey_user_mismatch",
+                    "This passkey belongs to a different account.");
+        }
 
         // POLICY: passkey sign-in may bypass OTP, but ONLY for an existing account that
         // already registered via OTP and has a phone on file. The asserted credential must
@@ -596,6 +643,38 @@ public class LoginFlowController {
                 .body(state(session, session.getRedirectUri()));
     }
 
+    /**
+     * Second-factor routing for a brand-new account: offer the passkey, and fall back to the
+     * PIN step only when this deployment cannot run a passkey ceremony at all.
+     *
+     * <p>
+     * The fallback here is a deployment fact read from configuration, never a claim made by the
+     * caller. A client that cannot use a passkey today does not say so and is not asked; it
+     * declines the offer at {@code POST /login/passkey/setup-skip}, which lands on the same PIN
+     * step. Either route reaches a step where the account can acquire a second factor, and
+     * neither route reaches completion without one having been offered.
+     */
+    private ResponseEntity<LoginStateResponse> offerPasskeyBeforePin(String sessionId, LoginSession session) {
+        if (!authFactorPolicy.passkeysSupported()) {
+            return advanceToPinSetup(sessionId, session);
+        }
+        session.setPhase(Phase.PASSKEY_SETUP);
+        loginSessionService.save(sessionId, session);
+        return ResponseEntity.ok(state(session, null));
+    }
+
+    /**
+     * The PIN step, which is where a new account lands when the stronger factor did not happen.
+     * Reached from exactly two places: the passkey offer being left without a credential, and a
+     * deployment that has no passkeys to offer. It is never the first thing a new account is
+     * asked for.
+     */
+    private ResponseEntity<LoginStateResponse> advanceToPinSetup(String sessionId, LoginSession session) {
+        session.setPhase(Phase.PIN_SETUP);
+        loginSessionService.save(sessionId, session);
+        return ResponseEntity.ok(state(session, null));
+    }
+
     private ResponseEntity<LoginStateResponse> advanceToPasskeySetup(String sessionId, LoginSession session) {
         // Don't re-offer passkey setup to an account that already has one: re-registering the same
         // device only fails. Such a user is done authenticating; complete the login straight through.
@@ -633,6 +712,45 @@ public class LoginFlowController {
         }
     }
 
+    /**
+     * The steps a sign-in assertion may be presented from.
+     *
+     * <p>
+     * The PIN step is in the set because that is exactly where the people who would most want
+     * the stronger factor end up: being asked for a PIN is what routing an account that has one
+     * does, and until now it took the passkey away at the same moment, answering an attempt to
+     * use it with a conflict. Letting the assertion in there takes nothing away, since the
+     * assertion already completes a login for this same population one step earlier, from the
+     * phone step.
+     *
+     * <p>
+     * {@code PROFILE_REQUIRED} is deliberately absent and must stay absent: that step belongs to
+     * a session that matched no account, so an assertion accepted there would be an assertion
+     * reaching account creation. {@code PASSKEY_SETUP} is absent for the same reason in reverse:
+     * it is the registration ceremony, and a session already sitting in it has finished
+     * authenticating.
+     */
+    private void requireAssertionPhase(LoginSession session) {
+        requirePhase(session, Phase.PHONE, Phase.OTP_SENT, Phase.PIN_REQUIRED);
+    }
+
+    /**
+     * Keeps an in-app passkey enrollment session out of the sign-in ceremony.
+     *
+     * <p>
+     * Such a session carries no OIDC request, so it must never reach {@link #complete} and the
+     * authorization code issued there; it has only {@link #completeEnrollment}, which issues
+     * none. Its phase already keeps it out, and this does not replace that check: it is here so
+     * that widening the phase set again cannot quietly turn an enrollment into a login, and so
+     * the refusal says what is wrong instead of reporting the wrong step.
+     */
+    private void refuseEnrollmentSignIn(LoginSession session) {
+        if (session.isEnroll()) {
+            throw new LoginFlowException(HttpStatus.CONFLICT, "enroll_session_cannot_sign_in",
+                    "This session is for adding a passkey, not for signing in.");
+        }
+    }
+
     private void requirePhase(LoginSession session, Phase... allowed) {
         for (Phase phase : allowed) {
             if (session.getPhase() == phase) {
@@ -644,6 +762,7 @@ public class LoginFlowController {
     }
 
     private LoginStateResponse state(LoginSession session, String redirectUrl) {
+        AuthFactorPolicy.RegisteredFactors factors = publishableFactors(session);
         return new LoginStateResponse(
                 session.getPhase().name(),
                 session.getIntent().name(),
@@ -653,7 +772,36 @@ public class LoginFlowController {
                 session.getCsrfToken(),
                 session.isNewUser(),
                 redirectUrl,
-                session.getGenesisAttachChallenge());
+                session.getGenesisAttachChallenge(),
+                factors == null ? null : factors.passkey(),
+                factors == null ? null : factors.preferred().name());
+    }
+
+    /**
+     * What this session may say about the account's registered factors, or {@code null} when it
+     * may say nothing, which is the default and the case at every step before the subject is
+     * proved.
+     *
+     * <p>
+     * Two conditions, and both have to hold. The phase must be one of
+     * {@link #FACTOR_REPORT_PHASES}, which is an allow list of steps that are only reachable
+     * after an OTP or an assertion resolved the account. And the session must actually carry
+     * that resolved subject, so the answer is keyed by who the caller turned out to be and never
+     * by the phone number they typed in.
+     *
+     * <p>
+     * Reporting it a step earlier would be an enumeration oracle: at the phone and OTP steps the
+     * session holds a submitted number and no proof, so "does this account have a passkey" asked
+     * there is answerable for anybody's number by anybody, for the price of one unverified
+     * request. It is also why this is an allow list rather than two exclusions. A phase added
+     * later reports nothing until somebody decides otherwise, instead of reporting by default
+     * because nobody remembered to exclude it.
+     */
+    private AuthFactorPolicy.RegisteredFactors publishableFactors(LoginSession session) {
+        if (!FACTOR_REPORT_PHASES.contains(session.getPhase()) || !StringUtils.hasText(session.getUserId())) {
+            return null;
+        }
+        return authFactorPolicy.registeredFactors(session.getUserId());
     }
 
     private static String maskPhone(String phone) {
@@ -722,6 +870,23 @@ public class LoginFlowController {
              * account genesis. Null, and omitted from the JSON, for every session that is not attaching
              * one, so a client that knows nothing about genesis sees exactly the response it saw before.
              */
-            String genesisAttachChallenge) {
+            String genesisAttachChallenge,
+            /**
+             * Whether the resolved account holds a registered passkey, so the UI can offer it instead of
+             * leading with the PIN. Server truth about registration only: it does not say the credential
+             * works on this device, and there is no field anywhere for the client to say that it does not.
+             *
+             * <p>
+             * Null, and omitted from the JSON, until this session has proved whose account it is. It is
+             * never emitted at the phone or OTP step, where the only thing the session holds is a number
+             * somebody typed, and answering there would answer for any number at all.
+             */
+            Boolean passkeyRegistered,
+            /**
+             * The strongest factor the resolved account holds, {@code PASSKEY}, {@code PIN} or
+             * {@code PHONE_OTP}, and therefore the one to offer first. Null and omitted under exactly the
+             * same conditions as the field above.
+             */
+            String preferredFactor) {
     }
 }
