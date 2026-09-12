@@ -49,14 +49,46 @@ public class OtpService {
     }
 
     public void sendOtp(String e164PhoneNumber, String requesterIp, String language) {
+        send(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), e164PhoneNumber, requesterIp, language);
+    }
+
+    /**
+     * Sends an OTP that belongs to one flow instead of to a phone number: the code is
+     * written under {@code otp:code:{scope}:{scopeId}}, which the unauthenticated
+     * {@code POST /otp/send} cannot write, so it can neither plant a code there ahead of
+     * the flow nor have one of its own codes accepted by it. Everything else is the same
+     * as {@link #sendOtp}: the same per-phone and per-IP send limits, the same code
+     * length and TTL, the same SMS metrics, and the same fresh guess budget per code.
+     */
+    public void sendScopedOtp(OtpScope scope, String scopeId, String e164PhoneNumber, String requesterIp,
+            String language) {
+        send(scopedCodeKey(scope, scopeId), scopedAttemptsKey(scope, scopeId), e164PhoneNumber, requesterIp, language);
+    }
+
+    /** Redeems a scoped code under the same per-code guess cap as {@link #verifyOtp}. */
+    public void verifyScopedOtp(OtpScope scope, String scopeId, String code) {
+        verify(scopedCodeKey(scope, scopeId), scopedAttemptsKey(scope, scopeId), code);
+    }
+
+    /**
+     * Destroys a scoped code and its guess counter, for a flow that is abandoning the
+     * challenge the code belonged to.
+     */
+    public void discardScopedOtp(OtpScope scope, String scopeId) {
+        redisTemplate.delete(scopedCodeKey(scope, scopeId));
+        redisTemplate.delete(scopedAttemptsKey(scope, scopeId));
+    }
+
+    private void send(String codeKey, String attemptsKey, String e164PhoneNumber, String requesterIp,
+            String language) {
         enforceRateLimits(e164PhoneNumber, requesterIp);
         String code = codeGenerator.generateNumericCode(properties.getOtp().getCodeLength());
         String messageBody = resolveTemplate(language).formatted(code);
 
         Duration ttl = properties.getOtp().getTtl();
         // A fresh code starts with a fresh guess budget.
-        redisTemplate.delete(attemptsKey(e164PhoneNumber));
-        redisTemplate.opsForValue().set(codeKey(e164PhoneNumber), code, ttl);
+        redisTemplate.delete(attemptsKey);
+        redisTemplate.opsForValue().set(codeKey, code, ttl);
         try {
             smsSender.send(e164PhoneNumber, messageBody);
             // gua_identity_sms_send_total{provider,result} — SMS usage + delivery failures.
@@ -79,8 +111,10 @@ public class OtpService {
      * fast one address can guess, this bounds how many guesses a code can absorb at all.
      */
     public void verifyOtp(String e164PhoneNumber, String code) {
-        String codeKey = codeKey(e164PhoneNumber);
-        String attemptsKey = attemptsKey(e164PhoneNumber);
+        verify(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), code);
+    }
+
+    private void verify(String codeKey, String attemptsKey, String code) {
         String storedCode = redisTemplate.opsForValue().get(codeKey);
         if (!StringUtils.hasText(storedCode)) {
             // gua_identity_otp_verify_total{result} — wrong/expired codes (auth friction / abuse signal).
@@ -132,6 +166,14 @@ public class OtpService {
 
     private static String attemptsKey(String e164PhoneNumber) {
         return ATTEMPTS_KEY_PREFIX + e164PhoneNumber;
+    }
+
+    private static String scopedCodeKey(OtpScope scope, String scopeId) {
+        return OTP_KEY_PREFIX + scope.keySegment() + ":" + scopeId;
+    }
+
+    private static String scopedAttemptsKey(OtpScope scope, String scopeId) {
+        return ATTEMPTS_KEY_PREFIX + scope.keySegment() + ":" + scopeId;
     }
 
     private void enforceRateLimits(String e164PhoneNumber, String requesterIp) {

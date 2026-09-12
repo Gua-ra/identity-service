@@ -21,9 +21,11 @@ import me.sarahlacerda.gua.identityservice.exception.PinChangeCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinLockedException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetNotRequestedException;
+import me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.UnknownUserException;
 import me.sarahlacerda.gua.identityservice.repository.IdentityUserRepository;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
+import me.sarahlacerda.gua.identityservice.service.OtpScope;
 import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditLogger;
@@ -97,9 +99,13 @@ public class UserSecurityService {
         enforcePinChangeCooldown(user);
         ensurePhoneBelongsToUser(userId, phone);
         validatePinOrThrow(userId, currentPin);
-        otpService.sendOtp(phone, requesterIp, null);
 
+        // The challenge id is minted before the send because it is what the code is keyed
+        // under. Scoped to this challenge, the code cannot be planted by, or satisfied by,
+        // the unauthenticated public send.
         String challengeId = UUID.randomUUID().toString();
+        otpService.sendScopedOtp(OtpScope.PIN_CHANGE, challengeId, phone, requesterIp, null);
+
         Duration ttl = properties.getSecurity().getPinChangeChallengeTtl();
         redisTemplate.opsForValue().set(changeChallengeKey(challengeId), userId + "|" + phone, ttl);
         auditLogger.pinChangeStarted(userId, maskPhoneNumber(phone), requesterIp);
@@ -125,11 +131,12 @@ public class UserSecurityService {
         }
         String[] parts = stored.split("\\|", 2);
         if (parts.length != 2 || !parts[0].equals(userId)) {
+            // Mismatched owner: destroy the challenge and the code that belonged to it.
             redisTemplate.delete(key);
+            otpService.discardScopedOtp(OtpScope.PIN_CHANGE, challengeId);
             throw new PinChangeChallengeNotFoundException("PIN change challenge does not belong to caller");
         }
-        String phone = parts[1];
-        otpService.verifyOtp(phone, otpCode);
+        otpService.verifyScopedOtp(OtpScope.PIN_CHANGE, challengeId, otpCode);
         validatePinFormat(newPin);
         applyNewPin(user, newPin);
         user.setLastPinChangeAt(Instant.now());
@@ -155,6 +162,70 @@ public class UserSecurityService {
             long remaining = cooldown.minus(since).toSeconds();
             throw new PhoneChangeCooldownException("Phone change cooldown active", remaining);
         }
+    }
+
+    /**
+     * Seconds still to run on the hold that keeps a freshly minted PIN from being spent as
+     * the phone-change step-up factor; {@code 0} when nothing is held.
+     *
+     * <p>
+     * A login session can create, change or reset a PIN, and that PIN is then accepted as
+     * the step-up factor on a phone change. The permissive login side is therefore itself a
+     * route to re-pointing the number, and a SIM-swap attacker who reaches a session only
+     * has to set a PIN of their own. Holding the new PIN for a window closes that without
+     * taking any factor away from anyone: nothing is refused permanently, the account keeps
+     * every way in it had, and the hold simply expires.
+     *
+     * <p>
+     * The window is {@code identity.security.pin-reset-cooldown}, the hold this service
+     * already applies to a PIN obtained through recovery, rather than a second seven-day
+     * constant sitting next to it. Both express the same thing: a knowledge factor that has
+     * only just come into existence is not yet trusted for a takeover-shaped action. An
+     * operator who retunes one is retuning both, deliberately.
+     *
+     * <p>
+     * {@code pin_set_at} is stamped on every path that gives the account a new PIN (initial
+     * set, update, OTP-protected change, reset), so it is exactly "when the current PIN came
+     * into being". An account with no PIN, or one whose stamp predates the window, is not
+     * held.
+     */
+    @Transactional(readOnly = true)
+    public long changePhonePinHoldRemainingSeconds(String userId) {
+        return repository.findByUserId(userId)
+                .map(this::pinHoldRemainingSeconds)
+                .orElse(0L);
+    }
+
+    /**
+     * Refuses a phone change whose step-up PIN is still inside the fresh-2FA hold. An
+     * ADDITIONAL refusal: it never stands in for the per-account phone-change cooldown or
+     * for the reset dormancy gates, which are unchanged and still run.
+     */
+    @Transactional(readOnly = true)
+    public void enforcePhoneChangePinHold(String userId) {
+        long remaining = changePhonePinHoldRemainingSeconds(userId);
+        if (remaining > 0) {
+            throw new TwoFactorCooldownException(
+                    "Two-step verification was set up too recently to change the phone number", remaining);
+        }
+    }
+
+    private long pinHoldRemainingSeconds(IdentityUser user) {
+        if (!user.hasPin() || user.getPinSetAt() == null) {
+            return 0L;
+        }
+        Duration hold = properties.getSecurity().getPinResetCooldown();
+        Duration since = Duration.between(user.getPinSetAt(), Instant.now());
+        if (since.isNegative()) {
+            // Clock skew put the stamp in the future. Hold for the whole window rather than
+            // for longer than the window.
+            return hold.toSeconds();
+        }
+        if (since.compareTo(hold) >= 0) {
+            return 0L;
+        }
+        // Never round a live hold down to zero, which would read as "no hold".
+        return Math.max(hold.minus(since).toSeconds(), 1L);
     }
 
     /**
@@ -244,8 +315,18 @@ public class UserSecurityService {
             throw new PinResetCooldownException("PIN reset cooldown active", remainingSeconds);
         }
         ensurePhoneBelongsToUser(userId, phone);
-        otpService.sendOtp(phone, requesterIp, null);
-        user.setPinResetRequestedAt(now);
+        // Scoped to the account, so the unauthenticated public send can neither plant a code
+        // this flow would accept nor hand an attacker one that satisfies it. The reset has no
+        // challenge id on the wire, and the account is what the reset is pending on.
+        otpService.sendScopedOtp(OtpScope.PIN_RESET, userId, phone, requesterIp, null);
+        // The pending stamp is set once, by the request that opened the reset. A repeat
+        // request re-sends the code and leaves the stamp where it is: the waiting period runs
+        // from when the reset was first asked for, so asking again can neither restart it nor
+        // be used to keep it out of reach. Completion needs a live code, which only this call
+        // can produce, so the flow stays reachable without the stamp ever moving.
+        if (user.getPinResetRequestedAt() == null) {
+            user.setPinResetRequestedAt(now);
+        }
         auditLogger.pinResetRequested(userId, maskPhoneNumber(phone), requesterIp);
     }
 
@@ -260,7 +341,7 @@ public class UserSecurityService {
             throw new PinResetCooldownException("PIN reset still cooling down", -1);
         }
         ensurePhoneBelongsToUser(userId, phone);
-        otpService.verifyOtp(phone, code);
+        otpService.verifyScopedOtp(OtpScope.PIN_RESET, userId, code);
         validatePinFormat(newPin);
         applyNewPin(user, newPin);
         user.setPinResetRequestedAt(null);

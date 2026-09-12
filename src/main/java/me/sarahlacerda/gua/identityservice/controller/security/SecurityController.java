@@ -1,6 +1,7 @@
 package me.sarahlacerda.gua.identityservice.controller.security;
 
 import java.util.List;
+import java.util.UUID;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -25,6 +26,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
 import me.sarahlacerda.gua.identityservice.controller.dto.PasskeyEnrollStartResponse;
+import me.sarahlacerda.gua.identityservice.controller.dto.PasskeyStepUpStartResponse;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeCompleteRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeStartRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeStartResponse;
@@ -65,14 +67,16 @@ public class SecurityController {
     private final AccountLocalpartResolver accountLocalparts;
 
     @GetMapping("/pin/status")
-    @Operation(summary = "Check whether the authenticated user has a PIN set", description = "Returns hasPin=true once the user has configured a security PIN. Used by clients to drive the 'set up two-step verification' nudge.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @Operation(summary = "Check the authenticated user's two-step verification state", description = "Returns hasPin=true once the user has configured a security PIN (drives the 'set up two-step verification' nudge), and how long the fresh-2FA hold on changing the phone number still has to run. Both clients read this before offering the change-phone flow, so a held account is told to wait instead of walking the whole flow into a refusal.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "PIN status"),
             @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content)
     })
     public ResponseEntity<PinStatusResponse> pinStatus() {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
-        return ResponseEntity.ok(new PinStatusResponse(userSecurityService.hasPin(userId)));
+        return ResponseEntity.ok(new PinStatusResponse(
+                userSecurityService.hasPin(userId),
+                userSecurityService.changePhonePinHoldRemainingSeconds(userId)));
     }
 
     @PostMapping("/pin")
@@ -155,6 +159,21 @@ public class SecurityController {
         userSecurityService.completePinReset(request.getUserId(), request.getPhone(), request.getCode(),
                 request.getNewPin());
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/passkey/stepup/options")
+    @Operation(summary = "Start a user-verifying passkey step-up", description = "Begins a WebAuthn assertion that may be spent as the step-up factor on a privileged operation, currently POST /account/phone/change/start. The ceremony is pinned to the authenticated account and demands user verification, so possession of an unlocked device is not on its own enough to stand in for the account PIN. Separate from the sign-in ceremony under /login: a challenge minted here cannot complete a login, and a login challenge cannot be spent here.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Assertion options created"),
+            @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content),
+            @ApiResponse(responseCode = "404", description = "Passkeys are disabled on this deployment", content = @Content),
+            @ApiResponse(responseCode = "409", description = "The account has no registered passkey to verify with", content = @Content)
+    })
+    public ResponseEntity<PasskeyStepUpStartResponse> startPasskeyStepUp() {
+        String userId = authenticatedUserAccessor.requireCurrentUserId();
+        String stepUpId = UUID.randomUUID().toString();
+        return ResponseEntity.ok(new PasskeyStepUpStartResponse(
+                stepUpId, passkeyService.startStepUpAssertion(stepUpId, userId)));
     }
 
     @PostMapping("/passkey/enroll/start")

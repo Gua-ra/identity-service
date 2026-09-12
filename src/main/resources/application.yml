@@ -176,6 +176,13 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_CHANGE_START_LIMIT:5}
         refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_CHANGE_START_REFRESH:PT1H}
         timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_CHANGE_START_TIMEOUT:PT0S}
+      # Mints a WebAuthn challenge scoped to the authenticated account. Unlisted it would
+      # fall under default-config, far too loose for a step-up ceremony.
+      - path: /security/passkey/stepup/options
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PASSKEY_STEPUP_LIMIT:20}
+        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PASSKEY_STEPUP_REFRESH:PT5M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PASSKEY_STEPUP_TIMEOUT:PT0S}
       - path: /security/pin/change/complete
         methods: [POST]
         limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_CHANGE_COMPLETE_LIMIT:5}
