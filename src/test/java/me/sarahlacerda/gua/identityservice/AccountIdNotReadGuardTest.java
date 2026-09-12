@@ -40,7 +40,13 @@ class AccountIdNotReadGuardTest {
             "AccountGenesisRegisterRequest.java", "AccountGenesisRegisterResponse.java",
             "BootstrapAccountIdBackfill.java", "AccountScanner.java",
             // properties and error mapping carry the names in configuration and codes only
-            "IdentityServiceProperties.java", "GenesisRegistrationException.java", "RestExceptionHandler.java");
+            "IdentityServiceProperties.java", "GenesisRegistrationException.java", "RestExceptionHandler.java",
+            // Phase 4 placement: these sign, publish and compare an accountId-to-homeserver record. They
+            // are allowed to name an accountId and are deliberately NOT added to the routing-and-login
+            // list below, which is the half of this guard that matters: a placement record must never be
+            // read by anything that decides where an account lives or what MAS is told about it.
+            "PlacementRecord.java", "PlacementRecordCodec.java", "PlacementRecordSigner.java",
+            "ResolverPlacementClient.java", "PlacementShadowReconciler.java", "PlacementAccountScanner.java");
 
     /**
      * Files on the paths that must never learn an accountId: everything that decides where an account

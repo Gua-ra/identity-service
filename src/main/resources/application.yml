@@ -53,6 +53,41 @@ identity:
       # and resumable, so it is safe to leave on.
       enabled: ${IDENTITY_GENESIS_BOOTSTRAP_BACKFILL_ENABLED:false}
       batch-size: ${IDENTITY_GENESIS_BOOTSTRAP_BACKFILL_BATCH_SIZE:500}
+  # Generation-1 placement records and the shadow comparison (ADM-008 Phase 4). Every flag is off by
+  # default and the feature is inert until one is turned on: no scheduler is started, no record is
+  # signed, no MAS is read and no new metric series appears. There is deliberately no flag that serves
+  # routing from a placement record; Phase 4 is comparison only.
+  placement:
+    # Base URL of the gua-resolver holding the records. Named identity.placement.*, never
+    # identity.resolver.*: that namespace belonged to the removed directory-publishing client.
+    resolver-base-url: ${IDENTITY_PLACEMENT_RESOLVER_BASE_URL:}
+    record-validity: ${IDENTITY_PLACEMENT_RECORD_VALIDITY:P400D}
+    reissue-after: ${IDENTITY_PLACEMENT_REISSUE_AFTER:P300D}
+    # Maps a local registry homeserver id to a federation roster id, for comparison only (for example
+    # the legacy "default" row value). Never used to decide which homeserver a record names.
+    federation-id-aliases: {}
+    publish:
+      # Signs and publishes a record for an account whose evidence says it has exactly one home.
+      enabled: ${IDENTITY_PLACEMENT_PUBLISH_ENABLED:false}
+    shadow:
+      enabled: ${IDENTITY_PLACEMENT_SHADOW_ENABLED:false}
+      cron: ${IDENTITY_PLACEMENT_SHADOW_CRON:0 20 3 * * *}
+      # Writes the local routing choice back from the MAS link when the two disagree.
+      heal-directory: ${IDENTITY_PLACEMENT_SHADOW_HEAL_DIRECTORY:false}
+      batch-size: ${IDENTITY_PLACEMENT_SHADOW_BATCH_SIZE:500}
+      # Accounts already known to live away from this deployment's default choice, as MXID to roster id,
+      # so the exit criterion can read "no stale rows except the listed ones".
+      known-placements: {}
+    mas:
+      # Neither read path exists on this deployment yet. The admin API needs the urn:mas:admin scope,
+      # which MAS grants through client_credentials only to a client id listed in its policy data
+      # admin_clients. The SQL fallback needs a read-only role on each MAS database with SELECT on
+      # upstream_oauth_links, users and upstream_oauth_providers. With neither configured the reconciler
+      # refuses to run and says which one to grant, rather than reporting every account as unlinked.
+      admin-api:
+        enabled: ${IDENTITY_PLACEMENT_MAS_ADMIN_API_ENABLED:false}
+      sql:
+        enabled: ${IDENTITY_PLACEMENT_MAS_SQL_ENABLED:false}
   rate-limits:
     enabled: ${IDENTITY_RATE_LIMITS_ENABLED:true}
     default-config:

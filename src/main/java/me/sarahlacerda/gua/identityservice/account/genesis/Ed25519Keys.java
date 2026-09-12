@@ -1,13 +1,17 @@
 package me.sarahlacerda.gua.identityservice.account.genesis;
 
+import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.KeyFactory;
 import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.Signature;
 import java.security.SignatureException;
 import java.security.spec.InvalidKeySpecException;
+import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
+import java.util.Base64;
 import java.util.HexFormat;
 
 /**
@@ -104,6 +108,106 @@ public final class Ed25519Keys {
         } catch (NoSuchAlgorithmException ex) {
             throw new IllegalStateException("Ed25519 unavailable in this JVM", ex);
         } catch (InvalidKeyException | SignatureException ex) {
+            return false;
+        }
+    }
+
+
+    /**
+     * Loads an Ed25519 private key from base64 PKCS#8, the shape the deployment Secret holds a roster
+     * membership key in.
+     *
+     * @throws IllegalStateException when the value is not a readable Ed25519 private key; the message
+     *                               never echoes the value, because the value is key material
+     */
+    public static PrivateKey privateKeyFromPkcs8(String base64Pkcs8) {
+        if (base64Pkcs8 == null || base64Pkcs8.isBlank()) {
+            throw new IllegalStateException("no Ed25519 private key is configured");
+        }
+        byte[] der;
+        try {
+            der = Base64.getDecoder().decode(base64Pkcs8.trim());
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalStateException("the configured Ed25519 private key is not base64", ex);
+        }
+        try {
+            return KeyFactory.getInstance(ALGORITHM).generatePrivate(new PKCS8EncodedKeySpec(der));
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("Ed25519 unavailable in this JVM", ex);
+        } catch (InvalidKeySpecException | IllegalArgumentException ex) {
+            throw new IllegalStateException("the configured Ed25519 private key is not readable PKCS#8", ex);
+        }
+    }
+
+    /** Signs {@code message} with an Ed25519 private key. */
+    public static byte[] sign(PrivateKey privateKey, byte[] message) {
+        try {
+            Signature signer = Signature.getInstance(ALGORITHM);
+            signer.initSign(privateKey);
+            signer.update(message);
+            return signer.sign();
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("Ed25519 unavailable in this JVM", ex);
+        } catch (InvalidKeyException | SignatureException ex) {
+            throw new IllegalStateException("Ed25519 signing failed", ex);
+        }
+    }
+
+    /**
+     * Reads a raw 32-byte Ed25519 public key from base64, accepting either the bare key or an X.509
+     * {@code SubjectPublicKeyInfo} wrapper. The roster publishes member keys base64-encoded and the two
+     * spellings are both in circulation, so a comparison that understood only one would report a
+     * configuration mismatch that is not there.
+     *
+     * @throws InvalidGenesisException when the value is neither spelling of a curve point
+     */
+    public static byte[] rawPublicKeyFromBase64(String base64Key, String reason) {
+        if (base64Key == null || base64Key.isBlank()) {
+            throw new InvalidGenesisException(reason, "Ed25519 public key is missing");
+        }
+        byte[] decoded;
+        try {
+            decoded = Base64.getDecoder().decode(base64Key.trim());
+        } catch (IllegalArgumentException ex) {
+            throw new InvalidGenesisException(reason, "Ed25519 public key is not base64", ex);
+        }
+        byte[] raw;
+        if (decoded.length == RAW_PUBLIC_KEY_LENGTH) {
+            raw = decoded;
+        } else if (decoded.length == SPKI_PREFIX.length + RAW_PUBLIC_KEY_LENGTH
+                && java.util.Arrays.equals(java.util.Arrays.copyOfRange(decoded, 0, SPKI_PREFIX.length),
+                        SPKI_PREFIX)) {
+            raw = java.util.Arrays.copyOfRange(decoded, SPKI_PREFIX.length, decoded.length);
+        } else {
+            throw new InvalidGenesisException(reason, "Ed25519 public key is neither 32 raw bytes nor X.509");
+        }
+        fromRaw(raw, reason);
+        return raw;
+    }
+
+    /**
+     * Fixed probe the key-pair check signs. It is a compile-time constant with its own domain prefix,
+     * never influenced by a caller, and it is neither a placement record (those open with ASCII
+     * {@code GUAP}) nor an admission possession proof (that path signs the bare server name). ADM-008
+     * decision 7 forbids a membership key from signing <em>caller-chosen</em> bytes, because admission's
+     * proof carries no prefix; a constant this service compiles in is not caller-chosen, and the
+     * signature it produces is public and useless on its own.
+     */
+    private static final byte[] KEY_PAIR_PROBE =
+            "gua-placement-signing-key-check.v1".getBytes(StandardCharsets.US_ASCII);
+
+    /**
+     * True when {@code privateKey} is the private half of {@code rawPublicKey}.
+     *
+     * <p>Checked by signing the fixed probe above and verifying it under the candidate public key,
+     * rather than by deriving the public half: Ed25519 public-key derivation needs curve arithmetic the
+     * JDK does not expose, and every alternative would mean a new cryptography dependency. Verifying a
+     * signature proves the pair matches just as conclusively.
+     */
+    public static boolean publicHalfMatches(PrivateKey privateKey, byte[] rawPublicKey) {
+        try {
+            return verify(rawPublicKey, KEY_PAIR_PROBE, sign(privateKey, KEY_PAIR_PROBE));
+        } catch (RuntimeException ex) {
             return false;
         }
     }
