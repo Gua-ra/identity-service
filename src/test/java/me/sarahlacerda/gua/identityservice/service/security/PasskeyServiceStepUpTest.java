@@ -5,11 +5,18 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,6 +30,9 @@ import org.springframework.http.HttpStatus;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.yubico.webauthn.AssertionResult;
+import com.yubico.webauthn.data.ByteArray;
+import com.yubico.webauthn.data.exception.Base64UrlException;
 
 import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.domain.PasskeyCredential;
@@ -46,6 +56,10 @@ class PasskeyServiceStepUpTest {
     private static final String USER = "@alice:gua.global";
     // base64url of 32 bytes, the shape a stored credential id has.
     private static final String CREDENTIAL_ID = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+    // Stands in for the ceremony Redis is holding. The tests that use it replace the ceremony
+    // itself, so this is never parsed; it only has to be non-blank, because a blank one is the
+    // expired-challenge path.
+    private static final String STORED_CEREMONY = "{\"stored\":\"ceremony\"}";
 
     @Mock
     private PasskeyCredentialRepository repository;
@@ -163,6 +177,100 @@ class PasskeyServiceStepUpTest {
                 .isInstanceOf(LoginFlowException.class)
                 .extracting(ex -> ((LoginFlowException) ex).getStatus())
                 .isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    // -------------------- the user-verification bar, on the assertion presented --------------------
+
+    /**
+     * The bar itself. It is the whole of what separates a step-up from a sign-in, and since
+     * the reorder that lets a passkey settle a phone change alone it is also the only thing
+     * standing between a bare possession assertion and a number that moves without the PIN
+     * ever being asked for.
+     */
+    @Test
+    void anAssertionThatOnlyProvedTheDeviceCannotSettleAStepUp() throws Exception {
+        PasskeyService spy = spy(service);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get("passkey:stepup:step-1")).thenReturn(STORED_CEREMONY);
+        doReturn(assertion(false)).when(spy).runAssertion(anyString(), any());
+
+        assertThatThrownBy(() -> spy.finishStepUpAssertion("step-1", JsonNodeFactory.instance.objectNode()))
+                .isInstanceOf(LoginFlowException.class)
+                .satisfies(ex -> {
+                    assertThat(((LoginFlowException) ex).getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(((LoginFlowException) ex).getCode()).isEqualTo("passkey_user_verification_required");
+                });
+
+        // Refused before the credential behind it is even looked up, so nothing downstream
+        // gets the chance to treat a possession-only assertion as an accepted one.
+        verify(repository, never()).findByCredentialId(anyString());
+        verify(redisTemplate).delete("passkey:stepup:step-1");
+    }
+
+    /**
+     * The same response, the opposite answer. Read together with the test above, this is what
+     * says the bar is the step-up's and not the library's: one boolean on one assertion
+     * decides it, and sign-in deliberately does not ask.
+     */
+    @Test
+    void signInStillAcceptsTheVeryAssertionAStepUpRefuses() throws Exception {
+        PasskeyService spy = spy(service);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get("passkey:assertion:login-1")).thenReturn(STORED_CEREMONY);
+        when(repository.findByCredentialId(CREDENTIAL_ID)).thenReturn(Optional.of(credential()));
+        doReturn(assertion(false)).when(spy).runAssertion(anyString(), any());
+
+        PasskeyService.PasskeyAuthentication auth =
+                spy.finishAuthentication("login-1", JsonNodeFactory.instance.objectNode());
+
+        assertThat(auth.userId()).isEqualTo(USER);
+    }
+
+    @Test
+    void aUserVerifyingAssertionSettlesTheStepUpAndSaysHowOldItsCredentialIs() throws Exception {
+        PasskeyService spy = spy(service);
+        Instant registeredAt = Instant.now().minus(Duration.ofDays(30));
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get("passkey:stepup:step-1")).thenReturn(STORED_CEREMONY);
+        when(repository.findByCredentialId(CREDENTIAL_ID)).thenReturn(Optional.of(credential(registeredAt)));
+        doReturn(assertion(true)).when(spy).runAssertion(anyString(), any());
+
+        PasskeyService.PasskeyAuthentication auth =
+                spy.finishStepUpAssertion("step-1", JsonNodeFactory.instance.objectNode());
+
+        assertThat(auth.userId()).isEqualTo(USER);
+        // Carried out of the ceremony so a phone change can refuse a credential enrolled
+        // minutes ago by whoever holds the session, the way it refuses a PIN of that age.
+        assertThat(auth.credentialRegisteredAt()).isEqualTo(registeredAt);
+    }
+
+    /**
+     * An assertion result with the user-verified flag set or clear. Lenient throughout: the
+     * refusal path reads two of these and stops, the accepted path reads them all.
+     */
+    private AssertionResult assertion(boolean userVerified) {
+        AssertionResult result = mock(AssertionResult.class);
+        lenient().when(result.isSuccess()).thenReturn(true);
+        lenient().when(result.isUserVerified()).thenReturn(userVerified);
+        lenient().when(result.getCredentialId()).thenReturn(credentialIdBytes());
+        lenient().when(result.getSignatureCount()).thenReturn(9L);
+        lenient().when(result.isBackupEligible()).thenReturn(false);
+        lenient().when(result.isBackedUp()).thenReturn(false);
+        return result;
+    }
+
+    private ByteArray credentialIdBytes() {
+        try {
+            return ByteArray.fromBase64Url(CREDENTIAL_ID);
+        } catch (Base64UrlException ex) {
+            throw new IllegalStateException("Test credential id is not base64url", ex);
+        }
+    }
+
+    private PasskeyCredential credential(Instant registeredAt) {
+        PasskeyCredential credential = credential();
+        credential.setCreatedAt(registeredAt);
+        return credential;
     }
 
     private PasskeyCredential credential() {

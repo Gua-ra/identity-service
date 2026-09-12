@@ -259,10 +259,7 @@ public class PasskeyService implements CredentialRepository {
         }
 
         try {
-            AssertionResult result = relyingParty().finishAssertion(FinishAssertionOptions.builder()
-                    .request(AssertionRequest.fromJson(stored))
-                    .response(PublicKeyCredential.parseAssertionResponseJson(objectMapper.writeValueAsString(credential)))
-                    .build());
+            AssertionResult result = runAssertion(stored, credential);
 
             if (!result.isSuccess()) {
                 throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_authentication_failed",
@@ -285,7 +282,7 @@ public class PasskeyService implements CredentialRepository {
             saved.setBackupState(result.isBackedUp());
             saved.setLastUsedAt(Instant.now());
 
-            return new PasskeyAuthentication(saved.getUserId());
+            return new PasskeyAuthentication(saved.getUserId(), saved.getCreatedAt());
         } catch (AssertionFailedException ex) {
             throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_authentication_failed",
                     "Passkey sign-in was not accepted.");
@@ -301,6 +298,26 @@ public class PasskeyService implements CredentialRepository {
             // return or throw past it.
             redisTemplate.delete(challengeKey);
         }
+    }
+
+    /**
+     * The WebAuthn ceremony on its own, separated from the checks applied to its result.
+     * Behaviour is unchanged: this is the same call that used to sit inline in
+     * {@link #redeemAssertion}.
+     *
+     * <p>
+     * It is a seam, and it exists because the user-verification bar had none. That bar is
+     * the whole of what separates a step-up from a sign-in, and nothing in the suite could
+     * build an assertion that failed it, so switching it off was an edit no test objected
+     * to. Overriding this one method lets a test hand {@link #redeemAssertion} a result whose
+     * {@code isUserVerified()} is false and watch what the bar does with it.
+     */
+    AssertionResult runAssertion(String storedRequest, JsonNode credential)
+            throws AssertionFailedException, IOException {
+        return relyingParty().finishAssertion(FinishAssertionOptions.builder()
+                .request(AssertionRequest.fromJson(storedRequest))
+                .response(PublicKeyCredential.parseAssertionResponseJson(objectMapper.writeValueAsString(credential)))
+                .build());
     }
 
     @Override
@@ -432,6 +449,19 @@ public class PasskeyService implements CredentialRepository {
         return STEP_UP_KEY_PREFIX + stepUpId;
     }
 
-    public record PasskeyAuthentication(String userId) {
+    /**
+     * Who answered, and when the credential that answered was registered.
+     *
+     * @param userId                 the account the asserted credential belongs to. Resolving
+     *                               it is not accepting it: the caller must still check that
+     *                               this is the account it is acting for
+     * @param credentialRegisteredAt when that credential was stored. A phone change reads it
+     *                               to refuse a credential minted minutes ago by whoever
+     *                               holds the session, exactly as it refuses a PIN of that
+     *                               age. Never null for a stored credential: {@code
+     *                               passkey_credentials.created_at} has been NOT NULL since
+     *                               the table was created
+     */
+    public record PasskeyAuthentication(String userId, Instant credentialRegisteredAt) {
     }
 }

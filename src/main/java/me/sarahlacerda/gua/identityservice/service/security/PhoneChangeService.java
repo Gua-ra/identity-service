@@ -246,10 +246,19 @@ public class PhoneChangeService {
                 auditLogger.reauthFailed(userId, ReauthOperation.PHONE_CHANGE.name(), requesterIp);
                 throw new InvalidPinException("Passkey does not belong to the calling account");
             }
-            // Accepted. The fresh-2FA hold is NOT applied here and must not be: it exists to
-            // stop a PIN minted minutes ago by a session from re-pointing the number, and this
-            // caller did not spend a PIN. Holding the stronger factor for the weaker one's
-            // reason would refuse people who did nothing the hold is about.
+            // Accepted, and now held for its own age rather than for the PIN's. The hold on a
+            // freshly minted PIN exists because a session can create one and spend it minutes
+            // later on exactly this operation. A session can mint a passkey just as cheaply:
+            // POST /security/passkey/enroll/start needs only the bearer token and asks for no
+            // second factor, and the assertion that follows settles this step-up alone, with
+            // the PIN never asked for. Holding one factor and not the other would price the
+            // same takeover at seven days or at nothing depending on which one the attacker
+            // picked, so both are held, on the same window and with the same expiring refusal.
+            //
+            // It is the credential that answered that is weighed, not the account: an
+            // established passkey still settles the step-up at once, and a caller refused here
+            // keeps the PIN branch below by retrying with the PIN.
+            userSecurityService.enforceFreshFactorHold(assertion.credentialRegisteredAt());
             return;
         }
 
@@ -266,7 +275,8 @@ public class PhoneChangeService {
             // The PIN is the factor being accepted here, so the fresh-2FA hold applies to it.
             // Deliberately inside this branch and after the check that accepts the PIN: an
             // account that proved a passkey returned above and is never held for a fresh PIN
-            // it did not use.
+            // it did not use, having already been weighed on the age of the credential it
+            // did use.
             userSecurityService.enforcePhoneChangePinHold(userId);
             return;
         }

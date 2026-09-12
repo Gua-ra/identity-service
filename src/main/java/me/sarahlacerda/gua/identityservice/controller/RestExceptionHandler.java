@@ -38,10 +38,10 @@ import me.sarahlacerda.gua.identityservice.exception.PinChangeChallengeNotFoundE
 import me.sarahlacerda.gua.identityservice.exception.PinChangeCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinLockedException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetCooldownException;
-import me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetNotRequestedException;
 import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
 import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
+import me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.UnknownUserException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
 import me.sarahlacerda.gua.identityservice.exception.WeakPinException;

@@ -12,13 +12,31 @@ import lombok.RequiredArgsConstructor;
  * The one place that answers which authentication factor applies to what.
  *
  * <p>
- * Four questions, and every caller that used to answer one of them locally now asks here
- * instead:
+ * Four questions. Two of them it decides for every caller that used to decide them
+ * locally, and two it states rather than enforces. Which is which is worth knowing before
+ * editing any of them, because a reader who takes all four for enforcement will change a
+ * declaration and expect the server to follow it:
  * <ol>
- * <li>{@link #preferredFactor(String)}: the strongest factor the account actually holds.</li>
- * <li>{@link #loginPolicy(String)}: what signing in may fall back to.</li>
- * <li>{@link #stepUpFor(ReauthOperation)}: what a privileged operation demands.</li>
- * <li>{@link #recoveryFor(String)}: how a lost PIN is recovered.</li>
+ * <li>{@link #registeredFactors(String)}, and {@link #preferredFactor(String)} for one of
+ * its halves: what the account holds and which of it ranks highest. Decided here, and read
+ * by the status endpoint and by the interactive login state.</li>
+ * <li>{@link #loginPolicy(String)}: what signing in may fall back to. Decided here; both
+ * sign-in paths take their PIN-step answer from it and no longer keep one of their
+ * own.</li>
+ * <li>{@link #stepUpFor(ReauthOperation)}: what a privileged operation accepts. Published,
+ * not enforced. {@code GET /security/pin/status} hands the list to clients as
+ * {@code phoneChangeStepUpFactors}, while {@code PhoneChangeService.enforceStepUp} carries
+ * the same rule in its own branches and never asks for it. That is deliberate, and the
+ * reason is on {@link #stepUpFor(ReauthOperation)}: a value that could switch the PIN
+ * branch or the final refusal off would turn one configuration edit into either a lockout
+ * or a bypass. The price is that the two can drift, with nothing but tests holding them
+ * together, so editing either one alone makes the server misdescribe what it will
+ * take.</li>
+ * <li>{@link #recoveryFor(String)}: how a lost PIN is recovered. Written down here, called
+ * nowhere. Recovery runs in {@link UserSecurityService}, which reaches nothing in this
+ * class except {@link #recordRecoveryRequest(String)}. It is written down because what
+ * recovery must NOT do is the load-bearing half, and a guard test freezes this method's
+ * body as the statement that it branches on nothing at all.</li>
  * </ol>
  *
  * <p>

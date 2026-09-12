@@ -71,7 +71,7 @@ public class SecurityController {
     private final AccountLocalpartResolver accountLocalparts;
 
     @GetMapping("/pin/status")
-    @Operation(summary = "Check the authenticated user's two-step verification state", description = "Returns hasPin=true once the user has configured a security PIN (drives the 'set up two-step verification' nudge), and how long the fresh-2FA hold on changing the phone number still has to run. Both clients read this before offering the change-phone flow, so a held account is told to wait instead of walking the whole flow into a refusal. It also reports which factors the account has REGISTERED, which one to offer first, and which ones a phone change accepts in precedence order, so a client offers the right factor instead of hardcoding the rule. Registration is server truth; whether a registered passkey is usable on this device is not reported and is never accepted as an input.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @Operation(summary = "Check the authenticated user's two-step verification state", description = "Returns hasPin=true once the user has configured a security PIN (drives the 'set up two-step verification' nudge), and how long the fresh-2FA hold on the account's PIN still has to run before that PIN can change the phone number. Read it when about to offer the PIN, not as 'can I change my number now': it is silent about the separate 24h phone-change cooldown, and it does not describe the passkey path, which carries its own hold on the age of the asserted credential and is refused the same way. It also reports which factors the account has REGISTERED, which one to offer first, and which ones a phone change accepts in precedence order, so a client offers the right factor instead of hardcoding the rule. Registration is server truth; whether a registered passkey is usable on this device is not reported and is never accepted as an input.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "PIN status"),
             @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content)
@@ -218,6 +218,13 @@ public class SecurityController {
         // the outside like passkeys being broken.
         // Same question, same answer as LoginFlowController.advanceToPasskeySetup, because both
         // now ask AuthFactorPolicy rather than each assembling it from isEnabled + hasPasskey.
+        //
+        // Note what this endpoint does NOT ask for: no PIN, no step-up, nothing but the bearer
+        // token. That is on purpose, because demanding a factor to acquire a factor is how an
+        // account with a broken credential becomes an account with no way in. What stops a
+        // session holder from enrolling a passkey and immediately re-pointing the phone number
+        // with it is on the other side, in PhoneChangeService.enforceStepUp: a credential
+        // registered inside the fresh-2FA hold cannot settle that step-up yet.
         if (authFactorPolicy.passkeyRegistered(userId)) {
             throw new LoginFlowException(HttpStatus.CONFLICT, "passkey_already_registered",
                     "This account already has a passkey.");
