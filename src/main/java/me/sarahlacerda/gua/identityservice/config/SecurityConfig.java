@@ -23,6 +23,10 @@ public class SecurityConfig {
         private static final List<String> OPEN_POST_ENDPOINTS = List.of(
                         "/otp/send",
                         "/otp/verify",
+                        // Registration of an AccountGenesis, before any OIDC flow exists to authenticate
+                        // against. It is self-authenticating: the body carries a possession proof under the
+                        // key committed inside the genesis, and registering one attaches nothing on its own.
+                        "/account/genesis",
                         "/signup/complete",
                         "/signin/verify-pin",
                         "/security/pin/reset",

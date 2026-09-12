@@ -1,0 +1,101 @@
+{
+  "encoding" : "gua-account-objects.v1",
+  "decision" : "https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-008-account-genesis-and-placement-records.md",
+  "notes" : [
+    "Keys are the RFC 8032 section 7.1 TEST 1 and TEST 2 Ed25519 keys: published test constants that must never sign anything real.",
+    "Ed25519 is deterministic, so every signature below is reproducible from the key and the preimage.",
+    "Account objects are fixed-layout byte strings, not gua-lp.v1: they have no optional fields, sets or free strings, and the accountId is a permanent hash so the hashed bytes must be the bytes that crossed the wire.",
+    "An accountId has exactly one spelling. 34 bytes are 272 bits and 55 base32 characters carry 275, so the final character holds three unused bits and is always one of a, i, q, y.",
+    "A conforming implementation reproduces every canonicalHex, sha256Hex, accountId and signature, and refuses every entry under rejections with the reason named there."
+  ],
+  "keys" : {
+    "rfc8032-test1" : { "seedHex" : "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", "publicKeyHex" : "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a" },
+    "rfc8032-test2" : { "seedHex" : "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb", "publicKeyHex" : "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c" }
+  },
+  "accountGenesis" : [
+    {
+      "name" : "authority test1, recovery test2",
+      "genesisVersion" : 1,
+      "suite" : 1,
+      "recoveryFrameworkId" : 1,
+      "authorityPublicKeyHex" : "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+      "recoveryAuthorityPublicKeyHex" : "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "entropyHex" : "000102030405060708090a0b0c0d0e0f",
+      "canonicalHex" : "475541470101d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a013d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c000102030405060708090a0b0c0d0e0f",
+      "sha256Hex" : "e0403d73d9965264688fb31b247a8e6b3140487647c2113894a2fc2208acbd0b",
+      "accountId" : "ga1aea6aqb5opmzmutench3ggzepkhgwmkajb3epqqrhckkf7bcbcwl2cy",
+      "genesisProofSignatureB64" : "RQrdtZWe5VyNwy8o1HI/5KIjvXgprHspGPKWVc9UndguepvdLvzwk/FkIBSJAES4ThnTaMHIEf573bT1eh5QCQ=="
+    },
+    {
+      "name" : "authority test2, recovery test1",
+      "genesisVersion" : 1,
+      "suite" : 1,
+      "recoveryFrameworkId" : 1,
+      "authorityPublicKeyHex" : "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "recoveryAuthorityPublicKeyHex" : "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+      "entropyHex" : "f0e1d2c3b4a5968778695a4b3c2d1e0f",
+      "canonicalHex" : "4755414701013d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c01d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511af0e1d2c3b4a5968778695a4b3c2d1e0f",
+      "sha256Hex" : "36565905dd713651565f90d41494fc910ce203d8807e4d3c2327b28a1b93951a",
+      "accountId" : "ga1aeatmvszaxoxcnsrkzpzbvaust6jcdhcapmia7snhqrspmukdojzkgq",
+      "genesisProofSignatureB64" : "H1NxCRoJRJxA+cDg1BF4Ustl6YWE61WOSsfwmhTP8x7Y4fInWmsc9goJFM4xjLcoeV6zwilW0sd+aLV0kSMKDA=="
+    }
+  ],
+  "genesisProofDomain" : "gua-account-genesis-proof.v1",
+  "bootstrapGenesis" : [
+    { "name" : "all-zero entropy", "version" : 1, "suite" : 0, "entropyHex" : "00000000000000000000000000000000", "canonicalHex" : "47554142010000000000000000000000000000000000", "sha256Hex" : "39e72309faaa4f10d64592f22fffa088c7976f282b20257216792457a2083113", "accountId" : "ga1aeadtzzdbh5kutyq2zczf4rp76qirr4xn4ucwibfoilhsjcxuiedcey" },
+    { "name" : "arbitrary entropy", "version" : 1, "suite" : 0, "entropyHex" : "a1b2c3d4e5f60718293a4b5c6d7e8f90", "canonicalHex" : "475541420100a1b2c3d4e5f60718293a4b5c6d7e8f90", "sha256Hex" : "c79788cd989bc7114412480c03e09cd80a45e8d2e6d91cbbd621b8c4d18679a0", "accountId" : "ga1aeampf4izwmjxryriqjeqdad4conqcsf5djonwi4xplcdoge2gdhtia" }
+  ],
+  "attachProof" : {
+    "domain" : "gua-account-attach-proof.v1",
+    "domainLength" : 27,
+    "preimageLength" : 93,
+    "layout" : "27 ASCII domain bytes, then the 32 server-chosen challenge bytes, then the 34 raw accountId bytes",
+    "accountId" : "ga1aea6aqb5opmzmutench3ggzepkhgwmkajb3epqqrhckkf7bcbcwl2cy",
+    "accountIdRawHex" : "0101e0403d73d9965264688fb31b247a8e6b3140487647c2113894a2fc2208acbd0b",
+    "challengeHex" : "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+    "preimageHex" : "6775612d6163636f756e742d6174746163682d70726f6f662e7631101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f0101e0403d73d9965264688fb31b247a8e6b3140487647c2113894a2fc2208acbd0b",
+    "signatureB64" : "LZY5cOq6jATv66SDB/S7ZOUUxmpJZKGpDS33Rlh+IoOZOOdX63WPj3NVHyf0MjAhP92VxWxQrKw6sf2/p4HyBg=="
+  },
+  "accountId" : {
+    "pattern" : "^ga1[a-z2-7]{54}[aiqy]$",
+    "allowedFinalCharacters" : [ "a", "i", "q", "y" ],
+    "prefix" : "ga1",
+    "formatVersion" : 1,
+    "rootClassGenesis" : 1,
+    "rootClassBootstrap" : 0,
+    "rawLength" : 34,
+    "encodedLength" : 55,
+    "totalLength" : 58
+  },
+  "rejections" : {
+    "accountGenesis" : [
+      { "name" : "one byte short", "hex" : "475541470101d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a013d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c000102030405060708090a0b0c0d0e", "reason" : "wrong_length" },
+      { "name" : "magic is not GUAG", "hex" : "475541580101d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a013d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c000102030405060708090a0b0c0d0e0f", "reason" : "bad_magic" },
+      { "name" : "unknown genesis version", "hex" : "475541470201d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a013d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c000102030405060708090a0b0c0d0e0f", "reason" : "unknown_version" },
+      { "name" : "unknown suite", "hex" : "475541470102d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a013d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c000102030405060708090a0b0c0d0e0f", "reason" : "unknown_suite" },
+      { "name" : "unknown recovery framework", "hex" : "475541470101d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a023d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c000102030405060708090a0b0c0d0e0f", "reason" : "unknown_recovery_framework" },
+      { "name" : "all-zero authority key", "hex" : "4755414701010000000000000000000000000000000000000000000000000000000000000000013d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c000102030405060708090a0b0c0d0e0f", "reason" : "zero_authority_key" },
+      { "name" : "all-zero recovery key", "hex" : "475541470101d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a010000000000000000000000000000000000000000000000000000000000000000000102030405060708090a0b0c0d0e0f", "reason" : "zero_recovery_key" },
+      { "name" : "recovery key equals authority key", "hex" : "475541470101d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a01d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a000102030405060708090a0b0c0d0e0f", "reason" : "duplicate_keys" },
+      { "name" : "authority key y is larger than the field prime", "hex" : "475541470101ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff013d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c000102030405060708090a0b0c0d0e0f", "reason" : "invalid_authority_key" },
+      { "name" : "recovery key y is larger than the field prime", "hex" : "475541470101d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a01ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000102030405060708090a0b0c0d0e0f", "reason" : "invalid_recovery_key" },
+      { "name" : "authority key is not on the curve", "hex" : "4755414701010200000000000000000000000000000000000000000000000000000000000000013d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c000102030405060708090a0b0c0d0e0f", "reason" : "invalid_authority_key" },
+      { "name" : "recovery key is not on the curve", "hex" : "475541470101d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a010200000000000000000000000000000000000000000000000000000000000000000102030405060708090a0b0c0d0e0f", "reason" : "invalid_recovery_key" }
+    ],
+    "bootstrapGenesis" : [
+      { "name" : "one byte short", "hex" : "475541420100a1b2c3d4e5f60718293a4b5c6d7e8f", "reason" : "wrong_length" },
+      { "name" : "magic is not GUAB", "hex" : "475541580100a1b2c3d4e5f60718293a4b5c6d7e8f90", "reason" : "bad_magic" },
+      { "name" : "unknown version", "hex" : "475541420200a1b2c3d4e5f60718293a4b5c6d7e8f90", "reason" : "unknown_version" },
+      { "name" : "unknown suite", "hex" : "475541420101a1b2c3d4e5f60718293a4b5c6d7e8f90", "reason" : "unknown_suite" }
+    ],
+    "accountId" : [
+      { "name" : "wrong prefix", "value" : "gaxaea6aqb5opmzmutench3ggzepkhgwmkajb3epqqrhckkf7bcbcwl2cy", "reason" : "bad_account_id" },
+      { "name" : "one character short", "value" : "ga1aea6aqb5opmzmutench3ggzepkhgwmkajb3epqqrhckkf7bcbcwl2c", "reason" : "bad_account_id" },
+      { "name" : "uppercase spelling", "value" : "GA1AEA6AQB5OPMZMUTENCH3GGZEPKHGWMKAJB3EPQQRHCKKF7BCBCWL2CY", "reason" : "bad_account_id" },
+      { "name" : "final character outside a, i, q, y", "value" : "ga1aea6aqb5opmzmutench3ggzepkhgwmkajb3epqqrhckkf7bcbcwl2cb", "reason" : "bad_account_id" },
+      { "name" : "character outside the base32 alphabet", "value" : "ga1aea6aqb5opmzmutench3ggzepkhgwmkajb3epqqrhckkf7bcbcwl21y", "reason" : "bad_account_id" },
+      { "name" : "unknown root class", "value" : "ga1aeboaqb5opmzmutench3ggzepkhgwmkajb3epqqrhckkf7bcbcwl2cy", "reason" : "unknown_root_class" },
+      { "name" : "unknown accountId format version", "value" : "ga1aia6aqb5opmzmutench3ggzepkhgwmkajb3epqqrhckkf7bcbcwl2cy", "reason" : "unknown_account_id_version" }
+    ]
+  }
+}

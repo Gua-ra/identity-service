@@ -1,0 +1,112 @@
+-- Hand-mirrored schema, compared against the Flyway migrations by SchemaParityTest.
+--
+-- The migrations under src/main/resources/db/migration are the production source of truth. This file
+-- is their net effect written by hand, and hand mirroring is the likeliest source of a
+-- test-versus-production divergence, so the parity test applies the real migrations to one schema and
+-- this file to another and compares every column.
+--
+-- Two deliberate choices:
+--
+--  * It is NOT named schema.sql and NOT at the classpath root. Spring Boot automatically applies
+--    classpath:schema.sql to every embedded datasource, which would silently push this schema into
+--    unrelated test contexts.
+--  * It is Postgres DDL, and the parity test runs on Postgres, because the migrations themselves are
+--    Postgres-only: V5 adds two columns in one ALTER TABLE and indexes LOWER(username), neither of
+--    which H2 accepts. A mirror that H2 could run would therefore have to differ from production DDL,
+--    which is exactly what a parity test exists to prevent.
+--
+-- Keep the two in step: when you add a migration, add the same DDL here.
+-- V8/V9 created and dropped public_submissions, so it is deliberately absent.
+
+-- V1
+CREATE TABLE IF NOT EXISTS directory_entries (
+    id UUID PRIMARY KEY,
+    phone_digest VARCHAR(64) NOT NULL UNIQUE,
+    user_id TEXT NOT NULL,
+    display_name TEXT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    -- V4
+    phone_masked VARCHAR(32),
+    -- V5
+    homeserver_id VARCHAR(64),
+    username VARCHAR(64),
+    -- V6
+    discoverable BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_directory_entries_username_lower
+    ON directory_entries (LOWER(username));
+
+-- V2
+CREATE TABLE IF NOT EXISTS identity_users (
+    id UUID PRIMARY KEY,
+    user_id TEXT NOT NULL UNIQUE,
+    pin_hash TEXT,
+    pin_set_at TIMESTAMP WITH TIME ZONE,
+    pin_reset_requested_at TIMESTAMP WITH TIME ZONE,
+    pin_failure_count INTEGER NOT NULL DEFAULT 0,
+    pin_locked_until TIMESTAMP WITH TIME ZONE,
+    last_login_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    -- V3
+    last_pin_change_at TIMESTAMP WITH TIME ZONE,
+    -- V10
+    last_phone_change_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS trusted_devices (
+    id UUID PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    device_name TEXT,
+    platform TEXT,
+    app_version TEXT,
+    last_ip TEXT,
+    first_seen_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    last_seen_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    CONSTRAINT uq_trusted_devices_user_device UNIQUE (user_id, device_id)
+);
+
+-- V7
+CREATE TABLE IF NOT EXISTS passkey_credentials (
+    id UUID PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    user_handle TEXT NOT NULL,
+    credential_id TEXT NOT NULL UNIQUE,
+    public_key_cose TEXT NOT NULL,
+    signature_count BIGINT NOT NULL DEFAULT 0,
+    backup_eligible BOOLEAN NOT NULL DEFAULT false,
+    backup_state BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    last_used_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_id
+    ON passkey_credentials (user_id);
+
+CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_handle
+    ON passkey_credentials (user_handle);
+
+-- V11
+CREATE TABLE IF NOT EXISTS account_genesis (
+    account_id         VARCHAR(64) PRIMARY KEY,
+    user_id            TEXT UNIQUE,
+    origin             VARCHAR(16) NOT NULL,
+    state              VARCHAR(16) NOT NULL,
+    genesis_version    SMALLINT NOT NULL,
+    genesis_suite      SMALLINT NOT NULL,
+    genesis_b64        TEXT NOT NULL,
+    authority_key_b64  TEXT,
+    attach_handle_hash VARCHAR(64),
+    expires_at         TIMESTAMP WITH TIME ZONE,
+    created_at         TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    attached_at        TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_genesis_expires_at
+    ON account_genesis (expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_account_genesis_attach_handle
+    ON account_genesis (attach_handle_hash);

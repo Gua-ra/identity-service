@@ -15,6 +15,8 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import me.sarahlacerda.gua.identityservice.account.genesis.InvalidGenesisException;
+import me.sarahlacerda.gua.identityservice.exception.GenesisRegistrationException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidOtpException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinChallengeException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinException;
@@ -217,6 +219,22 @@ public class RestExceptionHandler {
         public ResponseEntity<ErrorResponse> handleLoginFlow(LoginFlowException ex) {
                 return ResponseEntity.status(ex.getStatus())
                                 .body(new ErrorResponse(ex.getCode(), ex.getMessage()));
+        }
+
+        @ExceptionHandler(GenesisRegistrationException.class)
+        public ResponseEntity<ErrorResponse> handleGenesisRegistration(GenesisRegistrationException ex) {
+                return ResponseEntity.status(ex.getStatus())
+                                .body(new ErrorResponse(ex.getCode(), ex.getMessage()));
+        }
+
+        /**
+         * A malformed account object. The decoder's rule name is returned so a client implementing the
+         * codec can tell which rule refused it; the bytes themselves are never echoed back.
+         */
+        @ExceptionHandler(InvalidGenesisException.class)
+        public ResponseEntity<ErrorResponse> handleInvalidGenesis(InvalidGenesisException ex) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .body(new ErrorResponse("invalid_genesis", "Rejected by rule: " + ex.reason()));
         }
 
         @ExceptionHandler(OidcClientAuthenticationException.class)

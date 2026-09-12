@@ -19,6 +19,9 @@ import jakarta.servlet.http.Cookie;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+
+import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -42,6 +45,8 @@ import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
 import me.sarahlacerda.gua.identityservice.service.RegistrationGuard;
+import me.sarahlacerda.gua.identityservice.service.account.AccountCreationService;
+import me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService;
 import me.sarahlacerda.gua.identityservice.service.UsernamePolicy;
 import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRouter;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
@@ -77,6 +82,15 @@ class LoginFlowControllerTest {
         @org.springframework.context.annotation.Bean
         AccountLocalpartResolver accountLocalpartResolver(DirectoryService directoryService) {
             return new AccountLocalpartResolver(directoryService);
+        }
+
+        // The real account-creation service, so the directory writes these tests assert on are the ones
+        // the signup path actually performs. Account genesis is mocked and off, so it contributes
+        // nothing here: that is the "flag off changes nothing" case, exercised by every test below.
+        @org.springframework.context.annotation.Bean
+        AccountCreationService accountCreationService(DirectoryService directoryService,
+                AccountGenesisService accountGenesisService) {
+            return new AccountCreationService(directoryService, accountGenesisService);
         }
     }
 
@@ -119,6 +133,8 @@ class LoginFlowControllerTest {
     private HomeserverRouter homeserverRouter;
     @MockitoBean
     private EndpointRateLimiter endpointRateLimiter;
+    @MockitoBean
+    private AccountGenesisService accountGenesisService;
 
     @BeforeEach
     void setUp() {
@@ -1181,5 +1197,242 @@ class LoginFlowControllerTest {
                 .content("{\"pin\":\"123456\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("unexpected_step"));
+    }
+
+    // --- Account genesis attach (ADM-008 decision 6) ---------------------------
+
+    /** Drives a brand-new user to the profile step: no directory row, no homeserver phone binding. */
+    private void newUserAtOtpStep() {
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
+        when(matrixAdminClient.findUserIdByPhone(PHONE)).thenReturn(Optional.empty());
+    }
+
+    private LoginSession sessionWithHandle(Phase phase, String handle, String challenge) {
+        LoginSession session = session(phase);
+        session.setGenesisAttachHandle(handle);
+        session.setGenesisAttachChallenge(challenge);
+        return session;
+    }
+
+    private void readyToCreateAccount() {
+        when(usernamePolicy.normalizeAndValidate("alice")).thenReturn("alice");
+        when(directoryService.isUsernameTaken("alice")).thenReturn(false);
+        when(matrixProvisioningService.buildUserId(eq("alice"), any())).thenReturn("@alice:gua.local");
+        when(matrixAdminClient.userExists("@alice:gua.local")).thenReturn(false);
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+    }
+
+    @Test
+    void enteringTheProfileStepWithAHandleIssuesAnAttachChallenge() throws Exception {
+        newUserAtOtpStep();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(
+                sessionWithHandle(Phase.OTP_SENT, "the-handle", null)));
+        when(accountGenesisService.isEnabled()).thenReturn(true);
+        when(accountGenesisService.issueAttachChallenge()).thenReturn("the-challenge");
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PROFILE_REQUIRED"))
+                .andExpect(jsonPath("$.genesisAttachChallenge").value("the-challenge"));
+
+        ArgumentCaptor<LoginSession> saved = ArgumentCaptor.forClass(LoginSession.class);
+        verify(loginSessionService).save(eq(SID), saved.capture());
+        assertEquals("the-challenge", saved.getValue().getGenesisAttachChallenge());
+    }
+
+    @Test
+    void aSessionWithNoHandleIsIssuedNoChallenge() throws Exception {
+        newUserAtOtpStep();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
+        when(accountGenesisService.isEnabled()).thenReturn(true);
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PROFILE_REQUIRED"))
+                .andExpect(jsonPath("$.genesisAttachChallenge").doesNotExist());
+
+        verify(accountGenesisService, org.mockito.Mockito.never()).issueAttachChallenge();
+    }
+
+    @Test
+    void withTheFeatureOffNoChallengeIsIssuedEvenForAHandle() throws Exception {
+        newUserAtOtpStep();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(
+                sessionWithHandle(Phase.OTP_SENT, "the-handle", null)));
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.genesisAttachChallenge").doesNotExist());
+
+        verify(accountGenesisService, org.mockito.Mockito.never()).issueAttachChallenge();
+    }
+
+    @Test
+    void aChallengeAlreadyIssuedForThisProfileStepIsNotReplaced() throws Exception {
+        newUserAtOtpStep();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(
+                sessionWithHandle(Phase.OTP_SENT, "the-handle", "already-issued")));
+        when(accountGenesisService.isEnabled()).thenReturn(true);
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.genesisAttachChallenge").value("already-issued"));
+
+        verify(accountGenesisService, org.mockito.Mockito.never()).issueAttachChallenge();
+    }
+
+    @Test
+    void theProfileStepAttachesUsingTheSessionsHandleAndChallengeAndTheRequestsProof() throws Exception {
+        readyToCreateAccount();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(
+                sessionWithHandle(Phase.PROFILE_REQUIRED, "the-handle", "the-challenge")));
+        when(accountGenesisService.isEnabled()).thenReturn(true);
+
+        mockMvc.perform(post("/login/profile")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"alice\",\"displayName\":\"Alice A\",\"attachProof\":\"cHJvb2Y\"}"))
+                .andExpect(status().isOk());
+
+        // The handle and the challenge come from the server-side session; only the proof is the
+        // client's. The account the genesis attaches to is the one just created.
+        verify(accountGenesisService).attach("the-handle", "the-challenge", "cHJvb2Y", "@alice:gua.local");
+    }
+
+    @Test
+    void aFailedAttachFailsTheSignup() throws Exception {
+        readyToCreateAccount();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(
+                sessionWithHandle(Phase.PROFILE_REQUIRED, "the-handle", "the-challenge")));
+        when(accountGenesisService.isEnabled()).thenReturn(true);
+        when(accountGenesisService.attach(any(), any(), any(), any()))
+                .thenThrow(new LoginFlowException(org.springframework.http.HttpStatus.BAD_REQUEST,
+                        "genesis_attach_failed", "This account could not be created. Please try again."));
+
+        mockMvc.perform(post("/login/profile")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"alice\",\"displayName\":\"Alice A\",\"attachProof\":\"bad\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("genesis_attach_failed"));
+
+        // No authorization code, and the session is not advanced.
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+        verify(accountGenesisService, org.mockito.Mockito.never()).bootstrap(any());
+    }
+
+    @Test
+    void aProfileStepWithNoHandleTakesTheBootstrapBranch() throws Exception {
+        readyToCreateAccount();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PROFILE_REQUIRED)));
+        when(accountGenesisService.isEnabled()).thenReturn(true);
+
+        mockMvc.perform(post("/login/profile")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"alice\",\"displayName\":\"Alice A\"}"))
+                .andExpect(status().isOk());
+
+        verify(accountGenesisService).bootstrap("@alice:gua.local");
+        verify(accountGenesisService, org.mockito.Mockito.never()).attach(any(), any(), any(), any());
+    }
+
+    @Test
+    void aSuccessfulAttachBurnsTheHandleAndTheChallengeOnTheSession() throws Exception {
+        readyToCreateAccount();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(
+                sessionWithHandle(Phase.PROFILE_REQUIRED, "the-handle", "the-challenge")));
+        when(accountGenesisService.isEnabled()).thenReturn(true);
+
+        mockMvc.perform(post("/login/profile")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"alice\",\"displayName\":\"Alice A\",\"attachProof\":\"cHJvb2Y\"}"))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<LoginSession> saved = ArgumentCaptor.forClass(LoginSession.class);
+        verify(loginSessionService).save(eq(SID), saved.capture());
+        assertEquals(null, saved.getValue().getGenesisAttachHandle());
+        assertEquals(null, saved.getValue().getGenesisAttachChallenge());
+    }
+
+    /**
+     * The heal path is the one runtime path that surfaces an account the startup backfill never saw, so
+     * it is the one that can push the missing-genesis gauge back above zero between restarts.
+     */
+    private void recoveredAccountAtOtpStep() {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
+        when(matrixAdminClient.findUserIdByPhone(PHONE)).thenReturn(Optional.of("@alice:dev.local"));
+        when(phoneNumberMasker.mask(PHONE)).thenReturn("\u2022\u2022\u2022\u20224567");
+        when(userSecurityService.hasPin("@alice:dev.local")).thenReturn(false);
+    }
+
+    private org.springframework.test.web.servlet.ResultActions submitOtpForRecoveredAccount() throws Exception {
+        return mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"));
+    }
+
+    @Test
+    void anAccountRecoveredByPhoneBindingIsRootedOnTheSpot() throws Exception {
+        recoveredAccountAtOtpStep();
+        when(accountGenesisService.isEnabled()).thenReturn(true);
+
+        submitOtpForRecoveredAccount()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.newUser").value(false));
+
+        // Healing the directory row makes this account visible to a later scan; without an id of its own
+        // it would sit in gua_identity_accounts_without_genesis until the next restart.
+        verify(accountGenesisService).bootstrap("@alice:dev.local");
+    }
+
+    @Test
+    void aRecoveredAccountIsNotRootedWhileTheFeatureIsOff() throws Exception {
+        recoveredAccountAtOtpStep();
+
+        submitOtpForRecoveredAccount().andExpect(status().isOk());
+
+        verify(accountGenesisService, org.mockito.Mockito.never()).bootstrap(any());
+    }
+
+    @Test
+    void aFailureToRootARecoveredAccountDoesNotBlockTheSignIn() throws Exception {
+        recoveredAccountAtOtpStep();
+        when(accountGenesisService.isEnabled()).thenReturn(true);
+        org.mockito.Mockito.doThrow(new IllegalStateException("transient"))
+                .when(accountGenesisService).bootstrap("@alice:dev.local");
+
+        // Best-effort, like the directory heal it follows: a returning user still signs in, and the
+        // backfill picks the account up on its next run.
+        submitOtpForRecoveredAccount()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"))
+                .andExpect(jsonPath("$.newUser").value(false));
     }
 }
