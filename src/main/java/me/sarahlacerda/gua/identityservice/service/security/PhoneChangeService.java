@@ -41,6 +41,15 @@ import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditL
  * <li>The new-number OTP is namespaced per challenge
  * ({@link PhoneChangeOtpService}) so the public {@code /otp/send} cannot
  * overwrite or race it.</li>
+ * <li>A passkey offered as the step-up factor must come from the dedicated,
+ * user-verifying step-up ceremony ({@code POST /security/passkey/stepup/options}).
+ * A possession-only assertion is refused: it would stand in for a factor that
+ * counts failures and locks out, while carrying neither.</li>
+ * <li>A PIN that was just created, changed or reset is refused as the step-up
+ * factor until the fresh-2FA hold elapses, because the permissive login side can
+ * mint a PIN and that PIN would otherwise re-point the number immediately. This
+ * is an ADDITIONAL refusal; the per-account change cooldown and the reset
+ * dormancy gates are untouched and still run.</li>
  * <li>{@code /complete} enforces an IP-independent per-challenge wrong-OTP cap,
  * then performs one atomic directory swap that carries
  * displayName/discoverable/username/homeserverId forward, then post-commit
@@ -81,7 +90,7 @@ public class PhoneChangeService {
             String reauthToken,
             String rawNewPhone,
             String pin,
-            String passkeyAuthSessionId,
+            String passkeyStepUpId,
             JsonNode passkeyCredential,
             String requesterIp,
             String language) {
@@ -97,7 +106,7 @@ public class PhoneChangeService {
         // 2) Non-phone step-up: PIN when the account has one, and/or passkey assertion.
         //    SIM-swap defense — the reauth OTP went to the current (possibly hijacked) number.
         //    Accounts with neither factor are hard-blocked (step_up_required).
-        enforceStepUp(userId, pin, passkeyAuthSessionId, passkeyCredential, requesterIp);
+        enforceStepUp(userId, pin, passkeyStepUpId, passkeyCredential, requesterIp);
 
         // 3) Cooldown between successive changes.
         userSecurityService.enforcePhoneChangeCooldown(userId);
@@ -202,15 +211,19 @@ public class PhoneChangeService {
         log.info("Phone change completed for {} (old={} new={})", userId, oldMasked, newMasked);
     }
 
-    private void enforceStepUp(String userId, String pin, String passkeyAuthSessionId, JsonNode passkeyCredential,
+    private void enforceStepUp(String userId, String pin, String passkeyStepUpId, JsonNode passkeyCredential,
             String requesterIp) {
         boolean hasPin = userSecurityService.hasPin(userId);
-        boolean passkeyAttempted = StringUtils.hasText(passkeyAuthSessionId) && passkeyCredential != null;
+        boolean passkeyAttempted = StringUtils.hasText(passkeyStepUpId) && passkeyCredential != null;
         boolean passkeyVerified = false;
 
         if (passkeyAttempted) {
+            // A step-up assertion, not a login assertion: the ceremony demanded user
+            // verification and PasskeyService refuses a response that did not do it.
             PasskeyService.PasskeyAuthentication assertion =
-                    passkeyService.finishAuthentication(passkeyAuthSessionId, passkeyCredential);
+                    passkeyService.finishStepUpAssertion(passkeyStepUpId, passkeyCredential);
+            // Ownership first. Nothing below may treat the assertion as accepted until the
+            // credential is known to belong to the account making the call.
             if (!userId.equals(assertion.userId())) {
                 auditLogger.reauthFailed(userId, ReauthOperation.PHONE_CHANGE.name(), requesterIp);
                 throw new InvalidPinException("Passkey does not belong to the calling account");
@@ -225,6 +238,12 @@ public class PhoneChangeService {
                 auditLogger.reauthFailed(userId, ReauthOperation.PHONE_CHANGE.name(), requesterIp);
                 throw ex;
             }
+            // The PIN is the factor being accepted here, so the fresh-2FA hold applies to it.
+            // Deliberately inside this branch and after the check that accepts the PIN: if the
+            // branches are ever reordered so a verified passkey is taken first, an account that
+            // proved a passkey never reaches this line and is never held for a fresh PIN it did
+            // not use.
+            userSecurityService.enforcePhoneChangePinHold(userId);
             return;
         }
 

@@ -3,6 +3,8 @@ package me.sarahlacerda.gua.identityservice.controller;
 import java.time.Instant;
 import java.util.List;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessResourceFailureException;
@@ -36,6 +38,7 @@ import me.sarahlacerda.gua.identityservice.exception.PinChangeChallengeNotFoundE
 import me.sarahlacerda.gua.identityservice.exception.PinChangeCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinLockedException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetCooldownException;
+import me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinResetNotRequestedException;
 import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
 import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
@@ -186,6 +189,23 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("phone_change_cooldown", message));
         }
 
+        /**
+         * The fresh-2FA hold: the account PIN is too new to be spent as the phone-change
+         * step-up factor. Answered as 400 with {@code twofa_cooldown_active} and the
+         * remaining seconds in the body, which is the shape both clients already parse;
+         * {@code Retry-After} carries the same number for anything that reads headers.
+         * Deliberately not the 425 the per-account phone-change cooldown uses: that is a
+         * different refusal, and conflating them would tell a client to wait out the wrong
+         * one.
+         */
+        @ExceptionHandler(TwoFactorCooldownException.class)
+        public ResponseEntity<ErrorResponse> handleTwoFactorCooldown(TwoFactorCooldownException ex) {
+                long remaining = Math.max(ex.getRemainingSeconds(), 0);
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .header("Retry-After", String.valueOf(Math.max(remaining, 1)))
+                                .body(new ErrorResponse("twofa_cooldown_active", ex.getMessage(), remaining));
+        }
+
         @ExceptionHandler(PinResetNotRequestedException.class)
         public ResponseEntity<ErrorResponse> handlePinResetNotRequested(PinResetNotRequestedException ex) {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -274,9 +294,18 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("server_error", "Unexpected error"));
         }
 
-        public record ErrorResponse(String code, String message, Instant timestamp) {
+        /**
+         * {@code retryAfterSeconds} is omitted from the JSON unless a handler sets it, so
+         * every existing error body is byte-for-byte what it was.
+         */
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        public record ErrorResponse(String code, String message, Instant timestamp, Long retryAfterSeconds) {
                 public ErrorResponse(String code, String message) {
-                        this(code, message, Instant.now());
+                        this(code, message, Instant.now(), null);
+                }
+
+                public ErrorResponse(String code, String message, long retryAfterSeconds) {
+                        this(code, message, Instant.now(), retryAfterSeconds);
                 }
         }
 }

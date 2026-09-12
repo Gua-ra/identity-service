@@ -9,8 +9,9 @@ import lombok.Setter;
  * Step 1 of a phone-number change. The caller must already hold a
  * {@code PHONE_CHANGE}-scoped reauth token (from /account/reauth/start +
  * /account/reauth/verify) AND prove a non-phone factor: their account PIN when
- * one is set, and/or a passkey assertion. The reauth token alone is insufficient
- * because it only proves a current-phone OTP a SIM-swap attacker could control.
+ * one is set, and/or a user-verifying passkey assertion. The reauth token alone is
+ * insufficient because it only proves a current-phone OTP a SIM-swap attacker could
+ * control.
  */
 @Getter
 @Setter
@@ -30,9 +31,10 @@ public class PhoneChangeStartRequest {
             example = "123456")
     private String pin;
 
-    @Schema(description = "Passkey assertion session id from the in-app WebAuthn ceremony (optional step-up).")
-    private String passkeyAuthSessionId;
+    @Schema(description = "Step-up ceremony id from POST /security/passkey/stepup/options (optional step-up). "
+            + "A sign-in assertion is not accepted here: the step-up ceremony demands user verification.")
+    private String passkeyStepUpId;
 
-    @Schema(description = "Passkey assertion response JSON from the in-app WebAuthn ceremony (optional step-up).")
+    @Schema(description = "Passkey assertion response JSON from the step-up WebAuthn ceremony (optional step-up).")
     private com.fasterxml.jackson.databind.JsonNode passkeyCredential;
 }

@@ -34,6 +34,7 @@ import me.sarahlacerda.gua.identityservice.exception.InvalidPhoneChangeChallenge
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneAlreadyLinkedException;
 import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
+import me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.MatrixProvisioningService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
@@ -208,15 +209,102 @@ class PhoneChangeServiceTest {
     void startAllowsPasskeyOnlyAccount() {
         when(userSecurityService.hasPin(USER)).thenReturn(false);
         JsonNode credential = JsonNodeFactory.instance.objectNode();
-        when(passkeyService.finishAuthentication("pk-sess", credential))
+        when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
                 .thenReturn(new PasskeyService.PasskeyAuthentication(USER));
         primeSuccessfulStart();
 
         PhoneChangeService.PhoneChangeStart start = service.startPhoneNumberChange(USER, "tok", NEW_RAW, null,
-                "pk-sess", credential, "1.2.3.4", "en");
+                "pk-stepup", credential, "1.2.3.4", "en");
 
-        verify(passkeyService).finishAuthentication("pk-sess", credential);
+        // The step-up ceremony, not the sign-in one: a sign-in assertion does not have to
+        // verify the user, and this one does.
+        verify(passkeyService).finishStepUpAssertion("pk-stepup", credential);
+        verify(passkeyService, never()).finishAuthentication(anyString(), any());
         verify(phoneChangeOtpService).send(start.challengeId(), NEW_E164, "1.2.3.4", "en");
+    }
+
+    @Test
+    void startNeverSpendsASignInAssertionAsTheStepUp() {
+        when(userSecurityService.hasPin(USER)).thenReturn(false);
+        JsonNode credential = JsonNodeFactory.instance.objectNode();
+        // The step-up ceremony refuses the response, for instance because it did not verify
+        // the user. Nothing downstream runs and no second factor is inferred from the attempt.
+        doThrow(new me.sarahlacerda.gua.identityservice.exception.LoginFlowException(
+                org.springframework.http.HttpStatus.FORBIDDEN, "passkey_user_verification_required", "no uv"))
+                .when(passkeyService).finishStepUpAssertion("pk-stepup", credential);
+
+        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, null, "pk-stepup", credential,
+                "1.2.3.4", "en"))
+                .isInstanceOf(me.sarahlacerda.gua.identityservice.exception.LoginFlowException.class);
+
+        verify(userSecurityService, never()).enforcePhoneChangeCooldown(anyString());
+        verifyNoInteractions(phoneChangeOtpService);
+        verifyNoInteractions(deviceNotificationService);
+    }
+
+    @Test
+    void startRefusesAnAssertionThatResolvesToAnotherAccountBeforeAcceptingIt() {
+        when(userSecurityService.hasPin(USER)).thenReturn(false);
+        JsonNode credential = JsonNodeFactory.instance.objectNode();
+        when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@mallory:gua.global"));
+
+        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, null, "pk-stepup", credential,
+                "1.2.3.4", "en"))
+                .isInstanceOf(InvalidPinException.class);
+
+        verify(auditLogger).reauthFailed(USER, ReauthOperation.PHONE_CHANGE.name(), "1.2.3.4");
+        verify(userSecurityService, never()).enforcePhoneChangeCooldown(anyString());
+        verifyNoInteractions(phoneChangeOtpService);
+    }
+
+    // -------------------- /start: fresh-2FA hold --------------------
+
+    @Test
+    void startRefusesAPinThatWasMintedInsideTheHold() {
+        when(userSecurityService.hasPin(USER)).thenReturn(true);
+        doThrow(new TwoFactorCooldownException("too new", 600))
+                .when(userSecurityService).enforcePhoneChangePinHold(USER);
+
+        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, "123456", null, null, "1.2.3.4",
+                "en"))
+                .isInstanceOf(TwoFactorCooldownException.class);
+
+        // The PIN was correct; it is simply too new to move the number. Nothing past the
+        // step-up runs, so no OTP is spent and the old number is not alerted.
+        verify(userSecurityService).validatePinOrThrow(USER, "123456");
+        verify(userSecurityService, never()).enforcePhoneChangeCooldown(anyString());
+        verify(phoneNumberNormalizer, never()).toE164(anyString());
+        verifyNoInteractions(phoneChangeOtpService);
+        verifyNoInteractions(deviceNotificationService);
+    }
+
+    @Test
+    void startChecksTheHoldOnlyAfterThePinItself() {
+        when(userSecurityService.hasPin(USER)).thenReturn(true);
+        doThrow(new InvalidPinException("wrong")).when(userSecurityService).validatePinOrThrow(USER, "000000");
+
+        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, "000000", null, null, "1.2.3.4",
+                "en"))
+                .isInstanceOf(InvalidPinException.class);
+
+        // A wrong PIN is still a wrong PIN, with the failure counting that comes with it.
+        // The hold is not an oracle that answers before the PIN is checked.
+        verify(userSecurityService, never()).enforcePhoneChangePinHold(anyString());
+    }
+
+    @Test
+    void startRunsTheHoldAndTheChangeCooldownAsSeparateRefusals() {
+        when(userSecurityService.hasPin(USER)).thenReturn(true);
+        primeSuccessfulStart();
+
+        service.startPhoneNumberChange(USER, "tok", NEW_RAW, "123456", null, null, "1.2.3.4", "en");
+
+        // Both run, in this order, and neither stands in for the other.
+        InOrder order = inOrder(userSecurityService);
+        order.verify(userSecurityService).validatePinOrThrow(USER, "123456");
+        order.verify(userSecurityService).enforcePhoneChangePinHold(USER);
+        order.verify(userSecurityService).enforcePhoneChangeCooldown(USER);
     }
 
     // -------------------- /complete: brute-force cap --------------------

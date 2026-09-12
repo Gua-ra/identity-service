@@ -248,6 +248,55 @@ class SecurityControllerTest {
     }
 
     @Test
+    void pinStatusReportsTheFreshTwoFactorHoldTheClientsPreCheck() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
+        org.mockito.Mockito.when(userSecurityService.hasPin("@user:domain")).thenReturn(true);
+        org.mockito.Mockito.when(userSecurityService.changePhonePinHoldRemainingSeconds("@user:domain"))
+                .thenReturn(432000L);
+
+        mockMvc.perform(MockMvcRequestBuilders.get("/security/pin/status"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.hasPin")
+                        .value(true))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.changePhoneCooldownRemainingSeconds").value(432000));
+    }
+
+    @Test
+    void pinStatusReportsZeroWhenNothingIsHeld() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
+        org.mockito.Mockito.when(userSecurityService.hasPin("@user:domain")).thenReturn(true);
+        org.mockito.Mockito.when(userSecurityService.changePhonePinHoldRemainingSeconds("@user:domain"))
+                .thenReturn(0L);
+
+        mockMvc.perform(MockMvcRequestBuilders.get("/security/pin/status"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.changePhoneCooldownRemainingSeconds").value(0));
+    }
+
+    @Test
+    void passkeyStepUpOptionsMintACeremonyForTheAuthenticatedAccount() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
+        org.mockito.Mockito.when(passkeyService.startStepUpAssertion(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.eq("@user:domain")))
+                .thenReturn(new ObjectMapper().createObjectNode().put("challenge", "abc"));
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/passkey/stepup/options")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.stepUpId")
+                        .isNotEmpty())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.publicKey.challenge").value("abc"));
+
+        // The ceremony is pinned to the caller, never to a user id taken from the request.
+        org.mockito.ArgumentCaptor<String> stepUpId = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(passkeyService).startStepUpAssertion(stepUpId.capture(), org.mockito.ArgumentMatchers.eq("@user:domain"));
+        org.junit.jupiter.api.Assertions.assertFalse(stepUpId.getValue().isBlank());
+    }
+
+    @Test
     void startPasskeyEnrollmentRefusesAnAccountWithoutAPerAccountLocalpart() throws Exception {
         org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("ga1abc:x");
         org.mockito.Mockito.when(directoryService.findByUserId("ga1abc:x")).thenReturn(java.util.List.of());
