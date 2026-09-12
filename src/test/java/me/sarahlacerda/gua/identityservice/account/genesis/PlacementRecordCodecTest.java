@@ -160,7 +160,7 @@ class PlacementRecordCodecTest {
     }
 
     @Test
-    void anEmptyOrOverLongHomeserverIdIsRefused() {
+    void anEmptyOrOverLongHomeserverIdIsRefusedByTheEncoder() {
         assertThatThrownBy(() -> PlacementRecordCodec.encode(genesisRootedId(), AccountId.CLASS_GENESIS, "",
                 now, now, now.plus(1, ChronoUnit.DAYS))).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> PlacementRecordCodec.encode(genesisRootedId(), AccountId.CLASS_GENESIS,
@@ -178,14 +178,14 @@ class PlacementRecordCodecTest {
     }
 
     @Test
-    void anInvertedWindowIsRefused() {
+    void anInvertedWindowIsRefusedByTheEncoder() {
         assertThatThrownBy(() -> PlacementRecordCodec.encode(genesisRootedId(), AccountId.CLASS_GENESIS,
                 HOMESERVER, now, now.plus(5, ChronoUnit.DAYS), now))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
-    void aWindowLongerThanFourHundredDaysIsRefused() {
+    void aWindowLongerThanFourHundredDaysIsRefusedByTheEncoder() {
         assertThat(PlacementRecordCodec.MAX_VALIDITY).isEqualTo(Duration.ofDays(400));
         assertThatThrownBy(() -> PlacementRecordCodec.encode(genesisRootedId(), AccountId.CLASS_GENESIS,
                 HOMESERVER, now, now, now.plus(401, ChronoUnit.DAYS)))
@@ -207,7 +207,114 @@ class PlacementRecordCodecTest {
         byte[] bytes = valid();
         bytes[6] = 0x02;
         assertThatThrownBy(() -> PlacementRecordCodec.decode(bytes))
-                .isInstanceOf(InvalidGenesisException.class);
+                .isInstanceOf(InvalidGenesisException.class)
+                .extracting("reason").isEqualTo("unknown_account_id_version");
+    }
+
+    // --- The decoder rules the encoder cannot reach --------------------------
+    //
+    // The encoder is the trusted side: this service builds those bytes itself. The decoder is the side
+    // that sees whatever arrives, and ResolverPlacementClient.findRecord runs it over bytes fetched from
+    // the resolver, swallowing the failure and logging only the reason. A missing or wrong reason there
+    // is invisible, so each rule below is pinned by its exact token. The buffers are assembled by hand
+    // because the encoder refuses to produce them, which is why encode-based tests could never have
+    // covered these branches.
+
+    @Test
+    void aZeroLengthHomeserverIdPrefixIsRefusedByTheDecoder() {
+        byte[] bytes = handBuilt(0, HOMESERVER, now.toEpochMilli(), now.toEpochMilli(),
+                now.plus(1, ChronoUnit.DAYS).toEpochMilli());
+
+        assertThatThrownBy(() -> PlacementRecordCodec.decode(bytes))
+                .isInstanceOf(InvalidGenesisException.class)
+                .extracting("reason").isEqualTo("bad_homeserver_id_length");
+    }
+
+    @Test
+    void aHomeserverIdPrefixOverSixtyFourIsRefusedByTheDecoder() {
+        String overLong = "a".repeat(PlacementRecord.MAX_HOMESERVER_ID_LENGTH + 1);
+        byte[] bytes = handBuilt(overLong.length(), overLong, now.toEpochMilli(), now.toEpochMilli(),
+                now.plus(1, ChronoUnit.DAYS).toEpochMilli());
+
+        // Sized to match its own prefix, so only the range check can refuse it and a wrong_length here
+        // would mean the range check had been removed.
+        assertThat(bytes).hasSize(PlacementRecord.LENGTH_WITHOUT_HOMESERVER_ID + overLong.length());
+        assertThatThrownBy(() -> PlacementRecordCodec.decode(bytes))
+                .isInstanceOf(InvalidGenesisException.class)
+                .extracting("reason").isEqualTo("bad_homeserver_id_length");
+    }
+
+    @Test
+    void aWindowThatEndsBeforeItStartsIsRefusedByTheDecoder() {
+        long start = now.toEpochMilli();
+        byte[] bytes = handBuilt(HOMESERVER.length(), HOMESERVER, start,
+                now.plus(5, ChronoUnit.DAYS).toEpochMilli(), start);
+
+        assertThatThrownBy(() -> PlacementRecordCodec.decode(bytes))
+                .isInstanceOf(InvalidGenesisException.class)
+                .extracting("reason").isEqualTo("inverted_window");
+    }
+
+    @Test
+    void aWindowOfNoDurationIsRefusedByTheDecoder() {
+        long instant = now.toEpochMilli();
+        byte[] bytes = handBuilt(HOMESERVER.length(), HOMESERVER, instant, instant, instant);
+
+        // notAfter must be strictly after notBefore, so a zero-length window is refused too.
+        assertThatThrownBy(() -> PlacementRecordCodec.decode(bytes))
+                .isInstanceOf(InvalidGenesisException.class)
+                .extracting("reason").isEqualTo("inverted_window");
+    }
+
+    @Test
+    void aWindowLongerThanFourHundredDaysIsRefusedByTheDecoder() {
+        long start = now.toEpochMilli();
+        byte[] bytes = handBuilt(HOMESERVER.length(), HOMESERVER, start, start,
+                now.plus(401, ChronoUnit.DAYS).toEpochMilli());
+
+        assertThatThrownBy(() -> PlacementRecordCodec.decode(bytes))
+                .isInstanceOf(InvalidGenesisException.class)
+                .extracting("reason").isEqualTo("window_too_long");
+    }
+
+    @Test
+    void aWindowOfExactlyFourHundredDaysIsAccepted() {
+        long start = now.toEpochMilli();
+        byte[] bytes = handBuilt(HOMESERVER.length(), HOMESERVER, start, start,
+                now.plus(400, ChronoUnit.DAYS).toEpochMilli());
+
+        // The boundary is inclusive, so the tests above fail for the rule they name and not for an
+        // off-by-one in the hand-built buffer.
+        assertThat(PlacementRecordCodec.decode(bytes).homeserverId()).isEqualTo(HOMESERVER);
+    }
+
+    /**
+     * Canonical bytes assembled directly, so the decoder can be handed a buffer the encoder would refuse
+     * to build. Everything except the length prefix and the three timestamps is well formed, so each
+     * test above fails for exactly the rule it names.
+     */
+    private byte[] handBuilt(int lengthPrefix, String homeserverId, long issuedAt, long notBefore,
+            long notAfter) {
+        byte[] idBytes = homeserverId.getBytes(StandardCharsets.US_ASCII);
+        byte[] out = new byte[PlacementRecord.LENGTH_WITHOUT_HOMESERVER_ID + idBytes.length];
+        System.arraycopy(PlacementRecord.MAGIC.getBytes(StandardCharsets.US_ASCII), 0, out, 0, 4);
+        out[4] = (byte) PlacementRecord.VERSION;
+        out[5] = (byte) PlacementRecord.GENERATION_ONE;
+        System.arraycopy(genesisRootedId().rawBytes(), 0, out, 6, AccountId.RAW_LENGTH);
+        out[40] = AccountId.CLASS_GENESIS;
+        out[41] = (byte) lengthPrefix;
+        System.arraycopy(idBytes, 0, out, 42, idBytes.length);
+        int trailer = 42 + idBytes.length;
+        writeUnsignedLong(out, trailer, issuedAt);
+        writeUnsignedLong(out, trailer + 8, notBefore);
+        writeUnsignedLong(out, trailer + 16, notAfter);
+        return out;
+    }
+
+    private static void writeUnsignedLong(byte[] out, int offset, long value) {
+        for (int i = 0; i < 8; i++) {
+            out[offset + i] = (byte) (value >>> (56 - 8 * i));
+        }
     }
 
     // --- ADM-001 L15: nothing in a record identifies the human ---------------

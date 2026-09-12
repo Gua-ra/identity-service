@@ -151,7 +151,56 @@ class PlacementRecordsNotServedGuardTest {
         assertThat(body).doesNotContain("published");
         assertThat(body).doesNotContain("PlacementRecord");
         assertThat(body).doesNotContain("findRecord");
+        // Naming the record's homeserver would satisfy every assertion above while still deriving
+        // routing state from a record, so that spelling is refused explicitly.
+        assertThat(body).doesNotContain("recordHome");
         assertThat(body).contains("masHome");
+    }
+
+    @Test
+    void noFileOutsideThePlacementPackageReachesAPlacementRecordType() throws IOException {
+        List<String> offenders = new ArrayList<>();
+        for (Path file : mainSources()) {
+            String path = file.toString();
+            boolean ownsTheTypes = path.contains("service" + java.io.File.separator + "placement")
+                    || path.contains("account" + java.io.File.separator + "genesis");
+            if (ownsTheTypes) {
+                continue;
+            }
+            for (String line : codeLines(file)) {
+                for (String type : PLACEMENT_RECORD_TYPES) {
+                    if (line.contains(type)) {
+                        offenders.add(file.getFileName() + ": " + line);
+                    }
+                }
+            }
+        }
+
+        // The named-file guard above catches a rename or a deletion but cannot catch a routing file
+        // nobody has written yet. This one holds for every file that will ever be added.
+        assertThat(offenders).isEmpty();
+    }
+
+    @Test
+    void theRosterIdMappingHasExactlyOneImplementation() throws IOException {
+        List<String> offenders = new ArrayList<>();
+        for (Path file : mainSources()) {
+            String name = file.getFileName().toString();
+            if (name.equals("FederationIds.java")) {
+                continue;
+            }
+            for (String line : codeLines(file)) {
+                if (line.contains("getFederationId()")) {
+                    offenders.add(name + ": " + line);
+                }
+            }
+        }
+
+        // This mapping existed three times over, and the two copies in the MAS readers left out the
+        // alias map. A homeserver with no explicit federation id was therefore one roster id to a
+        // reader and another to the comparison, the lookup missed, both cross-checks were silently
+        // skipped, and the account was reported as a benign data-quality finding.
+        assertThat(offenders).isEmpty();
     }
 
     /**

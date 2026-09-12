@@ -7,8 +7,9 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import me.sarahlacerda.gua.identityservice.account.genesis.AccountId;
@@ -28,6 +29,15 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Home
  * <p>One consequence is stated rather than hidden: one signer for every homeserver is one operator, able
  * to produce roster-level proofs for each key, so generation-1 records improve no compromise condition.
  * They record where an account already lives.
+ *
+ * <h2>Keys are parsed on first use, not at construction</h2>
+ * <p>This bean is built in every deployment, including the overwhelming majority that have placement
+ * publishing switched off. Parsing a configured key eagerly would mean a deployment holding a malformed
+ * or truncated key in its Secret failed to start even with the feature off, which is a behaviour change
+ * the flags are supposed to prevent. The key material is therefore held as configured text and decoded
+ * the first time a record is actually signed. A deployment that does publish still gets its keys checked
+ * before it serves anything: {@link PlacementSignerStartupCheck} decodes every one of them at startup and
+ * refuses to start if any fails, which is the fail-fast that matters.
  */
 @Component
 public class PlacementRecordSigner {
@@ -38,30 +48,36 @@ public class PlacementRecordSigner {
     }
 
     private final IdentityServiceProperties properties;
+    private final FederationIds federationIds;
 
-    /** Federation roster id to the private half of that homeserver's membership key. */
-    private final Map<String, PrivateKey> signingKeys = new LinkedHashMap<>();
+    /** Federation roster id to the configured base64 PKCS#8 text of that homeserver's membership key. */
+    private final Map<String, String> configuredKeys = new LinkedHashMap<>();
 
-    /** Local registry id to federation roster id, for the configured homeservers. */
-    private final Map<String, String> federationIdByRegistryId = new LinkedHashMap<>();
+    /** The decoded halves, populated on first use. */
+    private final Map<String, PrivateKey> loadedKeys = new ConcurrentHashMap<>();
 
-    public PlacementRecordSigner(IdentityServiceProperties properties) {
+    @Autowired
+    public PlacementRecordSigner(IdentityServiceProperties properties, FederationIds federationIds) {
         this.properties = properties;
+        this.federationIds = federationIds;
         for (HomeserverConfig homeserver : properties.getRouting().getHomeservers()) {
-            federationIdByRegistryId.put(homeserver.getId(), federationIdOf(homeserver));
             String key = homeserver.getPlacementSigningPrivateKey();
             if (key == null || key.isBlank()) {
-                // A homeserver this deployment does not publish for. Loading nothing here is what keeps
-                // construction free of side effects while the feature is switched off.
+                // A homeserver this deployment does not publish for.
                 continue;
             }
-            signingKeys.put(federationIdOf(homeserver), Ed25519Keys.privateKeyFromPkcs8(key));
+            configuredKeys.put(federationIds.of(homeserver), key);
         }
+    }
+
+    /** For callers that build the signer directly rather than through the container. */
+    public PlacementRecordSigner(IdentityServiceProperties properties) {
+        this(properties, new FederationIds(properties));
     }
 
     /** True when this deployment holds a signing key for that roster homeserver id. */
     public boolean canSignFor(String federationId) {
-        return signingKeys.containsKey(federationId);
+        return configuredKeys.containsKey(federationId);
     }
 
     /**
@@ -73,11 +89,7 @@ public class PlacementRecordSigner {
      *                               deployment error rather than a per-account one
      */
     public SignedPlacementRecord sign(AccountId accountId, byte origin, String federationId, Instant now) {
-        PrivateKey key = signingKeys.get(federationId);
-        if (key == null) {
-            throw new IllegalStateException("No placement signing key is configured for homeserver "
-                    + federationId);
-        }
+        PrivateKey key = signingKey(federationId);
         Duration validity = properties.getPlacement().getRecordValidity();
         Instant notAfter = now.plus(validity);
         byte[] canonical = PlacementRecordCodec.encode(accountId, origin, federationId, now, now, notAfter);
@@ -91,40 +103,32 @@ public class PlacementRecordSigner {
                 notAfter);
     }
 
+    private PrivateKey signingKey(String federationId) {
+        String configured = configuredKeys.get(federationId);
+        if (configured == null) {
+            throw new IllegalStateException("No placement signing key is configured for homeserver "
+                    + federationId);
+        }
+        return loadedKeys.computeIfAbsent(federationId,
+                id -> Ed25519Keys.privateKeyFromPkcs8(configuredKeys.get(id)));
+    }
+
     /**
-     * The roster id a configured homeserver publishes under: its explicit {@code federationId}, else the
-     * alias configured for its local registry id, else the local id itself.
+     * The roster id a configured homeserver publishes under.
+     *
+     * <p>Delegates to {@link FederationIds}, which is the single implementation of this mapping. The MAS
+     * readers resolve the same value through the same collaborator, so the id the comparison indexes by
+     * and the id a reader reports can no longer disagree.
      */
     public String federationIdOf(HomeserverConfig homeserver) {
-        String explicit = homeserver.getFederationId();
-        if (explicit != null && !explicit.isBlank()) {
-            return explicit.trim();
-        }
-        return aliasOrSelf(homeserver.getId());
+        return federationIds.of(homeserver);
     }
 
     /**
      * Maps a value out of {@code directory_entries.homeserver_id} to a federation roster id, for
-     * comparison only.
-     *
-     * <p>A configured homeserver answers for itself, which is the ordinary case: the directory holds
-     * this deployment's local registry ids and each configured homeserver knows its own roster id. The
-     * alias map is for the values that match no configured homeserver, which in practice means the
-     * legacy synthesised id and the rows written before routing existed. Getting this wrong produces
-     * false stale-directory findings and nothing worse, because publishing uses the MAS link and never
-     * this value.
+     * comparison only. Delegates to {@link FederationIds}.
      */
     public String federationIdForRegistryId(String registryId) {
-        if (registryId == null || registryId.isBlank()) {
-            return null;
-        }
-        String configured = federationIdByRegistryId.get(registryId);
-        return configured != null ? configured : aliasOrSelf(registryId);
-    }
-
-    private String aliasOrSelf(String registryId) {
-        return Optional.ofNullable(properties.getPlacement().getFederationIdAliases().get(registryId))
-                .filter(alias -> !alias.isBlank())
-                .orElse(registryId);
+        return federationIds.forRegistryId(registryId);
     }
 }

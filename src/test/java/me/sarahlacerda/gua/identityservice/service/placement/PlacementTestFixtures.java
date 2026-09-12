@@ -47,6 +47,18 @@ final class PlacementTestFixtures {
         return homeserver;
     }
 
+    /**
+     * A configured homeserver with no explicit {@code federationId}, so its roster id comes from the
+     * alias map or from its own local id.
+     *
+     * <p>This shape matters because every other fixture here sets an explicit federation id, which is
+     * exactly why a bug that only appeared without one went unnoticed: the MAS readers resolved the
+     * roster id one way and the comparison resolved it another, and the two only diverge on this path.
+     */
+    static HomeserverConfig homeserverWithoutFederationId(String localId, String domain, String signingKey) {
+        return homeserver(localId, domain, null, signingKey);
+    }
+
     /** Properties carrying exactly one homeserver this deployment holds the membership key for. */
     static IdentityServiceProperties propertiesWithOneHomeserver(TestEd25519.Pair pair) {
         IdentityServiceProperties properties = new IdentityServiceProperties();

@@ -1,6 +1,7 @@
 // Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -24,8 +25,22 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
  *   <li>{@code gua_identity_mas_localpart_on_conflict{homeserver,value}}, so {@code add} coming back
  *       after it was set to {@code fail} is visible;</li>
  *   <li>{@code gua_identity_placement_publish_total{result}}, including the conflict a record naming
- *       another homeserver produces.</li>
+ *       another homeserver produces;</li>
+ *   <li>{@code gua_identity_placement_shadow_failures_total{reason}}, the accounts the run could not
+ *       classify at all.</li>
  * </ul>
+ *
+ * <p>Both counters carry a <b>closed</b> label set, because a panel or an alert is written against the
+ * literal values. {@code result} on the publish counter is one of the four {@code PublishOutcome} values,
+ * {@code published}, {@code conflict}, {@code rejected} and {@code unavailable}, or one of the three
+ * reasons the reconciler skips an account before ever calling the resolver, {@code no_signing_key},
+ * {@code bad_account_id} and {@code origin_mismatch}. {@code reason} on the failures counter is
+ * {@code unknown_homeserver} or {@code error}. Adding a value to either is a deliberate edit here.
+ *
+ * <p>The failures counter exists because the run used to die on the first unreadable account, which
+ * stopped {@code last_success_timestamp} advancing and so read as "the job is not running" rather than
+ * as "these accounts could not be compared". The run now completes, the timestamp advances, and this is
+ * the series an alert watches.
  *
  * <p>Prometheus appends {@code _total} to counters and never to gauges, so the two scanned/timestamp
  * gauges carry no such suffix and the two counters do. {@code PlacementShadowMetricsTest} pins every
@@ -38,6 +53,9 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
  */
 @Component
 public class PlacementShadowMetrics {
+
+    /** The closed reason vocabulary of {@code gua_identity_placement_shadow_failures_total}. */
+    static final List<String> FAILURE_REASONS = List.of("unknown_homeserver", "error");
 
     private final MeterRegistry registry;
     private final boolean enabled;
@@ -56,6 +74,12 @@ public class PlacementShadowMetrics {
             Counter.builder("gua.identity.placement.shadow")
                     .tag("result", result.tag())
                     .description("Accounts by shadow comparison result")
+                    .register(registry);
+        }
+        for (String reason : FAILURE_REASONS) {
+            Counter.builder("gua.identity.placement.shadow.failures")
+                    .tag("reason", reason)
+                    .description("Accounts the shadow comparison could not classify")
                     .register(registry);
         }
         Gauge.builder("gua.identity.placement.shadow.accounts.scanned", accountsScanned, AtomicLong::get)
@@ -81,8 +105,26 @@ public class PlacementShadowMetrics {
         }
     }
 
-    /** Records a completed run. */
+    /**
+     * Counts one account the run could not classify at all.
+     *
+     * @param reason one of {@link #FAILURE_REASONS}
+     */
+    public void failed(String reason) {
+        if (enabled) {
+            registry.counter("gua.identity.placement.shadow.failures", "reason", reason).increment();
+        }
+    }
+
+    /**
+     * Records a completed run. Gated on the feature like every other method here, so a deployment with
+     * the comparison off cannot start populating state that the gauges would expose the moment someone
+     * registered them unconditionally.
+     */
     public void runCompleted(long scanned, long epochSeconds) {
+        if (!enabled) {
+            return;
+        }
         accountsScanned.set(scanned);
         lastSuccessEpochSeconds.set(epochSeconds);
     }
@@ -97,10 +139,15 @@ public class PlacementShadowMetrics {
         }
         onConflict.set(Map.copyOf(byHomeserver));
         for (Map.Entry<String, String> entry : byHomeserver.entrySet()) {
-            Tags tags = Tags.of("homeserver", entry.getKey(), "value", entry.getValue());
+            // Copied out of the entry deliberately. A lambda capturing the Map.Entry itself would keep a
+            // strong reference to the caller's map alive for the life of the registry, once per observed
+            // pair, and the gauge only ever needs these two strings.
+            String homeserver = entry.getKey();
+            String value = entry.getValue();
+            Tags tags = Tags.of("homeserver", homeserver, "value", value);
             if (registry.find("gua.identity.mas.localpart.on.conflict").tags(tags).gauge() == null) {
                 Gauge.builder("gua.identity.mas.localpart.on.conflict", this,
-                                self -> entry.getValue().equals(self.onConflict.get().get(entry.getKey())) ? 1d : 0d)
+                                self -> value.equals(self.onConflict.get().get(homeserver)) ? 1d : 0d)
                         .tags(tags)
                         .description("Effective MAS localpart claims-import on_conflict policy")
                         .register(registry);

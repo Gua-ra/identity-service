@@ -2,16 +2,19 @@
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.lang.reflect.RecordComponent;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -58,6 +61,7 @@ class PlacementShadowReconcilerTest {
     private IdentityServiceProperties properties;
     private PlacementAccountScanner scanner;
     private ResolverPlacementClient resolver;
+    private SimpleMeterRegistry registry;
     private PlacementShadowMetrics metrics;
     private FakeMasLinkReader reader;
     private PlacementShadowReconciler reconciler;
@@ -72,7 +76,8 @@ class PlacementShadowReconcilerTest {
         resolver = mock(ResolverPlacementClient.class);
         when(resolver.isConfigured()).thenReturn(true);
         when(resolver.findRecord(anyString())).thenReturn(Optional.empty());
-        metrics = new PlacementShadowMetrics(new SimpleMeterRegistry(), properties);
+        registry = new SimpleMeterRegistry();
+        metrics = new PlacementShadowMetrics(registry, properties);
         reader = new FakeMasLinkReader();
 
         reconciler = build();
@@ -361,14 +366,24 @@ class PlacementShadowReconcilerTest {
 
     @Test
     void noRecordIsSignedForAHomeserverThisDeploymentHoldsNoKeyFor() {
+        // The other homeserver is configured, so the comparison resolves it, but carries no membership
+        // key: this deployment is not the party entitled to assert where the account lives. It has to be
+        // configured for this test to mean what its name says, because an unconfigured homeserver is a
+        // different branch now and would pass this assertion for the wrong reason.
+        String otherDomain = "other.example.test";
+        String otherUser = "@alice:" + otherDomain;
+        properties.getRouting().getHomeservers().add(PlacementTestFixtures.homeserver("other", otherDomain,
+                OTHER_FEDERATION_ID, ""));
         properties.getPlacement().getPublish().setEnabled(true);
         reconciler = build();
-        account(USER_ID, PlacementTestFixtures.LOCAL_ID);
-        reader.link(USER_ID, OTHER_FEDERATION_ID, null);
+        account(otherUser, PlacementTestFixtures.LOCAL_ID);
+        reader.link(otherUser, OTHER_FEDERATION_ID, null);
 
         run();
 
         verify(resolver, never()).publish(any());
+        assertThat(registry.counter("gua.identity.placement.publish", "result", "no_signing_key").count())
+                .isEqualTo(1d);
     }
 
     @Test
@@ -502,10 +517,117 @@ class PlacementShadowReconcilerTest {
         assertThat(line).contains("masHomeserver=" + PlacementTestFixtures.FEDERATION_ID);
     }
 
+
+    // --- Resolving a homeserver, and failing when it cannot be resolved -------
+
+    @Test
+    void aHomeserverWithNoExplicitFederationIdIsTheSameRosterIdToTheReaderAndToTheComparison() {
+        // No explicit federationId, so the roster id comes from the alias map. This is the shape where
+        // the mapping used to be computed two different ways: the readers ignored the alias map and
+        // returned the local id while the comparison indexed by the aliased one, so the lookup missed,
+        // both cross-checks were skipped, and the account was reported as a benign directory_stale.
+        properties = new IdentityServiceProperties();
+        properties.getPlacement().setResolverBaseUrl("http://resolver.invalid");
+        properties.getPlacement().getShadow().setEnabled(true);
+        properties.getPlacement().getFederationIdAliases()
+                .put(PlacementTestFixtures.LOCAL_ID, PlacementTestFixtures.FEDERATION_ID);
+        properties.getRouting().getHomeservers().add(PlacementTestFixtures.homeserverWithoutFederationId(
+                PlacementTestFixtures.LOCAL_ID, PlacementTestFixtures.DOMAIN,
+                PlacementTestFixtures.pkcs8(pair)));
+        registry = new SimpleMeterRegistry();
+        metrics = new PlacementShadowMetrics(registry, properties);
+        reconciler = build();
+
+        // The id a real reader reports, resolved through the one shared implementation it now uses.
+        String readerId = new FederationIds(properties)
+                .of(properties.getRouting().getHomeservers().get(0));
+        account(USER_ID, PlacementTestFixtures.LOCAL_ID);
+        reader.link(USER_ID, readerId, "somebody-else");
+
+        // The real finding, not the misreport: a MAS username that is not this account's own localpart.
+        assertThat(run()).containsExactly(Map.entry(PlacementShadowResult.MAS_USERNAME_MISMATCH, 1));
+    }
+
+    @Test
+    void aHomeserverTheComparisonCannotResolveIsAFailureAndNeverAClassification() {
+        account(USER_ID, PlacementTestFixtures.LOCAL_ID);
+        reader.link(USER_ID, "fed-not-configured", "alice");
+
+        Map<PlacementShadowResult, Integer> counts = run();
+
+        // Both cross-checks need this homeserver's domain. Skipping them used to leave the account with
+        // a clean result, which is a fail-open in exactly the counts the phase exit is read from.
+        assertThat(counts).isEmpty();
+        assertThat(registry.counter("gua.identity.placement.shadow.failures", "reason",
+                "unknown_homeserver").count()).isEqualTo(1d);
+        assertThat(messagesAt(Level.ERROR)).anyMatch(line -> line.contains("placement_shadow_failed")
+                && line.contains("reason=unknown_homeserver"));
+    }
+
+    // --- One bad account does not end the run ---------------------------------
+
+    @Test
+    void oneUnreadableAccountIsCountedAndTheRunCarriesOn() {
+        String poison = "@poison:example.test";
+        when(scanner.nextBatch(anyString(), anyInt())).thenReturn(
+                List.of(new AccountRow(accountId, poison, "GENESIS", PlacementTestFixtures.LOCAL_ID),
+                        new AccountRow(accountId, USER_ID, "GENESIS", PlacementTestFixtures.LOCAL_ID)),
+                List.of());
+        reader.failFor(poison);
+        reader.link(USER_ID, PlacementTestFixtures.FEDERATION_ID, "alice");
+
+        Map<PlacementShadowResult, Integer> counts = run();
+
+        // The scan used to die on the first such row, which stopped the success timestamp advancing and
+        // read as "the job is not running" rather than "this account could not be compared".
+        assertThat(counts).containsExactly(Map.entry(PlacementShadowResult.RECORD_MISSING, 1));
+        assertThat(registry.counter("gua.identity.placement.shadow.failures", "reason", "error").count())
+                .isEqualTo(1d);
+        assertThat(messagesAt(Level.INFO)).anyMatch(line -> line.contains("comparison complete"));
+    }
+
+    @Test
+    void aValidityWindowTheCodecRefusesFailsAccountsRatherThanTheWholeRun() {
+        properties.getPlacement().getPublish().setEnabled(true);
+        // A misconfiguration the property allows and the codec refuses. It is rejected at boot when
+        // publishing is on; this is the backstop for every other way signing can throw.
+        properties.getPlacement().setRecordValidity(Duration.ofDays(401));
+        reconciler = build();
+        account(USER_ID, PlacementTestFixtures.LOCAL_ID);
+        reader.link(USER_ID, PlacementTestFixtures.FEDERATION_ID, "alice");
+
+        Map<PlacementShadowResult, Integer> counts = run();
+
+        assertThat(counts).isEmpty();
+        verify(resolver, never()).publish(any());
+        assertThat(registry.counter("gua.identity.placement.shadow.failures", "reason", "error").count())
+                .isEqualTo(1d);
+        assertThat(messagesAt(Level.INFO)).anyMatch(line -> line.contains("comparison complete"));
+    }
+
+    @Test
+    void aFailedAccountIsNotCountedAsAnyResult() {
+        String poison = "@poison:example.test";
+        when(scanner.nextBatch(anyString(), anyInt())).thenReturn(
+                List.of(new AccountRow(accountId, poison, "GENESIS", PlacementTestFixtures.LOCAL_ID)),
+                List.of());
+        reader.failFor(poison);
+
+        Map<PlacementShadowResult, Integer> counts = run();
+
+        // In particular not as agree: a comparison that did not happen is not agreement.
+        assertThat(counts.values().stream().mapToInt(Integer::intValue).sum()).isZero();
+        for (PlacementShadowResult result : PlacementShadowResult.values()) {
+            assertThat(registry.counter("gua.identity.placement.shadow", "result", result.tag()).count())
+                    .isZero();
+        }
+    }
+
     /** A reader that answers from memory, so no MAS and no credential is involved. */
     private static final class FakeMasLinkReader implements MasLinkReader {
 
         private final Map<String, List<MasLink>> links = new HashMap<>();
+        private final Set<String> failing = new HashSet<>();
         private boolean configured = true;
         private Map<String, String> onConflict = Map.of();
 
@@ -524,8 +646,16 @@ class PlacementShadowReconcilerTest {
             return "in-memory test reader";
         }
 
+        /** Makes this one account unreadable, standing in for any reader that throws mid-scan. */
+        void failFor(String subject) {
+            failing.add(subject);
+        }
+
         @Override
         public List<MasLink> linksFor(String subject) {
+            if (failing.contains(subject)) {
+                throw new IllegalStateException("the reader could not answer for this account");
+            }
             return links.getOrDefault(subject, List.of());
         }
 

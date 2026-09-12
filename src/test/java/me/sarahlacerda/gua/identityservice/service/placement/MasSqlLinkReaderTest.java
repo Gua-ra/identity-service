@@ -88,6 +88,27 @@ class MasSqlLinkReaderTest {
     }
 
     @Test
+    void aHomeserverWithNoExplicitFederationIdIsReadThroughTheAliasMap() {
+        IdentityServiceProperties aliased = new IdentityServiceProperties();
+        aliased.getPlacement().getMas().getSql().setEnabled(true);
+        aliased.getPlacement().getFederationIdAliases()
+                .put(PlacementTestFixtures.LOCAL_ID, PlacementTestFixtures.FEDERATION_ID);
+        HomeserverConfig homeserver = PlacementTestFixtures.homeserverWithoutFederationId(
+                PlacementTestFixtures.LOCAL_ID, PlacementTestFixtures.DOMAIN, "");
+        homeserver.getMas().setUpstreamProviderId(PROVIDER);
+        homeserver.getMas().setReadOnlyJdbcUrl(JDBC_URL);
+        aliased.getRouting().getHomeservers().add(homeserver);
+
+        MasSqlLinkReader aliasReader = new MasSqlLinkReader(aliased, new ObjectMapper(),
+                (url, username, password) -> DriverManager.getConnection(url));
+
+        // This reader used to fall back to the local registry id while the comparison used the alias,
+        // so the two disagreed and every account on such a homeserver was misclassified.
+        assertThat(aliasReader.linksFor("@alice:example.test").get(0).federationId())
+                .isEqualTo(PlacementTestFixtures.FEDERATION_ID);
+    }
+
+    @Test
     void theColumnHoldingAPhoneNumberIsNeverRead() {
         List<MasLink> links = reader.linksFor("@alice:example.test");
 

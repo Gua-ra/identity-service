@@ -1,11 +1,13 @@
 // Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 
+import me.sarahlacerda.gua.identityservice.account.genesis.PlacementRecordCodec;
 import me.sarahlacerda.gua.identityservice.account.genesis.TestEd25519;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.service.placement.ResolverPlacementClient.HomeserverView;
@@ -201,5 +203,46 @@ class PlacementSignerStartupCheckTest {
         assertThat(org.mockito.Mockito.mockingDetails(resolver).getInvocations().stream()
                 .filter(invocation -> invocation.getMethod().getName().equals("fetchRoster"))
                 .count()).isEqualTo(1);
+    }
+
+    // --- The configured validity window ---------------------------------------
+
+    @Test
+    void aValidityWindowLongerThanTheCodecAcceptsIsRefusedAtStartup() {
+        IdentityServiceProperties properties = publishing();
+        properties.getPlacement().setRecordValidity(Duration.ofDays(401));
+
+        // record-validity is a freely configurable Duration while the codec refuses anything over 400
+        // days. Left unchecked it is accepted at boot and then throws on every single signature, which
+        // shows up at 03:20 as a job that failed rather than as the misconfiguration it is.
+        assertThatThrownBy(() -> check(properties).verifyPlacementSigningIdentity())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("record-validity");
+
+        // Refused before anything is read, so a bad window is caught even if the roster is unreachable.
+        verifyNoInteractions(resolver);
+    }
+
+    @Test
+    void aReissueWindowThatIsNotShorterThanTheValidityIsRefusedAtStartup() {
+        IdentityServiceProperties properties = publishing();
+        properties.getPlacement().setReissueAfter(Duration.ofDays(400));
+
+        // A record that is re-issued no sooner than it expires is a record that lapses.
+        assertThatThrownBy(() -> check(properties).verifyPlacementSigningIdentity())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("reissue-after");
+    }
+
+    @Test
+    void theShippedWindowIsTheOneTheCodecAccepts() {
+        rosterIsAvailable(rosterWith(PlacementTestFixtures.FEDERATION_ID, PlacementTestFixtures.DOMAIN,
+                PlacementTestFixtures.publicKeyBase64(pair), "ACTIVE"));
+        IdentityServiceProperties properties = publishing();
+
+        assertThat(properties.getPlacement().getRecordValidity())
+                .isEqualTo(PlacementRecordCodec.MAX_VALIDITY);
+        assertThatCode(() -> check(properties).verifyPlacementSigningIdentity())
+                .doesNotThrowAnyException();
     }
 }

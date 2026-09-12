@@ -128,6 +128,7 @@ public class PlacementShadowReconciler {
         EnumMap<PlacementShadowResult, Integer> counts = new EnumMap<>(PlacementShadowResult.class);
         Instant now = Instant.now();
         long scanned = 0;
+        long failures = 0;
         String cursor = "";
 
         while (true) {
@@ -137,7 +138,29 @@ public class PlacementShadowReconciler {
             }
             for (PlacementAccountScanner.AccountRow row : batch) {
                 scanned++;
-                PlacementShadowResult result = examine(row, reader, byFederationId, shadow, now);
+                PlacementShadowResult result;
+                try {
+                    result = examine(row, reader, byFederationId, shadow, now);
+                } catch (UnknownHomeserverException ex) {
+                    // Fails closed and loudly. A homeserver the comparison cannot resolve used to skip
+                    // both cross-checks and still hand the account a clean classification, which is a
+                    // fail-open in exactly the counts the phase exit is read from.
+                    failures++;
+                    metrics.failed("unknown_homeserver");
+                    log.error("placement_shadow_failed accountId={} userId={} reason=unknown_homeserver "
+                            + "masHomeserver={}", row.accountId(), row.userId(), ex.homeserverId());
+                    continue;
+                } catch (RuntimeException ex) {
+                    // One unreadable row must not end the run. The scan continues, the account is counted
+                    // as a failure rather than as agreement, and the completion gauge still advances so
+                    // the alert fires on the failure counter rather than on a job that appears to have
+                    // stopped.
+                    failures++;
+                    metrics.failed("error");
+                    log.error("placement_shadow_failed accountId={} userId={} reason=error type={}",
+                            row.accountId(), row.userId(), ex.getClass().getSimpleName(), ex);
+                    continue;
+                }
                 counts.merge(result, 1, Integer::sum);
                 metrics.classified(result);
             }
@@ -146,8 +169,8 @@ public class PlacementShadowReconciler {
 
         metrics.localpartOnConflict(reader.localpartOnConflictByHomeserver());
         metrics.runCompleted(scanned, now.getEpochSecond());
-        log.info("Placement shadow comparison complete: scanned={} results={} readPath={}", scanned, counts,
-                reader.describe());
+        log.info("Placement shadow comparison complete: scanned={} failures={} results={} readPath={}",
+                scanned, failures, counts, reader.describe());
         return counts;
     }
 
@@ -173,13 +196,19 @@ public class PlacementShadowReconciler {
         HomeserverConfig homeserver = byFederationId.get(masHome);
         MasLink link = links.get(0);
 
-        if (homeserver != null && !row.userId().endsWith(":" + homeserver.getDomain())) {
+        if (homeserver == null) {
+            // Both cross-checks below need this homeserver's domain, so an unresolvable one cannot be
+            // waved through: skipping them silently would let the account be reported as agreeing when
+            // in fact nothing was compared. The caller counts this as a failure, never as a result.
+            throw new UnknownHomeserverException(masHome);
+        }
+        if (!row.userId().endsWith(":" + homeserver.getDomain())) {
             // The account's own id names one homeserver and its link lives on another: the same "one
             // subject, two homeservers" finding, and equally not something to publish a record for.
             return report(row, PlacementShadowResult.MAS_MULTIPLE, masHome, null, "subject_home_mismatch",
                     false);
         }
-        if (homeserver != null && link.masUsername() != null && !link.masUsername().isBlank()
+        if (link.masUsername() != null && !link.masUsername().isBlank()
                 && !composeUserId(homeserver, link.masUsername()).equals(row.userId())) {
             // Composed forward, from the MAS username to the Matrix user id it implies, rather than by
             // taking a localpart out of the id: this service derives localparts in exactly one place and
@@ -215,9 +244,27 @@ public class PlacementShadowReconciler {
         // Publishing is decided from the evidence, not from the classification, so a stale local routing
         // row does not stop a record being written for an account whose evidence is otherwise clean.
         maybePublish(row, masHome, published, now);
-        maybeHeal(row, masHome, byFederationId, shadow, result, known);
+        maybeHeal(row, masHome, homeserver, shadow, result, known);
 
         return report(row, result, masHome, recordHome, reason, known);
+    }
+
+    /**
+     * A MAS reader named a homeserver that is not in {@code identity.routing.homeservers}, so the
+     * comparison has no domain to cross-check against and no registry id to heal to.
+     */
+    static final class UnknownHomeserverException extends RuntimeException {
+
+        private final transient String homeserverId;
+
+        UnknownHomeserverException(String homeserverId) {
+            super("No configured homeserver has federation roster id " + homeserverId);
+            this.homeserverId = homeserverId;
+        }
+
+        String homeserverId() {
+            return homeserverId;
+        }
     }
 
     private void maybePublish(PlacementAccountScanner.AccountRow row, String masHome,
@@ -266,20 +313,17 @@ public class PlacementShadowReconciler {
     }
 
     private void maybeHeal(PlacementAccountScanner.AccountRow row, String masHome,
-            Map<String, HomeserverConfig> byFederationId, ShadowProperties shadow,
-            PlacementShadowResult result, boolean known) {
+            HomeserverConfig homeserver, ShadowProperties shadow, PlacementShadowResult result,
+            boolean known) {
         if (!shadow.isHealDirectory() || result != PlacementShadowResult.DIRECTORY_STALE || known) {
             return;
         }
-        HomeserverConfig homeserver = byFederationId.get(masHome);
-        if (homeserver == null) {
-            return;
-        }
-        // The value written is this deployment's own registry id, taken from the MAS link. No published
-        // record is consulted: routing state must never be derived from placement records in this phase.
+        // The value written is this deployment's own registry id for the homeserver the MAS link named,
+        // which the caller already resolved from masHome. No published record is consulted: routing state
+        // must never be derived from placement records in this phase.
         int updated = scanner.healDirectoryHomeserver(row.userId(), homeserver.getId());
-        log.info("placement_directory_healed userId={} homeserver={} rows={}", row.userId(),
-                homeserver.getId(), updated);
+        log.info("placement_directory_healed userId={} homeserver={} masHomeserver={} rows={}",
+                row.userId(), homeserver.getId(), masHome, updated);
     }
 
     private PlacementShadowResult report(PlacementAccountScanner.AccountRow row, PlacementShadowResult result,

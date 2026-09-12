@@ -77,10 +77,13 @@ public class MasAdminApiLinkReader implements MasLinkReader {
 
     private final IdentityServiceProperties properties;
     private final WebClient.Builder webClientBuilder;
+    private final FederationIds federationIds;
 
-    public MasAdminApiLinkReader(IdentityServiceProperties properties, WebClient.Builder webClientBuilder) {
+    public MasAdminApiLinkReader(IdentityServiceProperties properties, WebClient.Builder webClientBuilder,
+            FederationIds federationIds) {
         this.properties = properties;
         this.webClientBuilder = webClientBuilder;
+        this.federationIds = federationIds;
     }
 
     @Override
@@ -116,7 +119,7 @@ public class MasAdminApiLinkReader implements MasLinkReader {
 
     private List<MasLink> linksOn(HomeserverConfig homeserver, String subject) {
         IdentityServiceProperties.MasConfig mas = homeserver.getMas();
-        String federationId = federationIdOf(homeserver);
+        String federationId = federationIds.of(homeserver);
         try {
             WebClient client = webClientBuilder.clone().baseUrl(mas.getAdminApiBaseUrl().trim()).build();
             String token = requestToken(client, mas);
@@ -205,10 +208,5 @@ public class MasAdminApiLinkReader implements MasLinkReader {
     @Override
     public Map<String, String> localpartOnConflictByHomeserver() {
         return Map.of();
-    }
-
-    private String federationIdOf(HomeserverConfig homeserver) {
-        String explicit = homeserver.getFederationId();
-        return explicit == null || explicit.isBlank() ? homeserver.getId() : explicit.trim();
     }
 }

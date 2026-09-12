@@ -13,6 +13,7 @@ import me.sarahlacerda.gua.identityservice.account.genesis.PlacementRecord;
 import me.sarahlacerda.gua.identityservice.account.genesis.PlacementRecordCodec;
 import me.sarahlacerda.gua.identityservice.account.genesis.TestEd25519;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
+import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.HomeserverConfig;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -118,5 +119,38 @@ class PlacementRecordSignerTest {
         // An explicit federation id always wins over the alias map.
         assertThat(aliasSigner.federationIdOf(PlacementTestFixtures.homeserver("default",
                 PlacementTestFixtures.DOMAIN, "fed-explicit", ""))).isEqualTo("fed-explicit");
+    }
+
+    @Test
+    void aMalformedSigningKeyIsNotParsedUntilARecordIsActuallySigned() {
+        IdentityServiceProperties malformed = new IdentityServiceProperties();
+        malformed.getRouting().getHomeservers().add(PlacementTestFixtures.homeserver(
+                PlacementTestFixtures.LOCAL_ID, PlacementTestFixtures.DOMAIN,
+                PlacementTestFixtures.FEDERATION_ID, "this is not a key"));
+
+        // This bean is built in every deployment, including the great majority with publishing off,
+        // where nothing will ever sign. Parsing eagerly meant a malformed Secret stopped the service
+        // starting even with the feature off, which is a behaviour change the flags exist to prevent.
+        PlacementRecordSigner lazy = new PlacementRecordSigner(malformed);
+
+        assertThat(lazy.canSignFor(PlacementTestFixtures.FEDERATION_ID)).isTrue();
+        assertThatThrownBy(() -> lazy.sign(PlacementTestFixtures.genesisRootedId("account-six"),
+                AccountId.CLASS_GENESIS, PlacementTestFixtures.FEDERATION_ID, now))
+                .isInstanceOf(RuntimeException.class);
+    }
+
+    @Test
+    void theSignerResolvesRosterIdsThroughTheOneSharedImplementation() {
+        IdentityServiceProperties aliased = new IdentityServiceProperties();
+        aliased.getPlacement().getFederationIdAliases().put("legacy", "fed-legacy");
+        HomeserverConfig noExplicitId = PlacementTestFixtures.homeserverWithoutFederationId("legacy",
+                PlacementTestFixtures.DOMAIN, "");
+        aliased.getRouting().getHomeservers().add(noExplicitId);
+
+        // The MAS readers resolve the same value through the same collaborator, so the id a reader
+        // reports and the id the comparison indexes by cannot drift apart again.
+        assertThat(new PlacementRecordSigner(aliased).federationIdOf(noExplicitId))
+                .isEqualTo(new FederationIds(aliased).of(noExplicitId))
+                .isEqualTo("fed-legacy");
     }
 }

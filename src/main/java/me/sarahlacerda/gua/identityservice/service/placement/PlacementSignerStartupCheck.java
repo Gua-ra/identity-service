@@ -2,6 +2,7 @@
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.security.PrivateKey;
+import java.time.Duration;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +11,7 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import me.sarahlacerda.gua.identityservice.account.genesis.Ed25519Keys;
+import me.sarahlacerda.gua.identityservice.account.genesis.PlacementRecordCodec;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.HomeserverConfig;
 import me.sarahlacerda.gua.identityservice.service.placement.ResolverPlacementClient.RosterEntryView;
@@ -62,6 +64,7 @@ public class PlacementSignerStartupCheck {
         if (!properties.getPlacement().getPublish().isEnabled()) {
             return;
         }
+        verifyValidityWindow();
         if (properties.getRouting().getHomeservers().isEmpty()) {
             throw new IllegalStateException("identity.placement.publish.enabled is on but no "
                     + "identity.routing.homeservers are configured. The legacy synthesised homeserver has no "
@@ -95,6 +98,35 @@ public class PlacementSignerStartupCheck {
                     + "homeserver carries a placement signing key, so no record could ever be signed.");
         }
         log.info("Placement signing identity verified against the roster for {} homeserver(s)", verified);
+    }
+
+    /**
+     * The configured window has to be one the codec will actually encode.
+     *
+     * <p>{@code recordValidity} is a freely configurable {@code Duration} while ADM-008 decision 7 fixes
+     * validity at 400 days and {@link PlacementRecordCodec} refuses anything longer. Without this check a
+     * value of, say, {@code P401D} is accepted at boot and then throws on every single signature, which
+     * surfaces at 03:20 as a job that failed rather than as the misconfiguration it is. Refusing here
+     * costs a restart; the alternative costs a night of the 14-day exit window.
+     */
+    private void verifyValidityWindow() {
+        Duration validity = properties.getPlacement().getRecordValidity();
+        if (validity.isZero() || validity.isNegative()) {
+            throw new IllegalStateException("Refusing to start: identity.placement.record-validity is "
+                    + validity + ", which is not a window a record could be issued for.");
+        }
+        if (validity.compareTo(PlacementRecordCodec.MAX_VALIDITY) > 0) {
+            throw new IllegalStateException("Refusing to start: identity.placement.record-validity is "
+                    + validity + " but a placement record may not be valid for longer than "
+                    + PlacementRecordCodec.MAX_VALIDITY.toDays() + " days (ADM-008 decision 7), so every "
+                    + "record this deployment signed would be refused by its own codec.");
+        }
+        Duration reissue = properties.getPlacement().getReissueAfter();
+        if (reissue.compareTo(validity) >= 0) {
+            throw new IllegalStateException("Refusing to start: identity.placement.reissue-after is "
+                    + reissue + ", which is not shorter than identity.placement.record-validity of "
+                    + validity + ", so a record would reach its expiry before it was ever re-issued.");
+        }
     }
 
     private void verifyOne(HomeserverConfig homeserver, RosterView roster) {

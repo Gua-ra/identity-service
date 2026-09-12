@@ -69,17 +69,25 @@ public class MasSqlLinkReader implements MasLinkReader {
     private final IdentityServiceProperties properties;
     private final ObjectMapper objectMapper;
     private final ConnectionFactory connections;
+    private final FederationIds federationIds;
 
     @Autowired
-    public MasSqlLinkReader(IdentityServiceProperties properties, ObjectMapper objectMapper) {
-        this(properties, objectMapper, DriverManager::getConnection);
+    public MasSqlLinkReader(IdentityServiceProperties properties, ObjectMapper objectMapper,
+            FederationIds federationIds) {
+        this(properties, objectMapper, DriverManager::getConnection, federationIds);
     }
 
     public MasSqlLinkReader(IdentityServiceProperties properties, ObjectMapper objectMapper,
             ConnectionFactory connections) {
+        this(properties, objectMapper, connections, new FederationIds(properties));
+    }
+
+    public MasSqlLinkReader(IdentityServiceProperties properties, ObjectMapper objectMapper,
+            ConnectionFactory connections, FederationIds federationIds) {
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.connections = connections;
+        this.federationIds = federationIds;
     }
 
     @Override
@@ -107,7 +115,7 @@ public class MasSqlLinkReader implements MasLinkReader {
     public List<MasLink> linksFor(String subject) {
         List<MasLink> links = new ArrayList<>();
         for (HomeserverConfig homeserver : usableHomeservers()) {
-            String federationId = federationIdOf(homeserver);
+            String federationId = federationIds.of(homeserver);
             IdentityServiceProperties.MasConfig mas = homeserver.getMas();
             try (Connection connection = open(mas);
                     PreparedStatement statement = connection.prepareStatement(LINKS_QUERY)) {
@@ -130,7 +138,7 @@ public class MasSqlLinkReader implements MasLinkReader {
     public Map<String, String> localpartOnConflictByHomeserver() {
         Map<String, String> effective = new LinkedHashMap<>();
         for (HomeserverConfig homeserver : usableHomeservers()) {
-            String federationId = federationIdOf(homeserver);
+            String federationId = federationIds.of(homeserver);
             IdentityServiceProperties.MasConfig mas = homeserver.getMas();
             try (Connection connection = open(mas);
                     PreparedStatement statement = connection.prepareStatement(CLAIMS_IMPORTS_QUERY)) {
@@ -167,10 +175,5 @@ public class MasSqlLinkReader implements MasLinkReader {
 
     private Connection open(IdentityServiceProperties.MasConfig mas) throws SQLException {
         return connections.open(mas.getReadOnlyJdbcUrl(), mas.getReadOnlyUsername(), mas.getReadOnlyPassword());
-    }
-
-    private String federationIdOf(HomeserverConfig homeserver) {
-        String explicit = homeserver.getFederationId();
-        return explicit == null || explicit.isBlank() ? homeserver.getId() : explicit.trim();
     }
 }

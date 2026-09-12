@@ -83,10 +83,28 @@ class PlacementShadowMetricsTest {
 
         metrics.classified(PlacementShadowResult.AGREE);
         metrics.published("published");
+        metrics.failed("error");
+        metrics.runCompleted(99, 1_757_000_000L);
         metrics.localpartOnConflict(Map.of("fed-primary", "fail"));
 
         assertThat(registry.scrape()).doesNotContain("gua_identity_placement");
         assertThat(registry.scrape()).doesNotContain("gua_identity_mas_localpart_on_conflict");
         assertThat(registry.getMeters()).isEmpty();
+    }
+
+    @Test
+    void theFailuresCounterCarriesItsClosedReasonVocabulary() {
+        PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
+        PlacementShadowMetrics metrics = new PlacementShadowMetrics(registry, enabled());
+
+        metrics.failed("unknown_homeserver");
+
+        // This is the series that alerts when accounts cannot be compared. Before it existed, one bad
+        // row ended the run and the only symptom was a success timestamp that quietly stopped moving.
+        String scrape = registry.scrape();
+        assertThat(scrape).contains("gua_identity_placement_shadow_failures_total{");
+        for (String reason : PlacementShadowMetrics.FAILURE_REASONS) {
+            assertThat(scrape).contains("reason=\"" + reason + "\"");
+        }
     }
 }

@@ -163,6 +163,36 @@ class PlacementFlagsOffGuardTest {
         assertThat(signer.canSignFor("anything")).isFalse();
     }
 
+    @Test
+    void aMalformedSigningKeyDoesNotStopADeploymentWithPlacementOffFromStarting() {
+        IdentityServiceProperties off = new IdentityServiceProperties();
+        IdentityServiceProperties.HomeserverConfig homeserver =
+                new IdentityServiceProperties.HomeserverConfig();
+        homeserver.setId("primary");
+        homeserver.setDomain("example.test");
+        homeserver.setFederationId("fed-primary");
+        homeserver.setPlacementSigningPrivateKey("this is not a key");
+        off.getRouting().getHomeservers().add(homeserver);
+
+        // With every flag off nothing will ever sign, so a key this service cannot parse is inert and
+        // must not be a reason to refuse to start. A deployment that does publish still has every key
+        // decoded and checked against the roster by PlacementSignerStartupCheck before it serves.
+        assertThatCode(() -> new PlacementRecordSigner(off)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void withTheFlagsOffACompletedRunRecordsNothingEither() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        PlacementShadowMetrics metrics = new PlacementShadowMetrics(registry, untouched);
+
+        metrics.runCompleted(99, 1_757_000_000L);
+        metrics.failed("error");
+
+        // Every method is gated on the flag, not just the ones that touch a counter, so nothing starts
+        // accumulating state that would leak the moment someone registered these gauges unconditionally.
+        assertThat(registry.getMeters()).isEmpty();
+    }
+
     private static List<Path> mainSources() throws IOException {
         assertThat(MAIN_SOURCES).as("run from the identity-service project directory").isDirectory();
         try (Stream<Path> paths = Files.walk(MAIN_SOURCES)) {
