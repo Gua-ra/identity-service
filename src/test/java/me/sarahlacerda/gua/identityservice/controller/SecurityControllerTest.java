@@ -30,6 +30,7 @@ import me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
+import me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -67,6 +68,9 @@ class SecurityControllerTest {
         oidcProperties.setIssuer("https://auth.example.com");
         SecurityController controller = new SecurityController(userSecurityService, authenticatedUserAccessor,
                 properties, directoryService, loginSessionService, loginProperties, oidcProperties, passkeyService,
+                // Real policy over the mocked services, so the factor report and the enrollment
+                // guard are the ones the application computes.
+                new AuthFactorPolicy(userSecurityService, passkeyService),
                 new AccountLocalpartResolver(directoryService));
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new RestExceptionHandler())
@@ -273,6 +277,78 @@ class SecurityControllerTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .jsonPath("$.changePhoneCooldownRemainingSeconds").value(0));
+    }
+
+    @Test
+    void pinStatusReportsTheRegisteredFactorsAndWhatAPhoneChangeAccepts() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
+        org.mockito.Mockito.when(userSecurityService.hasPin("@user:domain")).thenReturn(true);
+        org.mockito.Mockito.when(userSecurityService.changePhonePinHoldRemainingSeconds("@user:domain"))
+                .thenReturn(0L);
+        org.mockito.Mockito.when(passkeyService.isEnabled()).thenReturn(true);
+        org.mockito.Mockito.when(passkeyService.hasPasskey("@user:domain")).thenReturn(true);
+
+        mockMvc.perform(MockMvcRequestBuilders.get("/security/pin/status"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                // Registered, which is server truth. There is no field for the client to say
+                // the credential cannot be used on this device, and there must not be: anyone
+                // holding a session could set it, so it would only ever be a way to be offered
+                // something weaker.
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.passkeyRegistered").value(true))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.preferredFactor").value("PASSKEY"))
+                // The precedence the client should offer comes from the same component the
+                // step-up enforces, so the two cannot describe different rules.
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.phoneChangeStepUpFactors[0]").value("PASSKEY"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.phoneChangeStepUpFactors[1]").value("PIN"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.phoneChangeStepUpFactors.length()").value(2));
+    }
+
+    @Test
+    void pinStatusReportsThePinAsPreferredForAnAccountWithNoPasskey() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
+        org.mockito.Mockito.when(userSecurityService.hasPin("@user:domain")).thenReturn(true);
+        org.mockito.Mockito.when(userSecurityService.changePhonePinHoldRemainingSeconds("@user:domain"))
+                .thenReturn(0L);
+        org.mockito.Mockito.when(passkeyService.isEnabled()).thenReturn(true);
+        org.mockito.Mockito.when(passkeyService.hasPasskey("@user:domain")).thenReturn(false);
+
+        mockMvc.perform(MockMvcRequestBuilders.get("/security/pin/status"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.passkeyRegistered").value(false))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.preferredFactor").value("PIN"))
+                // The accepted set does not shrink to what this account holds. A client that
+                // registers a passkey later does not need a different answer, and more to the
+                // point, narrowing it per account is how the set collapses onto the one factor
+                // that has become unusable.
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.phoneChangeStepUpFactors.length()").value(2));
+    }
+
+    @Test
+    void requestingAPinResetIsAcceptedForAnAccountThatAlsoHoldsAPasskey() throws Exception {
+        PinResetRequest request = new PinResetRequest();
+        request.setUserId("@user:domain");
+        request.setPhone("+12025550123");
+        org.mockito.Mockito.when(passkeyService.isEnabled()).thenReturn(true);
+        org.mockito.Mockito.when(passkeyService.hasPasskey("@user:domain")).thenReturn(true);
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/reset")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(request)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isAccepted());
+
+        // Recovery is NOT gated on holding a stronger factor. Gating it would mean an account
+        // whose passkey broke has no login and no recovery, and nothing in this service can
+        // remove or replace a registered credential. The cross-factor view is spent on making
+        // the event findable, not on refusing it.
+        verify(userSecurityService).requestPinReset("@user:domain", "+12025550123", "127.0.0.1");
     }
 
     @Test

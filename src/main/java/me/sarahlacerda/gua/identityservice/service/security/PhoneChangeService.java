@@ -32,10 +32,12 @@ import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditL
  * Security posture (see {@code FINAL DESIGN}):
  * <ul>
  * <li><b>/start</b> is gated by a {@code PHONE_CHANGE}-scoped, single-use reauth
- * token <em>and</em> a mandatory non-phone step-up factor (account PIN when set
- * and/or a passkey assertion). The reauth token alone proves only a
- * current-phone OTP, which a SIM-swap attacker could control — hence the extra
- * factor. Accounts with neither factor are rejected with
+ * token <em>and</em> a mandatory non-phone step-up factor. The reauth token alone
+ * proves only a current-phone OTP, which a SIM-swap attacker could control, hence
+ * the extra factor. Which factors count, and in which order, is
+ * {@link AuthFactorPolicy#stepUpFor(ReauthOperation)}: a user-verifying passkey
+ * assertion first, the account PIN as the fallback for everyone who cannot produce
+ * one, and accounts that can produce neither are rejected with
  * {@code step_up_required} (403) and must set up two-step verification first;
  * there is no token-only fallback.</li>
  * <li>The new-number OTP is namespaced per challenge
@@ -68,6 +70,7 @@ public class PhoneChangeService {
     private final StringRedisTemplate redisTemplate;
     private final AccountReauthService reauthService;
     private final UserSecurityService userSecurityService;
+    private final AuthFactorPolicy authFactorPolicy;
     private final PasskeyService passkeyService;
     private final PhoneChangeOtpService phoneChangeOtpService;
     private final PhoneNumberNormalizer phoneNumberNormalizer;
@@ -103,9 +106,9 @@ public class PhoneChangeService {
             throw ex;
         }
 
-        // 2) Non-phone step-up: PIN when the account has one, and/or passkey assertion.
-        //    SIM-swap defense — the reauth OTP went to the current (possibly hijacked) number.
-        //    Accounts with neither factor are hard-blocked (step_up_required).
+        // 2) Non-phone step-up: a user-verifying passkey assertion, else the account PIN.
+        //    SIM-swap defense, since the reauth OTP went to the current (possibly hijacked)
+        //    number. Accounts with neither factor are hard-blocked (step_up_required).
         enforceStepUp(userId, pin, passkeyStepUpId, passkeyCredential, requesterIp);
 
         // 3) Cooldown between successive changes.
@@ -213,13 +216,28 @@ public class PhoneChangeService {
 
     private void enforceStepUp(String userId, String pin, String passkeyStepUpId, JsonNode passkeyCredential,
             String requesterIp) {
-        boolean hasPin = userSecurityService.hasPin(userId);
+        // Which factors this operation accepts, and in which order, is
+        // AuthFactorPolicy.stepUpFor(PHONE_CHANGE): [PASSKEY, PIN], hard block when neither
+        // can be produced. The branches below are that list, in that order. Whether THIS
+        // account holds a PIN comes from the same component, so login, this step-up and
+        // recovery all read one answer instead of three.
+        //
+        // The policy is consulted for those facts and is deliberately NOT wired as a
+        // condition on the branches themselves. A policy value that could switch the PIN
+        // branch off, or switch the refusal at the bottom off, would be a lever that turns a
+        // configuration edit into either account lockout or a bypass. Precedence is pinned by
+        // tests against stepUpFor(PHONE_CHANGE) instead.
+        boolean hasPin = authFactorPolicy.pinRegistered(userId);
         boolean passkeyAttempted = StringUtils.hasText(passkeyStepUpId) && passkeyCredential != null;
-        boolean passkeyVerified = false;
 
+        // Strongest factor first. A user-verifying assertion settles the step-up on its own:
+        // it is the preferred factor, and demanding the PIN as well from someone who just
+        // proved a passkey would make the stronger factor worth less than the weaker one.
         if (passkeyAttempted) {
             // A step-up assertion, not a login assertion: the ceremony demanded user
-            // verification and PasskeyService refuses a response that did not do it.
+            // verification and PasskeyService refuses a response that did not do it. The
+            // challenge is burned whether this succeeds or fails, so a refused attempt cannot
+            // be retried against the same challenge.
             PasskeyService.PasskeyAuthentication assertion =
                     passkeyService.finishStepUpAssertion(passkeyStepUpId, passkeyCredential);
             // Ownership first. Nothing below may treat the assertion as accepted until the
@@ -228,9 +246,16 @@ public class PhoneChangeService {
                 auditLogger.reauthFailed(userId, ReauthOperation.PHONE_CHANGE.name(), requesterIp);
                 throw new InvalidPinException("Passkey does not belong to the calling account");
             }
-            passkeyVerified = true;
+            // Accepted. The fresh-2FA hold is NOT applied here and must not be: it exists to
+            // stop a PIN minted minutes ago by a session from re-pointing the number, and this
+            // caller did not spend a PIN. Holding the stronger factor for the weaker one's
+            // reason would refuse people who did nothing the hold is about.
+            return;
         }
 
+        // Demoted below the passkey, never removed. An account with a PIN and no passkey, or
+        // one whose passkey cannot be produced on this device, still comes through here, and
+        // this branch is the only reason an unusable credential is not an unusable account.
         if (hasPin) {
             try {
                 userSecurityService.validatePinOrThrow(userId, pin);
@@ -239,22 +264,18 @@ public class PhoneChangeService {
                 throw ex;
             }
             // The PIN is the factor being accepted here, so the fresh-2FA hold applies to it.
-            // Deliberately inside this branch and after the check that accepts the PIN: if the
-            // branches are ever reordered so a verified passkey is taken first, an account that
-            // proved a passkey never reaches this line and is never held for a fresh PIN it did
-            // not use.
+            // Deliberately inside this branch and after the check that accepts the PIN: an
+            // account that proved a passkey returned above and is never held for a fresh PIN
+            // it did not use.
             userSecurityService.enforcePhoneChangePinHold(userId);
-            return;
-        }
-
-        if (passkeyVerified) {
             return;
         }
 
         // Neither a PIN nor a passkey could be asserted. Hard block (product decision,
         // 2026-07-02): the reauth token alone only proves a current-phone OTP, which a
-        // SIM-swap attacker may control, so there is NO token-only fallback. The client
-        // routes `step_up_required` to two-step verification setup.
+        // SIM-swap attacker may control, so there is NO token-only fallback. Unconditional,
+        // because a refusal that any single edit can turn into a fallthrough is not a
+        // refusal. The client routes `step_up_required` to two-step verification setup.
         auditLogger.reauthFailed(userId, ReauthOperation.PHONE_CHANGE.name(), requesterIp);
         throw new StepUpRequiredException(
                 "Two-step verification (account PIN or passkey) is required to change the phone number");

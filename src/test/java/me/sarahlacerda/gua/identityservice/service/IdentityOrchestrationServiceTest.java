@@ -53,6 +53,12 @@ class IdentityOrchestrationServiceTest {
         private PhoneNumberHasher phoneNumberHasher;
         @Mock
         private UserSecurityService userSecurityService;
+        /**
+         * Passkeys contribute nothing on this path: the mock answers isEnabled()=false, so the
+         * policy reports no registered passkey and the PIN step is decided exactly as before.
+         */
+        @Mock
+        private me.sarahlacerda.gua.identityservice.service.security.PasskeyService passkeyService;
         @Mock
         private TrustedDeviceService trustedDeviceService;
         @Mock
@@ -86,6 +92,10 @@ class IdentityOrchestrationServiceTest {
                                 phoneNumberHasher,
                                 new PhoneNumberMasker(),
                                 userSecurityService,
+                                // Real policy over the mocked collaborators, so the existing hasPin
+                                // stubs still drive the PIN step and the delegation is exercised.
+                                new me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy(
+                                                userSecurityService, passkeyService),
                                 trustedDeviceService,
                                 deviceNotificationService,
                                 usernamePolicy,

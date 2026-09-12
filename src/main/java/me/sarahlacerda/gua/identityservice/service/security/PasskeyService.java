@@ -236,6 +236,13 @@ public class PasskeyService implements CredentialRepository {
     /**
      * Redeems a step-up assertion started by {@link #startStepUpAssertion(String, String)}.
      * Refuses an assertion that did not verify the user.
+     *
+     * <p>
+     * Single use in the strict sense: the challenge is burned on refusal as well as on
+     * acceptance, so an attempt that fails costs the caller a round trip to
+     * {@code POST /security/passkey/stepup/options} rather than nothing. The caller must
+     * still check that the returned user id is the account it is acting for; this method
+     * resolves whose credential answered, not whether that is the right account.
      */
     @Transactional
     public PasskeyAuthentication finishStepUpAssertion(String stepUpId, JsonNode credential) {
@@ -264,10 +271,8 @@ public class PasskeyService implements CredentialRepository {
 
             // Read from the authenticator data of THIS assertion, not from what the stored
             // request asked for: the check holds even if the ceremony was started with a
-            // weaker requirement than a step-up needs. The challenge is burned either way,
-            // so a refused attempt cannot be replayed.
+            // weaker requirement than a step-up needs.
             if (requireUserVerification && !result.isUserVerified()) {
-                redisTemplate.delete(challengeKey);
                 throw new LoginFlowException(HttpStatus.FORBIDDEN, "passkey_user_verification_required",
                         "This action needs a passkey that verifies you, not only your device.");
             }
@@ -279,7 +284,6 @@ public class PasskeyService implements CredentialRepository {
             saved.setBackupEligible(result.isBackupEligible());
             saved.setBackupState(result.isBackedUp());
             saved.setLastUsedAt(Instant.now());
-            redisTemplate.delete(challengeKey);
 
             return new PasskeyAuthentication(saved.getUserId());
         } catch (AssertionFailedException ex) {
@@ -288,6 +292,14 @@ public class PasskeyService implements CredentialRepository {
         } catch (IOException ex) {
             throw new LoginFlowException(HttpStatus.BAD_REQUEST, "passkey_response_invalid",
                     "Passkey sign-in response was invalid.");
+        } finally {
+            // One challenge, one attempt, whatever the outcome. A challenge that survived a
+            // refusal could be presented again until its TTL ran out, which turns a short
+            // single-use window into a retry window: a wrong credential, a response that
+            // failed verification, or a malformed body would each cost the attacker nothing.
+            // Burning it here rather than on each exit path means no future branch can
+            // return or throw past it.
+            redisTemplate.delete(challengeKey);
         }
     }
 

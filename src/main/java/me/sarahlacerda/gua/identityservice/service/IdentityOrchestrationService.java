@@ -21,6 +21,7 @@ import org.springframework.util.StringUtils;
 
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService;
+import me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy;
 import me.sarahlacerda.gua.identityservice.service.security.DeviceNotificationService;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
@@ -41,6 +42,7 @@ public class IdentityOrchestrationService {
     private final PhoneNumberHasher phoneNumberHasher;
     private final PhoneNumberMasker phoneNumberMasker;
     private final UserSecurityService userSecurityService;
+    private final AuthFactorPolicy authFactorPolicy;
     private final TrustedDeviceService trustedDeviceService;
     private final DeviceNotificationService deviceNotificationService;
     private final UsernamePolicy usernamePolicy;
@@ -72,7 +74,9 @@ public class IdentityOrchestrationService {
         final DirectoryEntry entry = existingEntry.get();
         final String userId = entry.getUserId();
 
-        if (userSecurityService.hasPin(userId)) {
+        // Same answer the interactive login flow gets, from the same component: this path
+        // and /login used to decide it separately and could drift.
+        if (authFactorPolicy.loginPolicy(userId).pinStepRequired()) {
             if (!StringUtils.hasText(providedPin)) {
                 // Two-step verification: issue a short-lived challenge token that the
                 // client redeems at /signin/verify-pin with the user's PIN. The OTP has

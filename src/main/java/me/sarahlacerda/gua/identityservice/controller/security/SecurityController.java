@@ -46,7 +46,10 @@ import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.Phase;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
+import me.sarahlacerda.gua.identityservice.service.security.AuthFactor;
+import me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
+import me.sarahlacerda.gua.identityservice.service.security.ReauthOperation;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 
 @RestController
@@ -64,19 +67,31 @@ public class SecurityController {
     private final LoginFlowProperties loginProperties;
     private final OidcProperties oidcProperties;
     private final PasskeyService passkeyService;
+    private final AuthFactorPolicy authFactorPolicy;
     private final AccountLocalpartResolver accountLocalparts;
 
     @GetMapping("/pin/status")
-    @Operation(summary = "Check the authenticated user's two-step verification state", description = "Returns hasPin=true once the user has configured a security PIN (drives the 'set up two-step verification' nudge), and how long the fresh-2FA hold on changing the phone number still has to run. Both clients read this before offering the change-phone flow, so a held account is told to wait instead of walking the whole flow into a refusal.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @Operation(summary = "Check the authenticated user's two-step verification state", description = "Returns hasPin=true once the user has configured a security PIN (drives the 'set up two-step verification' nudge), and how long the fresh-2FA hold on changing the phone number still has to run. Both clients read this before offering the change-phone flow, so a held account is told to wait instead of walking the whole flow into a refusal. It also reports which factors the account has REGISTERED, which one to offer first, and which ones a phone change accepts in precedence order, so a client offers the right factor instead of hardcoding the rule. Registration is server truth; whether a registered passkey is usable on this device is not reported and is never accepted as an input.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "PIN status"),
             @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content)
     })
     public ResponseEntity<PinStatusResponse> pinStatus() {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
+        // The factor report is one-way on purpose. The server tells the client which factors
+        // the account has registered and which ones a phone change accepts, so the client can
+        // offer the right thing first instead of guessing. The client never tells the server
+        // that a factor is unavailable: that claim costs an attacker nothing, so it could
+        // only ever be a way to ask for something weaker.
+        AuthFactorPolicy.RegisteredFactors factors = authFactorPolicy.registeredFactors(userId);
         return ResponseEntity.ok(new PinStatusResponse(
-                userSecurityService.hasPin(userId),
-                userSecurityService.changePhonePinHoldRemainingSeconds(userId)));
+                factors.pin(),
+                userSecurityService.changePhonePinHoldRemainingSeconds(userId),
+                factors.passkey(),
+                factors.preferred().name(),
+                authFactorPolicy.stepUpFor(ReauthOperation.PHONE_CHANGE).accepted().stream()
+                        .map(AuthFactor::name)
+                        .toList()));
     }
 
     @PostMapping("/pin")
@@ -143,6 +158,14 @@ public class SecurityController {
             @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "User identifier and verified phone number to receive the OTP", required = true, content = @Content(schema = @Schema(implementation = PinResetRequest.class))) @RequestBody @Valid PinResetRequest request,
             @Parameter(hidden = true) HttpServletRequest servletRequest) {
         userSecurityService.requestPinReset(request.getUserId(), request.getPhone(), servletRequest.getRemoteAddr());
+        // Recovery can finally see the rest of the account's factors. It deliberately does not
+        // act on them: refusing recovery to an account that holds a passkey would make an
+        // unusable credential into an unusable account, with no login and no way back. What it
+        // does instead is leave a line behind, because recovering a knowledge factor on an
+        // account that also holds a stronger one is worth being able to find later. Recorded
+        // after the request was accepted, so a refusal produces nothing and this cannot be
+        // used to probe which accounts hold passkeys.
+        authFactorPolicy.recordRecoveryRequest(request.getUserId());
         return ResponseEntity.accepted().build();
     }
 
@@ -193,7 +216,9 @@ public class SecurityController {
         // point skipped the same check, so opening it from settings walked straight into a
         // ceremony that was guaranteed to fail and left nothing behind, which read from
         // the outside like passkeys being broken.
-        if (passkeyService.isEnabled() && passkeyService.hasPasskey(userId)) {
+        // Same question, same answer as LoginFlowController.advanceToPasskeySetup, because both
+        // now ask AuthFactorPolicy rather than each assembling it from isEnabled + hasPasskey.
+        if (authFactorPolicy.passkeyRegistered(userId)) {
             throw new LoginFlowException(HttpStatus.CONFLICT, "passkey_already_registered",
                     "This account already has a passkey.");
         }
