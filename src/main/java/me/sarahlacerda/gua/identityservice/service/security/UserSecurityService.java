@@ -210,12 +210,52 @@ public class UserSecurityService {
         }
     }
 
+    /**
+     * Refuses a phone change whose accepted step-up factor came into existence inside the
+     * fresh-2FA hold, on the same window and with the same error as the PIN above.
+     *
+     * <p>
+     * Deliberately knows nothing about which factor it is weighing, and takes the instant
+     * rather than an account: which factors exist, and why a newly minted one is not yet
+     * trusted for a takeover-shaped action, is the caller's business. This service owns PIN
+     * recovery, and the one thing it must never learn to do is decide anything from what
+     * else an account holds.
+     *
+     * <p>
+     * Nothing is taken away by it. An established factor settles the step-up at once, every
+     * other way through is untouched, and the refusal expires on its own.
+     *
+     * @param factorCreatedAt when the factor that was accepted came into being
+     */
+    public void enforceFreshFactorHold(Instant factorCreatedAt) {
+        long remaining = freshFactorHoldRemainingSeconds(factorCreatedAt);
+        if (remaining > 0) {
+            throw new TwoFactorCooldownException(
+                    "Two-step verification was set up too recently to change the phone number", remaining);
+        }
+    }
+
     private long pinHoldRemainingSeconds(IdentityUser user) {
-        if (!user.hasPin() || user.getPinSetAt() == null) {
+        if (!user.hasPin()) {
+            return 0L;
+        }
+        return freshFactorHoldRemainingSeconds(user.getPinSetAt());
+    }
+
+    /**
+     * How long a factor stamped at {@code factorCreatedAt} is still too new to move the
+     * phone number. One implementation, so two factors held for the same reason cannot drift
+     * into being held for different lengths of time.
+     */
+    private long freshFactorHoldRemainingSeconds(Instant factorCreatedAt) {
+        if (factorCreatedAt == null) {
+            // No stamp. Both stamps are NOT NULL columns written when the factor comes into
+            // being, so the only row that could lack one is older than the column itself,
+            // which is the opposite of a factor minted a moment ago.
             return 0L;
         }
         Duration hold = properties.getSecurity().getPinResetCooldown();
-        Duration since = Duration.between(user.getPinSetAt(), Instant.now());
+        Duration since = Duration.between(factorCreatedAt, Instant.now());
         if (since.isNegative()) {
             // Clock skew put the stamp in the future. Hold for the whole window rather than
             // for longer than the window.
@@ -289,6 +329,15 @@ public class UserSecurityService {
         }
 
         resetFailureTracking(user);
+        // Producing the PIN ends any reset episode pending on this account. The stamp is
+        // sticky on purpose, so without an ending nothing would ever clear one that was
+        // abandoned, and an abandoned stamp permanently satisfies the waiting period in
+        // completePinReset: a reset asked for years ago would let the next one be requested
+        // and completed in the same minute, with none of the seven days the account holder
+        // is meant to have to notice. Somebody who can produce the PIN is not waiting on a
+        // reset of it. This is not a challenge restarting the clock, which stays forbidden;
+        // it is the episode being over.
+        user.setPinResetRequestedAt(null);
         auditLogger.pinValidationSucceeded(userId);
     }
 
@@ -297,6 +346,13 @@ public class UserSecurityService {
         IdentityUser user = ensureUser(userId);
         user.setLastLoginAt(Instant.now());
         resetFailureTracking(user);
+        // Ends a pending reset episode, for the reason spelled out on validatePinOrThrow.
+        // Only a finished sign-in reaches here, which means the account holder produced
+        // whatever that account's login demands, so they are not the person locked out of
+        // their own PIN. It costs a live reset nothing that the dormancy gate in
+        // requestPinReset was not already costing it: any successful login already puts a
+        // new reset request out of reach for the same window.
+        user.setPinResetRequestedAt(null);
     }
 
     @Transactional
@@ -324,7 +380,23 @@ public class UserSecurityService {
         // from when the reset was first asked for, so asking again can neither restart it nor
         // be used to keep it out of reach. Completion needs a live code, which only this call
         // can produce, so the flow stays reachable without the stamp ever moving.
-        if (user.getPinResetRequestedAt() == null) {
+        //
+        // What must never move is a stamp whose episode is still LIVE, and that is the whole
+        // of the rule. An episode is live from the request that opened it until it has been
+        // pending for longer than any completion could still want, and it also ends early the
+        // moment the account holder shows the PIN is not lost (a successful PIN check, or a
+        // finished sign-in). Past that, the stamp is not a pending reset, it is a leftover,
+        // and a leftover is dangerous: completePinReset measures the waiting period from it,
+        // so a reset asked for and abandoned long ago permanently satisfies the wait and lets
+        // the NEXT reset be requested and completed in the same minute. The seven days during
+        // which the account holder would see the SMS and could intervene would then be seven
+        // days for everyone except the accounts that once started a reset and walked away.
+        //
+        // So a dead episode is replaced and a live one is left exactly where it is. That
+        // takes no protection away from a pending reset: nobody can shorten, restart or
+        // outrun a live episode, which is what a repeat request must not be able to do.
+        Instant pendingSince = user.getPinResetRequestedAt();
+        if (pendingSince == null || pinResetEpisodeExpired(pendingSince, now)) {
             user.setPinResetRequestedAt(now);
         }
         auditLogger.pinResetRequested(userId, maskPhoneNumber(phone), requesterIp);
@@ -346,6 +418,27 @@ public class UserSecurityService {
         applyNewPin(user, newPin);
         user.setPinResetRequestedAt(null);
         auditLogger.pinResetCompleted(userId);
+    }
+
+    /**
+     * Whether a pending reset stamped at {@code pendingSince} has stopped being a pending
+     * reset.
+     *
+     * <p>
+     * The life of an episode is twice {@code identity.security.pin-reset-cooldown}: the
+     * waiting period, and then an equally long window in which the person who asked for the
+     * reset can finish it. Derived from the one configured window rather than added as a
+     * second knob, so an operator who retunes the wait retunes the window to use it in.
+     *
+     * <p>
+     * A shorter life would make a repeat request move the stamp of a reset somebody is still
+     * waiting on, which is the one thing a request may not do. A longer one leaves the
+     * leftover lying around for longer. Nothing an attacker does can bring this forward: it
+     * is read off the clock, not off any request.
+     */
+    private boolean pinResetEpisodeExpired(Instant pendingSince, Instant now) {
+        Duration life = properties.getSecurity().getPinResetCooldown().multipliedBy(2);
+        return Duration.between(pendingSince, now).compareTo(life) >= 0;
     }
 
     private void ensurePhoneBelongsToUser(String userId, String phone) {

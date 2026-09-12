@@ -21,13 +21,26 @@ class AuthFactorPolicyGuardTest {
      * The step-up bar is read off the assertion that was actually presented. A ceremony
      * that asked for user verification is not the same thing as a response that performed
      * it, and the stored request is attacker-adjacent state.
+     *
+     * <p>
+     * Scoped to the method that redeems an assertion, because a match anywhere in the file
+     * was not a guard at all: those two strings also appear in comments and in the ceremony
+     * builders, so every way of switching the check off left them sitting there and this test
+     * went on passing. What holds the bar now is behaviour, in
+     * {@code PasskeyServiceStepUpTest}: an assertion whose {@code isUserVerified()} is false
+     * is refused for a step-up and still accepted for a sign-in. This test is the narrower
+     * claim that survives being a text match, which is that the flag is read off the response
+     * in the one place where reading it off the stored request instead would mean something.
      */
     @Test
     void theStepUpPathChecksTheUserVerifiedFlagOnTheAssertionItself() throws IOException {
-        String source = read(MAIN.resolve("service/security/PasskeyService.java"));
+        String redeem = methodBody(read(MAIN.resolve("service/security/PasskeyService.java")),
+                "private PasskeyAuthentication redeemAssertion(");
 
-        assertThat(source).contains("result.isUserVerified()");
-        assertThat(source).contains("requireUserVerification");
+        assertThat(redeem).contains("requireUserVerification && !result.isUserVerified()");
+        // Never from what the stored ceremony asked for: that is the caller's request, not
+        // the authenticator's report of what it did.
+        assertThat(redeem).doesNotContain("UserVerificationRequirement");
     }
 
     /**
@@ -373,12 +386,43 @@ class AuthFactorPolicyGuardTest {
      * method indentation, so ordering assertions cannot accidentally match text elsewhere in
      * the file.
      */
+    /**
+     * The body of a named method, from its signature to its matching closing brace.
+     *
+     * <p>
+     * Brace-counted rather than cut at the first line closing at four spaces. The cheap
+     * version returned a fragment the moment a method grew an inner block that closed at that
+     * indentation, and every {@code doesNotContain} over a fragment passes for the wrong
+     * reason: the text is absent because the method was truncated, not because the code is
+     * not there. Double-quoted strings are skipped so a brace inside a log format or a
+     * message cannot unbalance the count.
+     */
     private static String methodBody(String source, String signature) {
         int start = source.indexOf(signature);
         assertThat(start).as("method %s", signature).isPositive();
-        int end = source.indexOf("\n    }", start);
-        assertThat(end).as("end of method %s", signature).isGreaterThan(start);
-        return source.substring(start, end);
+        int open = source.indexOf('{', start);
+        assertThat(open).as("body of method %s", signature).isGreaterThan(start);
+        int depth = 0;
+        boolean inString = false;
+        for (int i = open; i < source.length(); i++) {
+            char current = source.charAt(i);
+            if (inString) {
+                if (current == '\\') {
+                    i++;
+                } else if (current == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (current == '"') {
+                inString = true;
+            } else if (current == '{') {
+                depth++;
+            } else if (current == '}' && --depth == 0) {
+                return source.substring(start, i + 1);
+            }
+        }
+        throw new AssertionError("Unterminated method body for " + signature);
     }
 
     private static String read(Path path) throws IOException {

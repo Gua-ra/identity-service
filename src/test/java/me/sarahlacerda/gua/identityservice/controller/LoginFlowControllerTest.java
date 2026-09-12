@@ -11,6 +11,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -64,6 +66,10 @@ import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 @AutoConfigureObservability   // provide a MeterRegistry in the slice (micrometer-prometheus is on the classpath)
 @org.springframework.context.annotation.Import(LoginFlowControllerTest.GuardConfig.class)
 class LoginFlowControllerTest {
+
+    // Sign-in does not weigh how old the asserted credential is; only the phone-change
+    // step-up does. An established credential keeps that out of the way of these tests.
+    private static final Instant REGISTERED_LONG_AGO = Instant.now().minus(Duration.ofDays(400));
 
     // Use the real RegistrationGuard so the gate behaviour is exercised end-to-end;
     // it is driven through the mocked LoginFlowProperties / PhoneNumberNormalizer /
@@ -679,7 +685,7 @@ class LoginFlowControllerTest {
     void passkeyAuthVerifyForRegisteredUserSkipsOtpAndCompletes() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
         when(passkeyService.finishAuthentication(eq(SID), any()))
-                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local"));
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local", REGISTERED_LONG_AGO));
         DirectoryEntry entry = DirectoryEntry.builder()
                 .phoneDigest("digest").userId("@alice:dev.local").username("alice").displayName("Alice").build();
         when(directoryService.findByUserId("@alice:dev.local")).thenReturn(List.of(entry));
@@ -705,7 +711,7 @@ class LoginFlowControllerTest {
     void passkeyAuthVerifyRejectsUserNotRegisteredAndCreatesNoAccount() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
         when(passkeyService.finishAuthentication(eq(SID), any()))
-                .thenReturn(new PasskeyService.PasskeyAuthentication("@ghost:dev.local"));
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@ghost:dev.local", REGISTERED_LONG_AGO));
         // The asserted credential resolves to no directory row (no OTP registration / no phone).
         when(directoryService.findByUserId("@ghost:dev.local")).thenReturn(List.of());
 
@@ -728,7 +734,7 @@ class LoginFlowControllerTest {
         session.setReauthUserId("@alice:dev.local");
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
         when(passkeyService.finishAuthentication(eq(SID), any()))
-                .thenReturn(new PasskeyService.PasskeyAuthentication("@bob:dev.local"));
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@bob:dev.local", REGISTERED_LONG_AGO));
         DirectoryEntry entry = DirectoryEntry.builder()
                 .phoneDigest("digest").userId("@bob:dev.local").username("bob").displayName("Bob").build();
         when(directoryService.findByUserId("@bob:dev.local")).thenReturn(List.of(entry));
@@ -748,7 +754,7 @@ class LoginFlowControllerTest {
     void passkeyAuthVerifyWithoutStoredUsernameFallsBackToTheMxidLocalpart() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
         when(passkeyService.finishAuthentication(eq(SID), any()))
-                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local"));
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local", REGISTERED_LONG_AGO));
         when(directoryService.findByUserId("@alice:dev.local")).thenReturn(List.of(
                 DirectoryEntry.builder().phoneDigest("digest").userId("@alice:dev.local").displayName("Alice").build()));
         when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
@@ -768,7 +774,7 @@ class LoginFlowControllerTest {
     void passkeyAuthVerifyRefusesNonMatrixUserIdWithoutStoredUsernameAndIssuesNoCode() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
         when(passkeyService.finishAuthentication(eq(SID), any()))
-                .thenReturn(new PasskeyService.PasskeyAuthentication("ga1abc:x"));
+                .thenReturn(new PasskeyService.PasskeyAuthentication("ga1abc:x", REGISTERED_LONG_AGO));
         when(directoryService.findByUserId("ga1abc:x")).thenReturn(List.of(
                 DirectoryEntry.builder().phoneDigest("digest").userId("ga1abc:x").displayName("Alice").build()));
 
@@ -1602,7 +1608,7 @@ class LoginFlowControllerTest {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
         when(userSecurityService.hasPin("@alice:dev.local")).thenReturn(true);
         when(passkeyService.finishAuthentication(eq(SID), any()))
-                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local"));
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local", REGISTERED_LONG_AGO));
         DirectoryEntry entry = DirectoryEntry.builder()
                 .phoneDigest("digest").userId("@alice:dev.local").username("alice").displayName("Alice").build();
         when(directoryService.findByUserId("@alice:dev.local")).thenReturn(List.of(entry));
@@ -1633,7 +1639,7 @@ class LoginFlowControllerTest {
         session.setUserId("@alice:dev.local");
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
         when(passkeyService.finishAuthentication(eq(SID), any()))
-                .thenReturn(new PasskeyService.PasskeyAuthentication("@bob:dev.local"));
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@bob:dev.local", REGISTERED_LONG_AGO));
 
         mockMvc.perform(post("/login/passkey/auth/verify")
                 .cookie(cookie())
@@ -1654,7 +1660,7 @@ class LoginFlowControllerTest {
         session.setUserId("@alice:dev.local");
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
         when(passkeyService.finishAuthentication(eq(SID), any()))
-                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local"));
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local", REGISTERED_LONG_AGO));
         DirectoryEntry rowWithoutPhone = DirectoryEntry.builder()
                 .userId("@alice:dev.local").username("alice").displayName("Alice").build();
         when(directoryService.findByUserId("@alice:dev.local")).thenReturn(List.of(rowWithoutPhone));

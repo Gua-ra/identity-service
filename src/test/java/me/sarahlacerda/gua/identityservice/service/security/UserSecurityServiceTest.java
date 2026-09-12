@@ -170,6 +170,85 @@ class UserSecurityServiceTest {
         assertThat(user.getPinResetRequestedAt()).isNull();
     }
 
+    // -------------------- what ends a pending reset episode --------------------
+
+    @Test
+    void aResetNobodyFinishedStopsSatisfyingTheWaitingPeriod() {
+        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
+        user.setPinHash(passwordEncoder.encode("123456"));
+        user.setLastLoginAt(Instant.now().minus(Duration.ofDays(40)));
+        // Asked for a year ago and walked away from. Nothing since: no login, no PIN check.
+        user.setPinResetRequestedAt(Instant.now().minus(Duration.ofDays(365)));
+
+        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
+        when(phoneNumberHasher.digest("+12025550123")).thenReturn("digest");
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(directoryEntry("@user:gua.global")));
+
+        service.requestPinReset("@user:gua.global", "+12025550123", "127.0.0.1");
+
+        // That episode is long over, so this request opens a new one and the account holder
+        // gets the whole waiting period to see the SMS and intervene. Left in place, the old
+        // stamp would have satisfied the wait for ever: request and complete could then run
+        // in the same minute, which is the seven days collapsing to nothing for exactly the
+        // accounts nobody is watching.
+        assertThat(user.getPinResetRequestedAt()).isAfter(Instant.now().minus(Duration.ofMinutes(1)));
+
+        assertThatThrownBy(
+                () -> service.completePinReset("@user:gua.global", "+12025550123", "876543", "284917"))
+                .isInstanceOf(PinResetCooldownException.class);
+        verify(otpService, org.mockito.Mockito.never()).verifyScopedOtp(any(), any(), any());
+        assertThat(passwordEncoder.matches("284917", user.getPinHash())).isFalse();
+    }
+
+    @Test
+    void provingThePinEndsAPendingReset() {
+        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
+        user.setPinHash(passwordEncoder.encode("123456"));
+        user.setPinResetRequestedAt(Instant.now().minus(Duration.ofDays(8)));
+
+        when(repository.findByUserIdForUpdate("@user:gua.global")).thenReturn(Optional.of(user));
+
+        service.validatePinOrThrow("@user:gua.global", "123456");
+
+        // Somebody who can produce the PIN is not waiting on a reset of it, and a stamp left
+        // behind would keep the waiting period permanently satisfied for whoever comes next.
+        assertThat(user.getPinResetRequestedAt()).isNull();
+    }
+
+    @Test
+    void aWrongPinLeavesAPendingResetExactlyWhereItWas() {
+        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
+        user.setPinHash(passwordEncoder.encode("123456"));
+        Instant openedAt = Instant.now().minus(Duration.ofDays(3));
+        user.setPinResetRequestedAt(openedAt);
+
+        when(repository.findByUserIdForUpdate("@user:gua.global")).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> service.validatePinOrThrow("@user:gua.global", "000000"))
+                .isInstanceOf(InvalidPinException.class);
+
+        // Guessing at the PIN is not proof of anything, so it must not be able to shorten or
+        // cancel a reset the account holder is waiting on.
+        assertThat(user.getPinResetRequestedAt()).isEqualTo(openedAt);
+    }
+
+    @Test
+    void aFinishedSignInEndsAPendingReset() {
+        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
+        user.setPinHash(passwordEncoder.encode("123456"));
+        user.setPinResetRequestedAt(Instant.now().minus(Duration.ofDays(3)));
+
+        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
+
+        service.recordSuccessfulLogin("@user:gua.global");
+
+        // Only a finished sign-in reaches here, so the person is not the one locked out of the
+        // factor the reset would give back. It costs a live reset nothing the dormancy gate in
+        // requestPinReset was not already costing it.
+        assertThat(user.getPinResetRequestedAt()).isNull();
+        assertThat(user.getLastLoginAt()).isNotNull();
+    }
+
     private DirectoryEntry directoryEntry(String userId) {
         DirectoryEntry entry = DirectoryEntry.builder()
                 .phoneDigest("digest")

@@ -13,6 +13,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -50,6 +52,9 @@ class PhoneChangeServiceTest {
     private static final String NEW_E164 = "+14155550123";
     private static final String CHALLENGE = "chal-1";
     private static final String CHALLENGE_KEY = "phone:change:chal-1";
+    // Old enough that the fresh-2FA hold on the credential has long expired, so these tests
+    // are about precedence and ownership rather than about the hold. The hold has its own.
+    private static final Instant REGISTERED_LONG_AGO = Instant.now().minus(Duration.ofDays(400));
 
     @Mock
     private StringRedisTemplate redisTemplate;
@@ -214,7 +219,7 @@ class PhoneChangeServiceTest {
         when(userSecurityService.hasPin(USER)).thenReturn(false);
         JsonNode credential = JsonNodeFactory.instance.objectNode();
         when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
-                .thenReturn(new PasskeyService.PasskeyAuthentication(USER));
+                .thenReturn(new PasskeyService.PasskeyAuthentication(USER, REGISTERED_LONG_AGO));
         primeSuccessfulStart();
 
         PhoneChangeService.PhoneChangeStart start = service.startPhoneNumberChange(USER, "tok", NEW_RAW, null,
@@ -251,7 +256,7 @@ class PhoneChangeServiceTest {
         when(userSecurityService.hasPin(USER)).thenReturn(false);
         JsonNode credential = JsonNodeFactory.instance.objectNode();
         when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
-                .thenReturn(new PasskeyService.PasskeyAuthentication("@mallory:gua.global"));
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@mallory:gua.global", REGISTERED_LONG_AGO));
 
         assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, null, "pk-stepup", credential,
                 "1.2.3.4", "en"))
@@ -269,7 +274,7 @@ class PhoneChangeServiceTest {
         when(userSecurityService.hasPin(USER)).thenReturn(true);
         JsonNode credential = JsonNodeFactory.instance.objectNode();
         when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
-                .thenReturn(new PasskeyService.PasskeyAuthentication(USER));
+                .thenReturn(new PasskeyService.PasskeyAuthentication(USER, REGISTERED_LONG_AGO));
         primeSuccessfulStart();
 
         PhoneChangeService.PhoneChangeStart start = service.startPhoneNumberChange(USER, "tok", NEW_RAW, null,
@@ -288,7 +293,7 @@ class PhoneChangeServiceTest {
         when(userSecurityService.hasPin(USER)).thenReturn(true);
         JsonNode credential = JsonNodeFactory.instance.objectNode();
         when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
-                .thenReturn(new PasskeyService.PasskeyAuthentication(USER));
+                .thenReturn(new PasskeyService.PasskeyAuthentication(USER, REGISTERED_LONG_AGO));
         primeSuccessfulStart();
 
         service.startPhoneNumberChange(USER, "tok", NEW_RAW, null, "pk-stepup", credential, "1.2.3.4", "en");
@@ -324,7 +329,7 @@ class PhoneChangeServiceTest {
         when(userSecurityService.hasPin(USER)).thenReturn(true);
         JsonNode credential = JsonNodeFactory.instance.objectNode();
         when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
-                .thenReturn(new PasskeyService.PasskeyAuthentication("@mallory:example.test"));
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@mallory:example.test", REGISTERED_LONG_AGO));
 
         // Now that an assertion can settle the step-up on its own, this check is the only thing
         // between somebody else's credential and the change. It must refuse before acceptance,
@@ -402,6 +407,63 @@ class PhoneChangeServiceTest {
         order.verify(userSecurityService).validatePinOrThrow(USER, "123456");
         order.verify(userSecurityService).enforcePhoneChangePinHold(USER);
         order.verify(userSecurityService).enforcePhoneChangeCooldown(USER);
+    }
+
+    @Test
+    void startRefusesAPasskeyThatWasRegisteredInsideTheHold() {
+        JsonNode credential = JsonNodeFactory.instance.objectNode();
+        Instant enrolledMinutesAgo = Instant.now().minus(Duration.ofMinutes(5));
+        when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
+                .thenReturn(new PasskeyService.PasskeyAuthentication(USER, enrolledMinutesAgo));
+        doThrow(new TwoFactorCooldownException("too new", 600))
+                .when(userSecurityService).enforceFreshFactorHold(enrolledMinutesAgo);
+
+        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, null, "pk-stepup", credential,
+                "1.2.3.4", "en"))
+                .isInstanceOf(TwoFactorCooldownException.class);
+
+        // Holding only the PIN would price the same takeover at seven days or at nothing
+        // depending on which factor the attacker picked, and the cheap one is the passkey:
+        // POST /security/passkey/enroll/start asks a session holder for nothing but the
+        // bearer token, and the assertion that follows settles this step-up with the PIN
+        // never asked for. Nothing past the step-up runs.
+        verify(userSecurityService, never()).enforcePhoneChangeCooldown(anyString());
+        verify(phoneNumberNormalizer, never()).toE164(anyString());
+        verifyNoInteractions(phoneChangeOtpService);
+        verifyNoInteractions(deviceNotificationService);
+    }
+
+    @Test
+    void startWeighsTheCredentialsAgeOnlyAfterItIsKnownToBeTheCallersOwn() {
+        JsonNode credential = JsonNodeFactory.instance.objectNode();
+        when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@mallory:example.test", REGISTERED_LONG_AGO));
+
+        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, null, "pk-stepup", credential,
+                "1.2.3.4", "en"))
+                .isInstanceOf(InvalidPinException.class);
+
+        // Ownership stays the first thing an accepted assertion meets. A hold weighed ahead
+        // of it would be answering a question about somebody else's credential.
+        verify(userSecurityService, never()).enforceFreshFactorHold(any());
+    }
+
+    @Test
+    void startLetsAnEstablishedPasskeySettleTheStepUpAtOnce() {
+        JsonNode credential = JsonNodeFactory.instance.objectNode();
+        when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
+                .thenReturn(new PasskeyService.PasskeyAuthentication(USER, REGISTERED_LONG_AGO));
+        primeSuccessfulStart();
+
+        PhoneChangeService.PhoneChangeStart start = service.startPhoneNumberChange(USER, "tok", NEW_RAW, null,
+                "pk-stepup", credential, "1.2.3.4", "en");
+
+        // The hold is asked about every credential that is accepted, and it answers "no hold"
+        // for one that has been registered a while. The refusal expires; it removes no factor
+        // from anybody.
+        verify(userSecurityService).enforceFreshFactorHold(REGISTERED_LONG_AGO);
+        verify(userSecurityService, never()).validatePinOrThrow(anyString(), anyString());
+        verify(phoneChangeOtpService).send(start.challengeId(), NEW_E164, "1.2.3.4", "en");
     }
 
     // -------------------- /complete: brute-force cap --------------------
