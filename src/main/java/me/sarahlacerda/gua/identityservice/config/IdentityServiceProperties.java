@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -32,6 +33,7 @@ public class IdentityServiceProperties {
     private final SmsProperties sms = new SmsProperties();
     private final RateLimitProperties rateLimits = new RateLimitProperties();
     private final GenesisProperties genesis = new GenesisProperties();
+    private final PlacementProperties placement = new PlacementProperties();
 
     @Getter
     @Setter
@@ -151,6 +153,60 @@ public class IdentityServiceProperties {
         private int weight = 1;
 
         private boolean enabled = true;
+
+        /**
+         * This homeserver's roster entry id in the federation roster, which is what a placement record
+         * carries (ADM-008 decision 7). It is a different namespace from {@link #id}: that one is this
+         * deployment's local registry key and appears in {@code directory_entries.homeserver_id}, while
+         * this one is federation state. The join between them is the Matrix domain, which is unique in
+         * the roster. Left blank, {@code identity.placement.federation-id-aliases} is consulted and the
+         * local id is used as-is if it has no alias.
+         */
+        private String federationId;
+
+        /**
+         * Base64 PKCS#8 Ed25519 private half of the roster membership key of this homeserver: the key
+         * whose possession admission proved, and the only key a generation-1 placement record for this
+         * homeserver may be signed with. Blank unless this deployment publishes records for it.
+         */
+        private String placementSigningPrivateKey;
+
+        /** Where this homeserver's MAS placement evidence is read from, for the shadow comparison. */
+        private final MasConfig mas = new MasConfig();
+    }
+
+    /**
+     * Read-only coordinates of one homeserver's MAS, used by the shadow reconciler and nothing else.
+     * Each MAS owns {@code upstream_oauth_links}, the only committed evidence of where an account
+     * actually lives (ADM-008 decision 9).
+     *
+     * <p>Both paths are inert unless the matching switch under {@code identity.placement.mas} is on,
+     * and neither exists on this deployment yet: the admin API needs the {@code urn:mas:admin} scope,
+     * which MAS grants through {@code client_credentials} only to a client id listed in its policy data
+     * {@code admin_clients}, and the SQL path needs a read-only role on each MAS database.
+     */
+    @Getter
+    @Setter
+    public static class MasConfig {
+
+        /** The upstream OAuth provider id this identity-service is registered as in that MAS. */
+        private String upstreamProviderId = "";
+
+        private String adminApiBaseUrl = "";
+
+        /** Token endpoint the {@code client_credentials} grant is requested from. */
+        private String tokenUrl = "";
+
+        private String clientId = "";
+
+        private String clientSecret = "";
+
+        /** JDBC URL of a read-only role on this MAS's database, for the fallback read path. */
+        private String readOnlyJdbcUrl = "";
+
+        private String readOnlyUsername = "";
+
+        private String readOnlyPassword = "";
     }
 
     @Getter
@@ -247,6 +303,119 @@ public class IdentityServiceProperties {
 
         @Valid
         private Set<HttpMethod> methods = new HashSet<>();
+    }
+
+
+    /**
+     * Generation-1 placement records and the shadow comparison (ADM-008 Phase 4, ADM-001 L6).
+     *
+     * <p>Every flag here defaults to off and the whole feature is inert until one is turned on: no
+     * scheduler is started, no record is signed, no MAS is read and no new metric series appears. With
+     * them all off this service behaves exactly as it did before the feature existed.
+     *
+     * <p>There is deliberately no flag that serves routing from a placement record. Phase 4 is
+     * comparison only, and the resolution path never reads the placement table; that is an explicit
+     * non-goal of the phase, not a switch someone forgot to add.
+     */
+    @Getter
+    @Setter
+    public static class PlacementProperties {
+
+        /**
+         * Base URL of the gua-resolver that holds the placement records. Deliberately named
+         * {@code identity.placement.*}: the removed directory-publishing client lived under
+         * {@code identity.resolver.*} and nothing may reintroduce that namespace (ADM-001 L1b).
+         */
+        private String resolverBaseUrl = "";
+
+        /** Validity of a record this service issues. ADM-008 decision 7 fixes 400 days. */
+        @NotNull
+        private Duration recordValidity = Duration.ofDays(400);
+
+        /** Age at which a still-valid record is re-issued, so it never approaches its expiry. */
+        @NotNull
+        private Duration reissueAfter = Duration.ofDays(300);
+
+        /**
+         * Maps a local registry homeserver id to a federation roster id, for comparison only. The legacy
+         * synthesised homeserver has no roster identity and rows written before routing existed carry a
+         * NULL or {@code default} homeserver id, so a comparison needs to be told what those meant. It
+         * never affects which homeserver a record names: publishing uses the MAS link, never this.
+         */
+        @NotNull
+        private Map<String, String> federationIdAliases = new LinkedHashMap<>();
+
+        @NotNull
+        private final PublishProperties publish = new PublishProperties();
+
+        @NotNull
+        private final ShadowProperties shadow = new ShadowProperties();
+
+        @NotNull
+        private final MasReadProperties mas = new MasReadProperties();
+    }
+
+    @Getter
+    @Setter
+    public static class PublishProperties {
+        /**
+         * Signs and publishes a generation-1 record for an account whose evidence says it has exactly
+         * one home. Off by default; the shadow comparison is meant to run for days with this off before
+         * anything is written to federation state.
+         */
+        private boolean enabled = false;
+    }
+
+    @Getter
+    @Setter
+    public static class ShadowProperties {
+
+        /** Master switch for the reconciler. Off: no scheduler is started at all. */
+        private boolean enabled = false;
+
+        /** When the daily comparison runs. */
+        @NotBlank
+        private String cron = "0 20 3 * * *";
+
+        /**
+         * Writes the local routing choice back from the MAS link when the two disagree. Off by default:
+         * a stale directory row is a data-quality finding, not a security event, and a comparison job
+         * that also repairs is a comparison job nobody can read.
+         */
+        private boolean healDirectory = false;
+
+        /**
+         * Accounts whose local routing choice is known to differ from where they live, as MXID to the
+         * expected roster homeserver id. The federation testbed deliberately placed an account away from
+         * this deployment's default, and the exit criterion is "no stale rows except the listed ones",
+         * which needs the list to be explicit rather than remembered.
+         */
+        @NotNull
+        private Map<String, String> knownPlacements = new LinkedHashMap<>();
+
+        @Min(1)
+        private int batchSize = 500;
+    }
+
+    /**
+     * Which MAS read path the reconciler uses. Both are off, and neither is available on this
+     * deployment: see {@link MasConfig} for what granting each one requires.
+     */
+    @Getter
+    @Setter
+    public static class MasReadProperties {
+
+        @NotNull
+        private final MasSwitch adminApi = new MasSwitch();
+
+        @NotNull
+        private final MasSwitch sql = new MasSwitch();
+    }
+
+    @Getter
+    @Setter
+    public static class MasSwitch {
+        private boolean enabled = false;
     }
 
     /**
