@@ -1376,4 +1376,63 @@ class LoginFlowControllerTest {
         assertEquals(null, saved.getValue().getGenesisAttachHandle());
         assertEquals(null, saved.getValue().getGenesisAttachChallenge());
     }
+
+    /**
+     * The heal path is the one runtime path that surfaces an account the startup backfill never saw, so
+     * it is the one that can push the missing-genesis gauge back above zero between restarts.
+     */
+    private void recoveredAccountAtOtpStep() {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
+        when(matrixAdminClient.findUserIdByPhone(PHONE)).thenReturn(Optional.of("@alice:dev.local"));
+        when(phoneNumberMasker.mask(PHONE)).thenReturn("\u2022\u2022\u2022\u20224567");
+        when(userSecurityService.hasPin("@alice:dev.local")).thenReturn(false);
+    }
+
+    private org.springframework.test.web.servlet.ResultActions submitOtpForRecoveredAccount() throws Exception {
+        return mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"));
+    }
+
+    @Test
+    void anAccountRecoveredByPhoneBindingIsRootedOnTheSpot() throws Exception {
+        recoveredAccountAtOtpStep();
+        when(accountGenesisService.isEnabled()).thenReturn(true);
+
+        submitOtpForRecoveredAccount()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.newUser").value(false));
+
+        // Healing the directory row makes this account visible to a later scan; without an id of its own
+        // it would sit in gua_identity_accounts_without_genesis until the next restart.
+        verify(accountGenesisService).bootstrap("@alice:dev.local");
+    }
+
+    @Test
+    void aRecoveredAccountIsNotRootedWhileTheFeatureIsOff() throws Exception {
+        recoveredAccountAtOtpStep();
+
+        submitOtpForRecoveredAccount().andExpect(status().isOk());
+
+        verify(accountGenesisService, org.mockito.Mockito.never()).bootstrap(any());
+    }
+
+    @Test
+    void aFailureToRootARecoveredAccountDoesNotBlockTheSignIn() throws Exception {
+        recoveredAccountAtOtpStep();
+        when(accountGenesisService.isEnabled()).thenReturn(true);
+        org.mockito.Mockito.doThrow(new IllegalStateException("transient"))
+                .when(accountGenesisService).bootstrap("@alice:dev.local");
+
+        // Best-effort, like the directory heal it follows: a returning user still signs in, and the
+        // backfill picks the account up on its next run.
+        submitOtpForRecoveredAccount()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"))
+                .andExpect(jsonPath("$.newUser").value(false));
+    }
 }

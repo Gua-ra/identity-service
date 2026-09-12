@@ -137,7 +137,11 @@ class AccountAttachProofTest {
     void aProofIsNotReplayableAgainstARowThatIsNoLongerPending() {
         String challenge = challenge();
         String proof = proofOver(challenge, accountId, authority.privateKey());
-        row.setState(State.ATTACHED);
+        // The row this handle names has already been attached: the shape the compare-and-set leaves
+        // behind, built here rather than mutated, since the state is not settable from outside.
+        when(repository.findByAttachHandleHash(AccountGenesisService.sha256Hex(handle)))
+                .thenReturn(Optional.of(AccountGenesisRecord.attachedGenesis(accountId.value(), USER_ID,
+                        (short) 1, (short) 1, row.getGenesisB64(), row.getAuthorityKeyB64(), Instant.now())));
 
         assertThatThrownBy(() -> service.attach(handle, challenge, proof, USER_ID))
                 .isInstanceOf(LoginFlowException.class);

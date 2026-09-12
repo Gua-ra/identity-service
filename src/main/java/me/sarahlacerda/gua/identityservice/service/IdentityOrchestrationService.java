@@ -13,6 +13,8 @@ import me.sarahlacerda.gua.identityservice.domain.MatrixSession;
 import me.sarahlacerda.gua.identityservice.domain.VerifyOtpResult;
 import me.sarahlacerda.gua.identityservice.exception.PhoneAlreadyLinkedException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -27,6 +29,8 @@ import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService
 @Service
 @RequiredArgsConstructor
 public class IdentityOrchestrationService {
+
+    private static final Logger log = LoggerFactory.getLogger(IdentityOrchestrationService.class);
 
     private final OtpService otpService;
     private final MatrixProvisioningService matrixProvisioningService;
@@ -198,8 +202,17 @@ public class IdentityOrchestrationService {
         // hold the server-chosen challenge an attach proof must cover (ADM-008 decision 6), and a handle
         // on its own must never attach. A signup here therefore always takes the bootstrap branch, which
         // is not a failure; the interactive /login/profile step is where a genesis can be attached.
+        // Never a failure of the signup itself (ADM-008 decision 6). The account exists by this point:
+        // the Matrix user is provisioned and the directory row is committed, and this runs in its own
+        // transaction, so a database blip here would otherwise turn a completed signup into a 500 the
+        // caller cannot retry. Logged and dropped instead, the way the backfill treats one failing
+        // account; the next backfill run picks it up.
         if (accountGenesisService.isEnabled()) {
-            accountGenesisService.bootstrap(userId);
+            try {
+                accountGenesisService.bootstrap(userId);
+            } catch (RuntimeException ex) {
+                log.warn("Could not root a new account in a genesis row: {}", ex.getMessage());
+            }
         }
 
         // gua_identity_signup_total{result,country}: completed new-account

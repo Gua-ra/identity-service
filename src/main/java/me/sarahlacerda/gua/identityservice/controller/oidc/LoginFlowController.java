@@ -199,6 +199,7 @@ public class LoginFlowController {
                     + "homeserver phone binding and healing the directory row");
             // Heal the directory row so future logins resolve via the fast digest path.
             healDirectoryRow(digest, session.getPhoneNumber(), userId);
+            rootRecoveredAccount(userId);
             // The healed row carries no stored username, so its localpart takes the MXID
             // fallback in AccountLocalpartResolver. A failed heal leaves no row at all.
             DirectoryEntry healed = directoryService.findByDigest(digest)
@@ -307,6 +308,30 @@ public class LoginFlowController {
             directoryService.upsertByDigest(digest, maskedPhone, userId, null);
         } catch (RuntimeException ex) {
             log.warn("Failed to heal directory row for recovered account: {}", ex.getMessage());
+        }
+    }
+
+    /**
+     * Gives an account recovered through the homeserver phone binding the genesis row it never had.
+     *
+     * <p>This is the one runtime path that creates an account the startup backfill could not have seen:
+     * no directory row and no security row, so nothing to scan, until the heal above inserts one. Left
+     * alone, that account would surface afterwards holding no id at all and would hold
+     * {@code gua_identity_accounts_without_genesis} above zero until the next restart, and that gauge
+     * reaching zero and staying there is the first of ADM-008's shadow-mode exit criteria.
+     *
+     * <p>Best-effort and idempotent, like the heal it follows: an account that already holds a row keeps
+     * it, and a failure here must never stop a returning user from signing in. A missed account is not
+     * lost either way, since the next backfill run picks it up.
+     */
+    private void rootRecoveredAccount(String userId) {
+        if (!accountGenesisService.isEnabled()) {
+            return;
+        }
+        try {
+            accountGenesisService.bootstrap(userId);
+        } catch (RuntimeException ex) {
+            log.warn("Could not root a recovered account in a genesis row: {}", ex.getMessage());
         }
     }
 

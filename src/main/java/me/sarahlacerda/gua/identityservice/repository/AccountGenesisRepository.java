@@ -18,8 +18,8 @@ import me.sarahlacerda.gua.identityservice.domain.AccountGenesisRecord.State;
  * Genesis rows, keyed by accountId.
  *
  * <p>Deliberately absent: any method that updates {@link Origin}. A bootstrap account is not adopted
- * into a rooted one in this phase, and {@code AccountGenesisOriginImmutableTest} fails the build if such
- * a method appears.
+ * into a rooted one in this phase. {@code AccountGenesisOriginImmutableTest} fails the build if such a
+ * method appears here, if a modifying query names the column, or if the entity grows a mutator for it.
  */
 public interface AccountGenesisRepository extends JpaRepository<AccountGenesisRecord, String> {
 

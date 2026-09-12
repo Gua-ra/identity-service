@@ -25,7 +25,6 @@ import lombok.Setter;
  * updates {@link #origin}: a bootstrap account is not adopted into a rooted one in this phase.
  */
 @Getter
-@Setter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Entity
 @Table(name = "account_genesis")
@@ -76,10 +75,19 @@ public class AccountGenesisRecord {
     @Column(name = "authority_key_b64")
     private String authorityKeyB64;
 
-    /** SHA-256 hex of the single-use attach handle; the handle itself is never stored. */
+    /**
+     * SHA-256 hex of the single-use attach handle; the handle itself is never stored.
+     *
+     * <p>Settable, with {@link #expiresAt}: re-registering the same genesis while it is still pending
+     * rotates both. Every other field is fixed at construction, and {@link #origin} above all: it is the
+     * audit marker ADM-001 L5 rests on, so it has no mutator at all and no query updates it.
+     */
+    @Setter
     @Column(name = "attach_handle_hash", length = 64)
     private String attachHandleHash;
 
+    /** When a pending registration stops being attachable. Rotated with the handle. */
+    @Setter
     @Column(name = "expires_at")
     private Instant expiresAt;
 
@@ -110,6 +118,16 @@ public class AccountGenesisRecord {
             String authorityKeyB64, String attachHandleHash, Instant expiresAt) {
         return new AccountGenesisRecord(accountId, null, Origin.GENESIS, State.PENDING, version, suite, genesisB64,
                 authorityKeyB64, attachHandleHash, expiresAt, null);
+    }
+
+    /**
+     * A genesis row after its attach: the shape {@code AccountGenesisRepository.attach} leaves behind,
+     * with the handle and the window burned and the account named.
+     */
+    public static AccountGenesisRecord attachedGenesis(String accountId, String userId, short version, short suite,
+            String genesisB64, String authorityKeyB64, Instant attachedAt) {
+        return new AccountGenesisRecord(accountId, userId, Origin.GENESIS, State.ATTACHED, version, suite,
+                genesisB64, authorityKeyB64, null, null, attachedAt);
     }
 
     /** A bootstrap accountId, attached to its account the moment it is minted. */

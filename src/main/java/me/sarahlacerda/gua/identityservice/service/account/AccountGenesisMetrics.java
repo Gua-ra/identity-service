@@ -11,6 +11,8 @@ import org.springframework.stereotype.Component;
 
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
+import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
+import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.GenesisProperties;
 import me.sarahlacerda.gua.identityservice.domain.AccountGenesisRecord.Origin;
 import me.sarahlacerda.gua.identityservice.repository.AccountGenesisRepository;
 
@@ -18,11 +20,21 @@ import me.sarahlacerda.gua.identityservice.repository.AccountGenesisRepository;
  * The two gauges Phase 3 is watched by:
  *
  * <ul>
- *   <li>{@code gua_identity_account_genesis_total{origin}}, how many accounts are rooted in a genesis
+ *   <li>{@code gua_identity_account_genesis{origin}}, how many accounts are rooted in a genesis
  *       and how many are bootstrap, which is the audit split ADM-001 L5 asks to be able to see;</li>
  *   <li>{@code gua_identity_accounts_without_genesis}, which must reach zero and stay there before any
  *       later phase may propose reading a placement record for routing.</li>
  * </ul>
+ *
+ * <p>Those are the exact names a scrape exposes. Both are gauges, and the Prometheus registry appends
+ * {@code _total} to counters only, so neither name carries that suffix; {@code AccountGenesisMetricsTest}
+ * pins the scraped names so a panel or an alert built on them cannot come back "no data", which is the
+ * failure {@code IdentityMetricsInitializer} was written to prevent. Counters are not an option here:
+ * both counts fall as the backfill runs, and the second one exists to reach zero.
+ *
+ * <p>Registered only while the feature is switched on, under either flag. With everything off no new
+ * series appear and, more to the point, {@link AccountScanner#countAccountsWithoutGenesis()} never runs:
+ * it is a full pass over the account tables, and a feature nobody turned on must cost nothing.
  *
  * <p>Each value is read from the database at most once per {@link #REFRESH} interval and cached in
  * between, so a busy Prometheus scrape cannot turn a gauge into a load source. Registered eagerly at
@@ -41,10 +53,17 @@ public class AccountGenesisMetrics {
     private final Cached withoutGenesisCount;
 
     public AccountGenesisMetrics(MeterRegistry metrics, AccountGenesisRepository repository,
-            AccountScanner accountScanner) {
+            AccountScanner accountScanner, IdentityServiceProperties properties) {
+        // Wrapping a supplier reads nothing; only a scrape of a registered gauge does.
         this.genesisCount = new Cached(() -> repository.countByOrigin(Origin.GENESIS));
         this.bootstrapCount = new Cached(() -> repository.countByOrigin(Origin.BOOTSTRAP));
         this.withoutGenesisCount = new Cached(accountScanner::countAccountsWithoutGenesis);
+
+        GenesisProperties genesis = properties.getGenesis();
+        if (!genesis.isEnabled() && !genesis.getBootstrapBackfill().isEnabled()) {
+            // Inert, which is what every flag being off promises: no series, and no scan behind them.
+            return;
+        }
 
         Gauge.builder("gua.identity.account.genesis", genesisCount::get)
                 .tag("origin", Origin.GENESIS.name())

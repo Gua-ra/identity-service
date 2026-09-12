@@ -409,4 +409,59 @@ class IdentityOrchestrationServiceTest {
                 verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(),
                                 any(Boolean.class));
         }
+
+        @Test
+        void completeSignupSurvivesAFailureToRootTheNewAccount() {
+                String phone = "+12025550123";
+                String digest = "new-digest";
+                String userId = "@alice:gua.global";
+                MatrixSession session = new MatrixSession("token", userId, "device-1", CLIENT_BASE_URL);
+
+                when(signupTokenService.peek("signup-abc")).thenReturn(phone);
+                when(signupTokenService.consume("signup-abc")).thenReturn(phone);
+                when(phoneNumberHasher.digest(phone)).thenReturn(digest);
+                when(directoryService.findByDigest(digest)).thenReturn(Optional.empty());
+                when(matrixProvisioningService.buildUserId("alice")).thenReturn(userId);
+                when(matrixAdminClient.userExists(userId)).thenReturn(false);
+                when(matrixProvisioningService.ensureSessionForUser(userId, phone, "Alice L.", true))
+                                .thenReturn(session);
+                when(accountGenesisService.isEnabled()).thenReturn(true);
+                org.mockito.Mockito.doThrow(new org.springframework.dao.DataIntegrityViolationException("blip"))
+                                .when(accountGenesisService).bootstrap(userId);
+
+                // The account already exists by the time the id is minted: the Matrix user is provisioned
+                // and the directory row is committed. A failure in that separate transaction must not turn
+                // a completed signup into a 500 (ADM-008 decision 6 makes the bootstrap branch not a
+                // failure); the backfill picks the account up instead.
+                MatrixSession result = service.completeSignup("signup-abc", "Alice", "Alice L.", null, null);
+
+                assertThat(result).isEqualTo(session);
+                verify(directoryService).upsertByDigest(eq(digest), anyString(), eq(userId), eq("Alice L."));
+                verify(userSecurityService).recordSuccessfulLogin(userId);
+        }
+
+        @Test
+        void completeSignupRootsTheNewAccountWhenTheFeatureIsOn() {
+                String phone = "+12025550123";
+                String digest = "new-digest";
+                String userId = "@alice:gua.global";
+                MatrixSession session = new MatrixSession("token", userId, "device-1", CLIENT_BASE_URL);
+
+                when(signupTokenService.peek("signup-abc")).thenReturn(phone);
+                when(signupTokenService.consume("signup-abc")).thenReturn(phone);
+                when(phoneNumberHasher.digest(phone)).thenReturn(digest);
+                when(directoryService.findByDigest(digest)).thenReturn(Optional.empty());
+                when(matrixProvisioningService.buildUserId("alice")).thenReturn(userId);
+                when(matrixAdminClient.userExists(userId)).thenReturn(false);
+                when(matrixProvisioningService.ensureSessionForUser(userId, phone, "Alice L.", true))
+                                .thenReturn(session);
+                when(accountGenesisService.isEnabled()).thenReturn(true);
+
+                service.completeSignup("signup-abc", "Alice", "Alice L.", null, null);
+
+                // This path has no login session, so there is nowhere to hold the challenge an attach proof
+                // must cover: it always takes the bootstrap branch, never an attach.
+                verify(accountGenesisService).bootstrap(userId);
+                verify(accountGenesisService, never()).attach(any(), any(), any(), any());
+        }
 }
