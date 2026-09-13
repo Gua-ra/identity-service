@@ -145,14 +145,46 @@ class UserSecurityServiceTest {
     @Test
     void recordingASignInCreatesTheRowForAnAccountThatNeverHadOne() {
         when(repository.findByUserIdForUpdate("@new:gua.global")).thenReturn(Optional.empty());
-        when(repository.save(any(IdentityUser.class))).thenAnswer(call -> call.getArgument(0));
+        when(repository.saveAndFlush(any(IdentityUser.class))).thenAnswer(call -> call.getArgument(0));
 
         service.recordSuccessfulLogin("@new:gua.global");
 
         org.mockito.ArgumentCaptor<IdentityUser> saved = org.mockito.ArgumentCaptor.forClass(IdentityUser.class);
-        verify(repository).save(saved.capture());
+        verify(repository).saveAndFlush(saved.capture());
         assertThat(saved.getValue().getUserId()).isEqualTo("@new:gua.global");
         assertThat(saved.getValue().getLastLoginAt()).isNotNull();
+    }
+
+    /**
+     * A phone change stamps the row under the lock like every other writer: read unlocked, it
+     * would write back a recovery stamp that a cancel or completion had just cleared.
+     */
+    @Test
+    void stampingAPhoneChangeReadsTheRowUnderTheLock() {
+        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
+        when(repository.findByUserIdForUpdate("@user:gua.global")).thenReturn(Optional.of(user));
+
+        service.stampPhoneChange("@user:gua.global");
+
+        assertThat(user.getLastPhoneChangeAt()).isNotNull();
+        verify(repository, org.mockito.Mockito.never()).findByUserId("@user:gua.global");
+
+        when(repository.findByUserIdForUpdate("@new:gua.global")).thenReturn(Optional.empty());
+        when(repository.saveAndFlush(any(IdentityUser.class))).thenAnswer(call -> call.getArgument(0));
+        service.stampPhoneChange("@new:gua.global");
+        verify(repository).saveAndFlush(any(IdentityUser.class));
+    }
+
+    @Test
+    void changingThePinWithTheCurrentPinReadsTheRowUnderTheLock() {
+        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
+        user.setPinHash(passwordEncoder.encode("284917"));
+        when(repository.findByUserIdForUpdate("@user:gua.global")).thenReturn(Optional.of(user));
+
+        service.updatePin("@user:gua.global", "284917", "391748");
+
+        assertThat(passwordEncoder.matches("391748", user.getPinHash())).isTrue();
+        verify(repository, org.mockito.Mockito.never()).findByUserId("@user:gua.global");
     }
 
     @Test
@@ -172,10 +204,12 @@ class UserSecurityServiceTest {
         IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
         user.setPinHash(passwordEncoder.encode("123456"));
 
-        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
+        when(repository.findByUserIdForUpdate("@user:gua.global")).thenReturn(Optional.of(user));
         when(valueOps.get("pin:change:chal-1")).thenReturn("@user:gua.global|+12025550123");
 
         service.completePinChange("@user:gua.global", "chal-1", "876543", "284917");
+        // Under the row lock, so it cannot write back a recovery stamp or PIN hash committed meanwhile.
+        verify(repository, org.mockito.Mockito.never()).findByUserId("@user:gua.global");
 
         verify(otpService).verifyScopedOtp(OtpScope.PIN_CHANGE, "chal-1", "876543");
         verify(otpService, org.mockito.Mockito.never()).verifyOtp(any(), any());
@@ -190,7 +224,7 @@ class UserSecurityServiceTest {
         IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
         user.setPinHash(passwordEncoder.encode("123456"));
 
-        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
+        when(repository.findByUserIdForUpdate("@user:gua.global")).thenReturn(Optional.of(user));
         when(valueOps.get("pin:change:chal-1")).thenReturn(null);
 
         assertThatThrownBy(() -> service.completePinChange("@user:gua.global", "chal-1", "876543", "654321"))
@@ -202,7 +236,7 @@ class UserSecurityServiceTest {
         IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
         user.setPinHash(passwordEncoder.encode("123456"));
 
-        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
+        when(repository.findByUserIdForUpdate("@user:gua.global")).thenReturn(Optional.of(user));
         when(valueOps.get("pin:change:chal-1")).thenReturn("@someone-else:gua.global|+12025550123");
 
         assertThatThrownBy(() -> service.completePinChange("@user:gua.global", "chal-1", "876543", "654321"))

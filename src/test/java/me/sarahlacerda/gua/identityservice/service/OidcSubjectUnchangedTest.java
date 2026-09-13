@@ -19,6 +19,7 @@ import me.sarahlacerda.gua.identityservice.config.OidcSigningKeyConfig;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenResponse;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
+import me.sarahlacerda.gua.identityservice.service.security.EndOtherSessionsService;
 import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,7 +51,8 @@ class OidcSubjectUnchangedTest {
         properties.setClients(List.of(client("mas")));
 
         RSAKey signingKey = new OidcSigningKeyConfig().oidcSigningKey(properties);
-        tokenService = new OidcTokenService(properties, signingKey, mock(TokenRevocationService.class));
+        tokenService = new OidcTokenService(properties, signingKey, mock(TokenRevocationService.class),
+                mock(EndOtherSessionsService.class));
     }
 
     private static OidcProperties.ClientRegistration client(String clientId) {

@@ -12,6 +12,7 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -130,6 +131,27 @@ class LoginFactorEnrollmentServiceTest {
                 JsonNodeFactory.instance.objectNode())).isFalse();
 
         verify(passkeyService).finishRegistration(any(), any(), any());
+    }
+
+    /**
+     * Two sessions for an account with no row both find nothing to lock. The one that loses the
+     * insert gets the same answer as one that found a factor, not a server error, and stores nothing.
+     */
+    @Test
+    void losingTheRaceToCreateTheRowIsFactorRequired() {
+        when(repository.findByUserIdForUpdate(USER)).thenReturn(Optional.empty());
+        when(repository.saveAndFlush(any(IdentityUser.class)))
+                .thenThrow(new DataIntegrityViolationException("duplicate key value violates unique constraint"));
+
+        assertThatThrownBy(() -> service.setUpFirstPin(USER, "284917"))
+                .isInstanceOf(LoginFlowException.class)
+                .hasFieldOrPropertyWithValue("code", "factor_required");
+        assertThatThrownBy(() -> service.registerPasskey("sid", sessionWith(null),
+                JsonNodeFactory.instance.objectNode()))
+                .isInstanceOf(LoginFlowException.class)
+                .hasFieldOrPropertyWithValue("code", "factor_required");
+
+        verify(passkeyService, never()).finishRegistration(any(), any(), any());
     }
 
     @Test

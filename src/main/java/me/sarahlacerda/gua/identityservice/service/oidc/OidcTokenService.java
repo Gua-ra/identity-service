@@ -25,6 +25,7 @@ import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 
 import me.sarahlacerda.gua.identityservice.config.OidcProperties;
+import me.sarahlacerda.gua.identityservice.service.security.EndOtherSessionsService;
 import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
 
 @Service
@@ -42,10 +43,16 @@ public class OidcTokenService {
     private final OidcProperties properties;
     private final RSAKey signingKey;
     private final TokenRevocationService tokenRevocationService;
+    private final EndOtherSessionsService endOtherSessionsService;
 
     public OidcTokenResponse issueTokens(OidcAuthorization authorization) {
         SignedJWT accessToken = buildJwt(authorization, properties.getAccessTokenTtl().toSeconds(), false);
         SignedJWT idToken = buildJwt(authorization, properties.getIdTokenTtl().toSeconds(), true);
+        if (authorization.endOtherSessions()) {
+            // The claim leaves this service in this ID token, so the sign-out a recovery owed the
+            // account has been handed over. Until here a failed or abandoned login keeps it owed.
+            endOtherSessionsService.settle(authorization.userId());
+        }
 
         return new OidcTokenResponse(
                 serialize(accessToken),

@@ -2,8 +2,11 @@ package me.sarahlacerda.gua.identityservice.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.security.KeyPair;
@@ -35,6 +38,7 @@ import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthenticatedPrincip
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenResponse;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
+import me.sarahlacerda.gua.identityservice.service.security.EndOtherSessionsService;
 import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
 
 class OidcTokenServiceTest {
@@ -43,6 +47,7 @@ class OidcTokenServiceTest {
     private OidcProperties properties;
     private RSAKey signingKey;
     private TokenRevocationService tokenRevocationService;
+    private EndOtherSessionsService endOtherSessionsService;
 
     @BeforeEach
     void setUp() {
@@ -55,7 +60,8 @@ class OidcTokenServiceTest {
 
         signingKey = new OidcSigningKeyConfig().oidcSigningKey(properties);
         tokenRevocationService = mock(TokenRevocationService.class);
-        tokenService = new OidcTokenService(properties, signingKey, tokenRevocationService);
+        endOtherSessionsService = mock(EndOtherSessionsService.class);
+        tokenService = new OidcTokenService(properties, signingKey, tokenRevocationService, endOtherSessionsService);
     }
 
     private static OidcProperties.ClientRegistration client(String clientId) {
@@ -129,6 +135,21 @@ class OidcTokenServiceTest {
                 .doesNotContainKey("gua_end_other_sessions");
         assertThat(SignedJWT.parse(ordinaryTokens.accessToken()).getJWTClaimsSet().getClaims())
                 .doesNotContainKey("gua_end_other_sessions");
+    }
+
+    /**
+     * The sign-out a recovery owes is settled when the claim actually leaves in an ID token, and by
+     * nothing else: an ordinary sign-in leaves it owed.
+     */
+    @Test
+    void issuingTheClaimSettlesTheSignOutARecoveryOwed() {
+        tokenService.issueTokens(new OidcAuthorization("@alice:gua.global", "+15551234567", "Alice", "alice",
+                Set.of("openid"), "mas", "nonce-1"));
+        verify(endOtherSessionsService, never()).settle(anyString());
+
+        tokenService.issueTokens(new OidcAuthorization("@alice:gua.global", "+15551234567", "Alice", "alice",
+                Set.of("openid"), "mas", "nonce-1", true));
+        verify(endOtherSessionsService).settle("@alice:gua.global");
     }
 
     @Test

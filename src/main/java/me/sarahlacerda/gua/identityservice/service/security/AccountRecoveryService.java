@@ -59,6 +59,7 @@ public class AccountRecoveryService {
 
     private final UserSecurityService userSecurityService;
     private final PasskeyService passkeyService;
+    private final EndOtherSessionsService endOtherSessionsService;
     private final IdentityServiceProperties properties;
     private final SecurityAuditLogger auditLogger;
     private final Clock clock;
@@ -100,13 +101,14 @@ public class AccountRecoveryService {
 
     /**
      * Completes a ready episode with a new PIN, in one transaction under the row lock: re-check
-     * that it is ready, validate the PIN, apply it, end the episode, clear any PIN lock, and
-     * remove every stored passkey.
+     * that it is ready, validate the PIN, apply it, end the episode, clear any PIN lock, remove
+     * every stored passkey, and count the completion as account activity.
      *
      * <p>
      * Signing out other sessions is not done here. identity-service's own token cutoff does not
      * reach the tokens the apps hold, so the caller finishes the login with a recovery marker the
-     * authentication service acts on.
+     * authentication service acts on. The same transaction records that sign-out as owed
+     * ({@link EndOtherSessionsService}), so it is not lost when the login cannot be finished.
      *
      * @return how many passkeys were removed
      * @throws AccountRecoveryNotReadyException when the episode is not ready under the lock
@@ -123,6 +125,11 @@ public class AccountRecoveryService {
         // against the account: it is the new PIN being chosen, not a guess at the old one.
         userSecurityService.applyRecoveredPin(user, newPin);
         int removed = passkeyService.removeAllForUser(userId);
+        // Stamped here rather than left to the sign-in record that follows the commit, which is
+        // not guaranteed to run: a recovered account must not look dormant enough for another
+        // recovery to start straight away.
+        userSecurityService.recordAccountActivity(user, now);
+        endOtherSessionsService.markOwed(userId);
         auditLogger.accountRecoveryCompleted(userId, removed);
         return removed;
     }
