@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -55,6 +56,7 @@ public class PasskeyService implements CredentialRepository {
 
     private static final String REGISTRATION_KEY_PREFIX = "passkey:registration:";
     private static final String ASSERTION_KEY_PREFIX = "passkey:assertion:";
+    private static final String STEP_UP_KEY_PREFIX = "passkey:stepup:";
 
     private final PasskeyCredentialRepository repository;
     private final LoginFlowProperties loginProperties;
@@ -68,6 +70,22 @@ public class PasskeyService implements CredentialRepository {
     /** Whether the given account already has at least one registered passkey. */
     public boolean hasPasskey(String userId) {
         return StringUtils.hasText(userId) && repository.existsByUserId(userId);
+    }
+
+    /**
+     * Removes every passkey stored for the account and returns how many there were.
+     *
+     * <p>
+     * Only a completed account recovery calls it, inside its own transaction and under the
+     * account's row lock. Recovery's premise is that these credentials cannot be used by the
+     * account holder, so leaving them in place would leave a lost or stolen device able to sign
+     * straight back in with passkey-first sign-in, which asks for no OTP.
+     */
+    @Transactional
+    public int removeAllForUser(String userId) {
+        List<PasskeyCredential> credentials = repository.findByUserId(userId);
+        repository.deleteAll(credentials);
+        return credentials.size();
     }
 
     public JsonNode startRegistration(String sessionId, LoginSession session) {
@@ -171,22 +189,106 @@ public class PasskeyService implements CredentialRepository {
 
     @Transactional
     public PasskeyAuthentication finishAuthentication(String sessionId, JsonNode credential) {
+        // Login. User verification stays advisory here, matching the PREFERRED requirement the
+        // login ceremony asks for: raising the bar on login would refuse an authenticator that
+        // legitimately cannot do UV and silently push that account onto another factor. Login
+        // is not a place where an assertion outranks a knowledge factor with lockout accounting.
+        return redeemAssertion(assertionKey(sessionId), credential, false);
+    }
+
+    /**
+     * Starts an assertion that may be spent as a <b>step-up</b> factor on a privileged
+     * operation, instead of as a login.
+     *
+     * <p>
+     * Two things separate it from the login ceremony:
+     * <ul>
+     * <li>{@link UserVerificationRequirement#REQUIRED}, so the authenticator must actually
+     * verify the human in front of it (biometric or authenticator PIN). A bare possession
+     * assertion is a weaker proof than the account PIN it would stand in for, and the account
+     * PIN carries failure counting and lockout while a possession-only assertion carries
+     * neither.</li>
+     * <li>Its own Redis namespace and its own id, so a challenge minted for a step-up can
+     * never be redeemed as a login and a login challenge can never be redeemed as a step-up.
+     * The ceremony is pinned to {@code userId}, so the assertion can only resolve to the
+     * account that asked for it.</li>
+     * </ul>
+     *
+     * @return the browser {@code publicKey} request options; the caller sends back the
+     *         {@code stepUpId} it was handed together with the assertion response
+     */
+    public JsonNode startStepUpAssertion(String stepUpId, String userId) {
         ensureEnabled();
-        String stored = redisTemplate.opsForValue().get(assertionKey(sessionId));
+        if (!StringUtils.hasText(userId)) {
+            throw new LoginFlowException(HttpStatus.CONFLICT, "passkey_user_unknown",
+                    "A passkey step-up requires a verified account");
+        }
+        // Feasibility, NOT policy: an account with no registered credential has nothing to
+        // assert, so the ceremony would hand the authenticator an empty allow list and fail
+        // with a confusing browser error. This decides nothing about which factor the
+        // operation requires; the caller keeps every fallback it had.
+        if (!hasPasskey(userId)) {
+            throw new LoginFlowException(HttpStatus.CONFLICT, "passkey_not_registered",
+                    "This account has no passkey to verify with.");
+        }
+
+        AssertionRequest request = relyingParty().startAssertion(StartAssertionOptions.builder()
+                .username(userId)
+                .userVerification(UserVerificationRequirement.REQUIRED)
+                .timeout(loginProperties.getPasskeys().getTimeoutMillis())
+                .build());
+
+        try {
+            redisTemplate.opsForValue().set(
+                    stepUpKey(stepUpId),
+                    request.toJson(),
+                    loginProperties.getPasskeys().getChallengeTtl());
+            return browserPublicKey(request.getPublicKeyCredentialRequestOptions().toCredentialsGetJson(), "publicKey");
+        } catch (Exception ex) {
+            throw new LoginFlowException(HttpStatus.INTERNAL_SERVER_ERROR, "passkey_options_failed",
+                    "Could not create passkey verification options");
+        }
+    }
+
+    /**
+     * Redeems a step-up assertion started by {@link #startStepUpAssertion(String, String)}.
+     * Refuses an assertion that did not verify the user.
+     *
+     * <p>
+     * Single use in the strict sense: the challenge is burned on refusal as well as on
+     * acceptance, so an attempt that fails costs the caller a round trip to
+     * {@code POST /security/passkey/stepup/options} rather than nothing. The caller must
+     * still check that the returned user id is the account it is acting for; this method
+     * resolves whose credential answered, not whether that is the right account.
+     */
+    @Transactional
+    public PasskeyAuthentication finishStepUpAssertion(String stepUpId, JsonNode credential) {
+        return redeemAssertion(stepUpKey(stepUpId), credential, true);
+    }
+
+    private PasskeyAuthentication redeemAssertion(String challengeKey, JsonNode credential,
+            boolean requireUserVerification) {
+        ensureEnabled();
+        String stored = redisTemplate.opsForValue().get(challengeKey);
         if (!StringUtils.hasText(stored)) {
             throw new LoginFlowException(HttpStatus.GONE, "passkey_challenge_expired",
-                    "Passkey sign-in expired. Please try again.");
+                    "Passkey verification expired. Please try again.");
         }
 
         try {
-            AssertionResult result = relyingParty().finishAssertion(FinishAssertionOptions.builder()
-                    .request(AssertionRequest.fromJson(stored))
-                    .response(PublicKeyCredential.parseAssertionResponseJson(objectMapper.writeValueAsString(credential)))
-                    .build());
+            AssertionResult result = runAssertion(stored, credential);
 
             if (!result.isSuccess()) {
                 throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_authentication_failed",
                         "Passkey sign-in was not accepted.");
+            }
+
+            // Read from the authenticator data of THIS assertion, not from what the stored
+            // request asked for: the check holds even if the ceremony was started with a
+            // weaker requirement than a step-up needs.
+            if (requireUserVerification && !result.isUserVerified()) {
+                throw new LoginFlowException(HttpStatus.FORBIDDEN, "passkey_user_verification_required",
+                        "This action needs a passkey that verifies you, not only your device.");
             }
 
             PasskeyCredential saved = repository.findByCredentialId(result.getCredentialId().getBase64Url())
@@ -196,16 +298,43 @@ public class PasskeyService implements CredentialRepository {
             saved.setBackupEligible(result.isBackupEligible());
             saved.setBackupState(result.isBackedUp());
             saved.setLastUsedAt(Instant.now());
-            redisTemplate.delete(assertionKey(sessionId));
 
-            return new PasskeyAuthentication(saved.getUserId());
+            return new PasskeyAuthentication(saved.getUserId(), saved.getCreatedAt());
         } catch (AssertionFailedException ex) {
             throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_authentication_failed",
                     "Passkey sign-in was not accepted.");
         } catch (IOException ex) {
             throw new LoginFlowException(HttpStatus.BAD_REQUEST, "passkey_response_invalid",
                     "Passkey sign-in response was invalid.");
+        } finally {
+            // One challenge, one attempt, whatever the outcome. A challenge that survived a
+            // refusal could be presented again until its TTL ran out, which turns a short
+            // single-use window into a retry window: a wrong credential, a response that
+            // failed verification, or a malformed body would each cost the attacker nothing.
+            // Burning it here rather than on each exit path means no future branch can
+            // return or throw past it.
+            redisTemplate.delete(challengeKey);
         }
+    }
+
+    /**
+     * The WebAuthn ceremony on its own, separated from the checks applied to its result.
+     * Behaviour is unchanged: this is the same call that used to sit inline in
+     * {@link #redeemAssertion}.
+     *
+     * <p>
+     * It is a seam, and it exists because the user-verification bar had none. That bar is
+     * the whole of what separates a step-up from a sign-in, and nothing in the suite could
+     * build an assertion that failed it, so switching it off was an edit no test objected
+     * to. Overriding this one method lets a test hand {@link #redeemAssertion} a result whose
+     * {@code isUserVerified()} is false and watch what the bar does with it.
+     */
+    AssertionResult runAssertion(String storedRequest, JsonNode credential)
+            throws AssertionFailedException, IOException {
+        return relyingParty().finishAssertion(FinishAssertionOptions.builder()
+                .request(AssertionRequest.fromJson(storedRequest))
+                .response(PublicKeyCredential.parseAssertionResponseJson(objectMapper.writeValueAsString(credential)))
+                .build());
     }
 
     @Override
@@ -259,8 +388,17 @@ public class PasskeyService implements CredentialRepository {
                         .build())
                 .credentialRepository(this)
                 .origins(origins)
-                .allowUntrustedAttestation(true)
+                // Deliberate non-change: an authenticator that legitimately never increments its
+                // signature counter (every passkey stored in a synced credential manager) would be
+                // locked out of its own account by counter validation, and the counter is not what
+                // the step-up bar rests on. The bar rests on user verification, checked per
+                // assertion in redeemAssertion.
                 .validateSignatureCounter(false)
+                // Deliberate non-change: no attestation metadata service is configured, so
+                // requiring trusted attestation would refuse every registration rather than
+                // filter authenticators. Attestation says which authenticator model registered,
+                // not whether this assertion verified the human, so it is not the step-up bar.
+                .allowUntrustedAttestation(true)
                 .build();
     }
 
@@ -324,6 +462,23 @@ public class PasskeyService implements CredentialRepository {
         return ASSERTION_KEY_PREFIX + sessionId;
     }
 
-    public record PasskeyAuthentication(String userId) {
+    private String stepUpKey(String stepUpId) {
+        return STEP_UP_KEY_PREFIX + stepUpId;
+    }
+
+    /**
+     * Who answered, and when the credential that answered was registered.
+     *
+     * @param userId                 the account the asserted credential belongs to. Resolving
+     *                               it is not accepting it: the caller must still check that
+     *                               this is the account it is acting for
+     * @param credentialRegisteredAt when that credential was stored. A phone change reads it
+     *                               to refuse a credential minted minutes ago by whoever
+     *                               holds the session, exactly as it refuses a PIN of that
+     *                               age. Never null for a stored credential: {@code
+     *                               passkey_credentials.created_at} has been NOT NULL since
+     *                               the table was created
+     */
+    public record PasskeyAuthentication(String userId, Instant credentialRegisteredAt) {
     }
 }

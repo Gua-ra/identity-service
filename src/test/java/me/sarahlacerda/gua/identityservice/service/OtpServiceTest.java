@@ -286,6 +286,74 @@ class OtpServiceTest {
         verify(smsSender).send("+5511888888888", "Código Gua: 333333");
     }
 
+    // -------------------- scoped codes --------------------
+
+    @Test
+    void aScopedSendWritesOutsideTheKeyThePublicSendOwns() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("123456");
+
+        otpService.sendScopedOtp(OtpScope.PIN_CHANGE, "chal-1", PHONE, "127.0.0.1", null);
+
+        // Keyed to the challenge, so POST /otp/send, which only ever writes the per-phone key,
+        // can neither plant a code here ahead of the flow nor have one of its codes accepted.
+        verify(valueOperations).set(eq("otp:code:pin-change:chal-1"), eq("123456"),
+                eq(properties.getOtp().getTtl()));
+        verify(valueOperations, never()).set(eq(CODE_KEY), anyString(), any());
+        verify(redisTemplate).delete("otp:attempts:pin-change:chal-1");
+        verify(redisTemplate, never()).delete(ATTEMPTS_KEY);
+        // Same send limits as the public path: namespacing the code is not an exemption.
+        verify(rateLimiter).checkRate("otp:rate:phone:" + PHONE,
+                properties.getOtp().getMaxRequestsPerPhonePerHour(), Duration.ofHours(1));
+        verify(rateLimiter).checkRate("otp:rate:ip:127.0.0.1", properties.getOtp().getMaxRequestsPerIpPerHour(),
+                Duration.ofHours(1));
+        verify(smsSender).send(eq(PHONE), anyString());
+    }
+
+    @Test
+    void aPublicCodeDoesNotSatisfyAScopedVerify() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get("otp:code:pin-change:chal-1")).thenReturn(null);
+
+        // A code the public send minted for this number is presented to the PIN change flow.
+        assertThatThrownBy(() -> otpService.verifyScopedOtp(OtpScope.PIN_CHANGE, "chal-1", "654321"))
+                .isInstanceOf(InvalidOtpException.class);
+
+        // The per-phone key is never even read, so whatever lives under it is irrelevant.
+        verify(valueOperations, never()).get(CODE_KEY);
+        // And nothing is counted: there is no scoped code to guess at.
+        verify(valueOperations, never()).increment(anyString());
+    }
+
+    @Test
+    void aScopedCodeIsSingleUseAndCarriesTheSameGuessBudget() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        String codeKey = "otp:code:pin-change:chal-1";
+        String attemptsKey = "otp:attempts:pin-change:chal-1";
+        when(valueOperations.get(codeKey)).thenReturn("654321");
+        when(valueOperations.increment(attemptsKey)).thenReturn(1L, 2L, 3L, 4L, 5L);
+
+        for (int guess = 1; guess <= properties.getOtp().getMaxVerifyAttempts(); guess++) {
+            assertThatThrownBy(() -> otpService.verifyScopedOtp(OtpScope.PIN_CHANGE, "chal-1", "000000"))
+                    .isInstanceOf(InvalidOtpException.class);
+        }
+
+        // The cap burns the scoped code exactly as it burns a per-phone one, and the spent
+        // counter is left to expire with it.
+        verify(redisTemplate).delete(codeKey);
+        verify(redisTemplate, never()).delete(attemptsKey);
+        assertThat(count("exhausted")).isEqualTo(1.0);
+    }
+
+    @Test
+    void discardingAScopedChallengeTakesItsCodeAndItsCounter() {
+        otpService.discardScopedOtp(OtpScope.PIN_CHANGE, "chal-1");
+
+        verify(redisTemplate).delete("otp:code:pin-change:chal-1");
+        verify(redisTemplate).delete("otp:attempts:pin-change:chal-1");
+        verify(redisTemplate, never()).delete(CODE_KEY);
+    }
+
     private double count(String result) {
         Counter counter = metrics.find("gua.identity.otp.verify").tag("result", result).counter();
         return counter == null ? 0.0 : counter.count();

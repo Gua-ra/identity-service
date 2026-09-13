@@ -42,7 +42,10 @@ class RateLimitConfigurationTest {
             "/login/otp, 10, PT1M",
             "/login/pin, 10, PT1M",
             "/login/passkey/auth/options, 20, PT1M",
-            "/login/passkey/auth/verify, 20, PT1M"
+            "/login/passkey/auth/verify, 20, PT1M",
+            // Mints a WebAuthn challenge that can be spent as a step-up factor, so it needs
+            // its own rule for the same reason the credential checks above do.
+            "/security/passkey/stepup/options, 20, PT5M"
     })
     void credentialEndpointsHaveTheirOwnPerAddressRule(String path, int limit, Duration refresh) {
         runner.run(ctx -> {

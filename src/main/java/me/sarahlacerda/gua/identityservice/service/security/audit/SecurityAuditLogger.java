@@ -14,9 +14,11 @@ public interface SecurityAuditLogger {
 
     void pinLocked(String userId, Instant lockedUntil);
 
-    void pinResetRequested(String userId, String maskedPhone, String requesterIp);
+    void accountRecoveryRequested(String userId, String maskedPhone, String requesterIp);
 
-    void pinResetCompleted(String userId);
+    void accountRecoveryCompleted(String userId, int passkeysRemoved);
+
+    void accountRecoveryCancelled(String userId, String requesterIp);
 
     void pinChangeStarted(String userId, String maskedPhone, String requesterIp);
 

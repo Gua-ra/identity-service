@@ -11,17 +11,21 @@ import lombok.RequiredArgsConstructor;
 import me.sarahlacerda.gua.identityservice.client.matrix.MatrixAdminClient;
 import me.sarahlacerda.gua.identityservice.domain.MatrixSession;
 import me.sarahlacerda.gua.identityservice.domain.VerifyOtpResult;
+import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneAlreadyLinkedException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService;
+import me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy;
 import me.sarahlacerda.gua.identityservice.service.security.DeviceNotificationService;
+import me.sarahlacerda.gua.identityservice.service.security.PinPolicy;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService.DeviceMetadata;
@@ -41,12 +45,14 @@ public class IdentityOrchestrationService {
     private final PhoneNumberHasher phoneNumberHasher;
     private final PhoneNumberMasker phoneNumberMasker;
     private final UserSecurityService userSecurityService;
+    private final AuthFactorPolicy authFactorPolicy;
     private final TrustedDeviceService trustedDeviceService;
     private final DeviceNotificationService deviceNotificationService;
     private final UsernamePolicy usernamePolicy;
     private final MeterRegistry metrics;
     private final RegistrationGuard registrationGuard;
     private final AccountGenesisService accountGenesisService;
+    private final PinPolicy pinPolicy;
 
     public void sendOtp(String e164PhoneNumber, String requesterIp, String language) {
         otpService.sendOtp(e164PhoneNumber, requesterIp, language);
@@ -72,7 +78,21 @@ public class IdentityOrchestrationService {
         final DirectoryEntry entry = existingEntry.get();
         final String userId = entry.getUserId();
 
-        if (userSecurityService.hasPin(userId)) {
+        // Same answer the interactive login flow gets, from the same component: this path
+        // and /login used to decide it separately and could drift. The SMS code never finishes a
+        // sign-in on its own. This path cannot run a passkey ceremony or set a first factor, so an
+        // account that needs either is sent to the interactive sign-in instead. Refused before
+        // any session is minted.
+        AuthFactorPolicy.LoginPolicy loginPolicy = authFactorPolicy.loginPolicy(userId);
+        if (loginPolicy.passkeyRequired()) {
+            throw new LoginFlowException(HttpStatus.FORBIDDEN, "passkey_required",
+                    "This account signs in with a passkey. Update Gua to sign in.");
+        }
+        if (loginPolicy.factorSetupRequired()) {
+            throw new LoginFlowException(HttpStatus.FORBIDDEN, "factor_setup_required",
+                    "This account needs a PIN or passkey. Update Gua to sign in.");
+        }
+        if (loginPolicy.pinStepRequired()) {
             if (!StringUtils.hasText(providedPin)) {
                 // Two-step verification: issue a short-lived challenge token that the
                 // client redeems at /signin/verify-pin with the user's PIN. The OTP has
@@ -175,6 +195,15 @@ public class IdentityOrchestrationService {
             throw new UsernameTakenException("Username already taken");
         }
 
+        // Every account is created holding a factor, and this path can only give it a PIN. Checked
+        // before the token is consumed, like every other recoverable input, so a client that sent
+        // none can ask the user for one and retry with the same token.
+        if (!StringUtils.hasText(providedPin)) {
+            throw new LoginFlowException(HttpStatus.BAD_REQUEST, "pin_required",
+                    "Choose a PIN to protect your account.");
+        }
+        pinPolicy.validate(providedPin);
+
         // All pre-flight checks passed; from here we commit the signup. Consume the
         // token first so
         // a duplicate request can't race past the userExists check.
@@ -182,9 +211,7 @@ public class IdentityOrchestrationService {
 
         final String resolvedDisplayName = StringUtils.hasText(displayName) ? displayName.trim() : localpart;
 
-        if (StringUtils.hasText(providedPin)) {
-            userSecurityService.setInitialPin(userId, providedPin);
-        }
+        userSecurityService.setInitialPin(userId, providedPin);
 
         final MatrixSession session = matrixProvisioningService.ensureSessionForUser(
                 userId,

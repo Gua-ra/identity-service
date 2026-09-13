@@ -13,6 +13,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -34,6 +36,7 @@ import me.sarahlacerda.gua.identityservice.exception.InvalidPhoneChangeChallenge
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneAlreadyLinkedException;
 import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
+import me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.MatrixProvisioningService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
@@ -49,6 +52,9 @@ class PhoneChangeServiceTest {
     private static final String NEW_E164 = "+14155550123";
     private static final String CHALLENGE = "chal-1";
     private static final String CHALLENGE_KEY = "phone:change:chal-1";
+    // Old enough that the fresh-2FA hold on the credential has long expired, so these tests
+    // are about precedence and ownership rather than about the hold. The hold has its own.
+    private static final Instant REGISTERED_LONG_AGO = Instant.now().minus(Duration.ofDays(400));
 
     @Mock
     private StringRedisTemplate redisTemplate;
@@ -90,6 +96,10 @@ class PhoneChangeServiceTest {
                 redisTemplate,
                 reauthService,
                 userSecurityService,
+                // The real policy over the mocked collaborators: the step-up reads its factor
+                // answers through it, so these tests drive it with the same hasPin / hasPasskey
+                // stubs they always used and the delegation is exercised rather than stubbed out.
+                new AuthFactorPolicy(userSecurityService, passkeyService),
                 passkeyService,
                 phoneChangeOtpService,
                 phoneNumberNormalizer,
@@ -208,14 +218,251 @@ class PhoneChangeServiceTest {
     void startAllowsPasskeyOnlyAccount() {
         when(userSecurityService.hasPin(USER)).thenReturn(false);
         JsonNode credential = JsonNodeFactory.instance.objectNode();
-        when(passkeyService.finishAuthentication("pk-sess", credential))
-                .thenReturn(new PasskeyService.PasskeyAuthentication(USER));
+        when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
+                .thenReturn(new PasskeyService.PasskeyAuthentication(USER, REGISTERED_LONG_AGO));
         primeSuccessfulStart();
 
         PhoneChangeService.PhoneChangeStart start = service.startPhoneNumberChange(USER, "tok", NEW_RAW, null,
-                "pk-sess", credential, "1.2.3.4", "en");
+                "pk-stepup", credential, "1.2.3.4", "en");
 
-        verify(passkeyService).finishAuthentication("pk-sess", credential);
+        // The step-up ceremony, not the sign-in one: a sign-in assertion does not have to
+        // verify the user, and this one does.
+        verify(passkeyService).finishStepUpAssertion("pk-stepup", credential);
+        verify(passkeyService, never()).finishAuthentication(anyString(), any());
+        verify(phoneChangeOtpService).send(start.challengeId(), NEW_E164, "1.2.3.4", "en");
+    }
+
+    @Test
+    void startNeverSpendsASignInAssertionAsTheStepUp() {
+        when(userSecurityService.hasPin(USER)).thenReturn(false);
+        JsonNode credential = JsonNodeFactory.instance.objectNode();
+        // The step-up ceremony refuses the response, for instance because it did not verify
+        // the user. Nothing downstream runs and no second factor is inferred from the attempt.
+        doThrow(new me.sarahlacerda.gua.identityservice.exception.LoginFlowException(
+                org.springframework.http.HttpStatus.FORBIDDEN, "passkey_user_verification_required", "no uv"))
+                .when(passkeyService).finishStepUpAssertion("pk-stepup", credential);
+
+        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, null, "pk-stepup", credential,
+                "1.2.3.4", "en"))
+                .isInstanceOf(me.sarahlacerda.gua.identityservice.exception.LoginFlowException.class);
+
+        verify(userSecurityService, never()).enforcePhoneChangeCooldown(anyString());
+        verifyNoInteractions(phoneChangeOtpService);
+        verifyNoInteractions(deviceNotificationService);
+    }
+
+    @Test
+    void startRefusesAnAssertionThatResolvesToAnotherAccountBeforeAcceptingIt() {
+        when(userSecurityService.hasPin(USER)).thenReturn(false);
+        JsonNode credential = JsonNodeFactory.instance.objectNode();
+        when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@mallory:gua.global", REGISTERED_LONG_AGO));
+
+        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, null, "pk-stepup", credential,
+                "1.2.3.4", "en"))
+                .isInstanceOf(InvalidPinException.class);
+
+        verify(auditLogger).reauthFailed(USER, ReauthOperation.PHONE_CHANGE.name(), "1.2.3.4");
+        verify(userSecurityService, never()).enforcePhoneChangeCooldown(anyString());
+        verifyNoInteractions(phoneChangeOtpService);
+    }
+
+    // -------------------- /start: step-up precedence --------------------
+
+    @Test
+    void aVerifiedPasskeySettlesTheStepUpWithoutThePinOnAnAccountThatHasBoth() {
+        when(userSecurityService.hasPin(USER)).thenReturn(true);
+        JsonNode credential = JsonNodeFactory.instance.objectNode();
+        when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
+                .thenReturn(new PasskeyService.PasskeyAuthentication(USER, REGISTERED_LONG_AGO));
+        primeSuccessfulStart();
+
+        PhoneChangeService.PhoneChangeStart start = service.startPhoneNumberChange(USER, "tok", NEW_RAW, null,
+                "pk-stepup", credential, "1.2.3.4", "en");
+
+        // The passkey is the preferred factor, so proving it is enough on its own. Asking for
+        // the PIN as well would make the stronger factor worth less than the weaker one, and
+        // in practice would mean nobody could use it: the PIN would still be the thing that
+        // had to be produced every time.
+        verify(userSecurityService, never()).validatePinOrThrow(anyString(), anyString());
+        verify(phoneChangeOtpService).send(start.challengeId(), NEW_E164, "1.2.3.4", "en");
+    }
+
+    @Test
+    void theFreshPinHoldNeverAppliesToAnAccountThatProvedAPasskey() {
+        when(userSecurityService.hasPin(USER)).thenReturn(true);
+        JsonNode credential = JsonNodeFactory.instance.objectNode();
+        when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
+                .thenReturn(new PasskeyService.PasskeyAuthentication(USER, REGISTERED_LONG_AGO));
+        primeSuccessfulStart();
+
+        service.startPhoneNumberChange(USER, "tok", NEW_RAW, null, "pk-stepup", credential, "1.2.3.4", "en");
+
+        // The hold exists to stop a PIN minted minutes ago from re-pointing the number. This
+        // caller did not spend a PIN, so holding them would be refusing someone for a reason
+        // that has nothing to do with what they proved.
+        verify(userSecurityService, never()).enforcePhoneChangePinHold(anyString());
+        // Everything the hold is NOT standing in for still runs.
+        verify(userSecurityService).enforcePhoneChangeCooldown(USER);
+    }
+
+    @Test
+    void thePasskeyIsTriedBeforeThePinRatherThanAfterIt() {
+        when(userSecurityService.hasPin(USER)).thenReturn(true);
+        JsonNode credential = JsonNodeFactory.instance.objectNode();
+        // The assertion is refused. If the PIN branch ran first, this would surface as a PIN
+        // failure and the account would have been charged a PIN attempt for a passkey problem.
+        doThrow(new me.sarahlacerda.gua.identityservice.exception.LoginFlowException(
+                org.springframework.http.HttpStatus.FORBIDDEN, "passkey_user_verification_required", "no uv"))
+                .when(passkeyService).finishStepUpAssertion("pk-stepup", credential);
+
+        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, "123456", "pk-stepup",
+                credential, "1.2.3.4", "en"))
+                .isInstanceOf(me.sarahlacerda.gua.identityservice.exception.LoginFlowException.class);
+
+        verify(userSecurityService, never()).validatePinOrThrow(anyString(), anyString());
+        verifyNoInteractions(phoneChangeOtpService);
+    }
+
+    @Test
+    void theOwnershipCheckStillRunsBeforeTheAssertionIsAcceptedOnAnAccountWithAPin() {
+        when(userSecurityService.hasPin(USER)).thenReturn(true);
+        JsonNode credential = JsonNodeFactory.instance.objectNode();
+        when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@mallory:example.test", REGISTERED_LONG_AGO));
+
+        // Now that an assertion can settle the step-up on its own, this check is the only thing
+        // between somebody else's credential and the change. It must refuse before acceptance,
+        // and it must not quietly fall through to the PIN branch either.
+        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, "123456", "pk-stepup",
+                credential, "1.2.3.4", "en"))
+                .isInstanceOf(InvalidPinException.class);
+
+        verify(userSecurityService, never()).validatePinOrThrow(anyString(), anyString());
+        verify(userSecurityService, never()).enforcePhoneChangeCooldown(anyString());
+        verifyNoInteractions(phoneChangeOtpService);
+    }
+
+    @Test
+    void anAccountThatOffersNoAssertionStillGetsThroughOnItsPin() {
+        when(userSecurityService.hasPin(USER)).thenReturn(true);
+        primeSuccessfulStart();
+
+        PhoneChangeService.PhoneChangeStart start = service.startPhoneNumberChange(USER, "tok", NEW_RAW, "123456",
+                null, null, "1.2.3.4", "en");
+
+        // This is the case that makes a broken passkey survivable: the step-up never asks
+        // whether the account has a credential registered, so a credential left on a lost
+        // phone cannot turn into "no way to change your number". Registration is not
+        // usability, and only the second one is being tested for here.
+        verify(passkeyService, never()).hasPasskey(anyString());
+        verify(userSecurityService).validatePinOrThrow(USER, "123456");
+        verify(phoneChangeOtpService).send(start.challengeId(), NEW_E164, "1.2.3.4", "en");
+    }
+
+    // -------------------- /start: fresh-2FA hold --------------------
+
+    @Test
+    void startRefusesAPinThatWasMintedInsideTheHold() {
+        when(userSecurityService.hasPin(USER)).thenReturn(true);
+        doThrow(new TwoFactorCooldownException("too new", 600))
+                .when(userSecurityService).enforcePhoneChangePinHold(USER);
+
+        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, "123456", null, null, "1.2.3.4",
+                "en"))
+                .isInstanceOf(TwoFactorCooldownException.class);
+
+        // The PIN was correct; it is simply too new to move the number. Nothing past the
+        // step-up runs, so no OTP is spent and the old number is not alerted.
+        verify(userSecurityService).validatePinOrThrow(USER, "123456");
+        verify(userSecurityService, never()).enforcePhoneChangeCooldown(anyString());
+        verify(phoneNumberNormalizer, never()).toE164(anyString());
+        verifyNoInteractions(phoneChangeOtpService);
+        verifyNoInteractions(deviceNotificationService);
+    }
+
+    @Test
+    void startChecksTheHoldOnlyAfterThePinItself() {
+        when(userSecurityService.hasPin(USER)).thenReturn(true);
+        doThrow(new InvalidPinException("wrong")).when(userSecurityService).validatePinOrThrow(USER, "000000");
+
+        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, "000000", null, null, "1.2.3.4",
+                "en"))
+                .isInstanceOf(InvalidPinException.class);
+
+        // A wrong PIN is still a wrong PIN, with the failure counting that comes with it.
+        // The hold is not an oracle that answers before the PIN is checked.
+        verify(userSecurityService, never()).enforcePhoneChangePinHold(anyString());
+    }
+
+    @Test
+    void startRunsTheHoldAndTheChangeCooldownAsSeparateRefusals() {
+        when(userSecurityService.hasPin(USER)).thenReturn(true);
+        primeSuccessfulStart();
+
+        service.startPhoneNumberChange(USER, "tok", NEW_RAW, "123456", null, null, "1.2.3.4", "en");
+
+        // Both run, in this order, and neither stands in for the other.
+        InOrder order = inOrder(userSecurityService);
+        order.verify(userSecurityService).validatePinOrThrow(USER, "123456");
+        order.verify(userSecurityService).enforcePhoneChangePinHold(USER);
+        order.verify(userSecurityService).enforcePhoneChangeCooldown(USER);
+    }
+
+    @Test
+    void startRefusesAPasskeyThatWasRegisteredInsideTheHold() {
+        JsonNode credential = JsonNodeFactory.instance.objectNode();
+        Instant enrolledMinutesAgo = Instant.now().minus(Duration.ofMinutes(5));
+        when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
+                .thenReturn(new PasskeyService.PasskeyAuthentication(USER, enrolledMinutesAgo));
+        doThrow(new TwoFactorCooldownException("too new", 600))
+                .when(userSecurityService).enforceFreshFactorHold(enrolledMinutesAgo);
+
+        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, null, "pk-stepup", credential,
+                "1.2.3.4", "en"))
+                .isInstanceOf(TwoFactorCooldownException.class);
+
+        // Holding only the PIN would price the same takeover at seven days or at nothing
+        // depending on which factor the attacker picked, and the cheap one is the passkey:
+        // POST /security/passkey/enroll/start asks a session holder for nothing but the
+        // bearer token, and the assertion that follows settles this step-up with the PIN
+        // never asked for. Nothing past the step-up runs.
+        verify(userSecurityService, never()).enforcePhoneChangeCooldown(anyString());
+        verify(phoneNumberNormalizer, never()).toE164(anyString());
+        verifyNoInteractions(phoneChangeOtpService);
+        verifyNoInteractions(deviceNotificationService);
+    }
+
+    @Test
+    void startWeighsTheCredentialsAgeOnlyAfterItIsKnownToBeTheCallersOwn() {
+        JsonNode credential = JsonNodeFactory.instance.objectNode();
+        when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@mallory:example.test", REGISTERED_LONG_AGO));
+
+        assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, null, "pk-stepup", credential,
+                "1.2.3.4", "en"))
+                .isInstanceOf(InvalidPinException.class);
+
+        // Ownership stays the first thing an accepted assertion meets. A hold weighed ahead
+        // of it would be answering a question about somebody else's credential.
+        verify(userSecurityService, never()).enforceFreshFactorHold(any());
+    }
+
+    @Test
+    void startLetsAnEstablishedPasskeySettleTheStepUpAtOnce() {
+        JsonNode credential = JsonNodeFactory.instance.objectNode();
+        when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
+                .thenReturn(new PasskeyService.PasskeyAuthentication(USER, REGISTERED_LONG_AGO));
+        primeSuccessfulStart();
+
+        PhoneChangeService.PhoneChangeStart start = service.startPhoneNumberChange(USER, "tok", NEW_RAW, null,
+                "pk-stepup", credential, "1.2.3.4", "en");
+
+        // The hold is asked about every credential that is accepted, and it answers "no hold"
+        // for one that has been registered a while. The refusal expires; it removes no factor
+        // from anybody.
+        verify(userSecurityService).enforceFreshFactorHold(REGISTERED_LONG_AGO);
+        verify(userSecurityService, never()).validatePinOrThrow(anyString(), anyString());
         verify(phoneChangeOtpService).send(start.challengeId(), NEW_E164, "1.2.3.4", "en");
     }
 

@@ -29,10 +29,18 @@ public class SecurityConfig {
                         "/account/genesis",
                         "/signup/complete",
                         "/signin/verify-pin",
-                        "/security/pin/reset",
-                        "/security/pin/reset/complete",
                         "/oauth2/token",
                         "/login/**");
+
+        /**
+         * Retired endpoints. Not open endpoints: their handlers take no input, touch nothing and
+         * answer only 410 endpoint_retired. They are let past the bearer check so a client that
+         * still calls them unauthenticated, as it always did, is told the path is gone rather than
+         * being sent a 401 that reads like a session problem.
+         */
+        private static final List<String> RETIRED_POST_ENDPOINTS = List.of(
+                        "/security/pin/reset",
+                        "/security/pin/reset/complete");
 
         private static final List<String> OPEN_GET_ENDPOINTS = List.of(
                         "/.well-known/**",
@@ -68,6 +76,8 @@ public class SecurityConfig {
                 http.authorizeHttpRequests(authorize -> authorize
                                 .requestMatchers(HttpMethod.POST, OPEN_POST_ENDPOINTS.toArray(String[]::new))
                                 .permitAll()
+                                .requestMatchers(HttpMethod.POST, RETIRED_POST_ENDPOINTS.toArray(String[]::new))
+                                .permitAll()
                                 .requestMatchers(HttpMethod.GET, OPEN_GET_ENDPOINTS.toArray(String[]::new)).permitAll()
                                 .anyRequest().authenticated());
                 http.addFilterBefore(oidcAccessTokenAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
@@ -82,7 +92,7 @@ public class SecurityConfig {
                 List<RequestMatcher> openEndpoints = Stream.concat(
                                 OPEN_GET_ENDPOINTS.stream().map(
                                                 pattern -> (RequestMatcher) builder.matcher(HttpMethod.GET, pattern)),
-                                OPEN_POST_ENDPOINTS.stream().map(
+                                Stream.concat(OPEN_POST_ENDPOINTS.stream(), RETIRED_POST_ENDPOINTS.stream()).map(
                                                 pattern -> (RequestMatcher) builder.matcher(HttpMethod.POST, pattern)))
                                 .toList();
 

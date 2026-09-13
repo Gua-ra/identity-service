@@ -250,6 +250,44 @@ public class IdentityServiceProperties {
          */
         @Min(1)
         private int maxPhoneChangeOtpAttempts = 5;
+
+        /**
+         * How long an account must have gone without a completed sign-in before a delayed
+         * account recovery may be requested. Unset falls back to {@link #pinResetCooldown}.
+         */
+        private Duration accountRecoveryDormancy;
+
+        /**
+         * How long a requested account recovery waits before it can be finished. Unset falls back
+         * to {@link #pinResetCooldown}.
+         */
+        private Duration accountRecoveryWait;
+
+        /**
+         * Lets either recovery duration go below the 24 hour floor. Dev only, so a human can walk
+         * a recovery through in minutes; startup refuses a shorter duration without it.
+         */
+        private boolean accountRecoveryAllowShortForTesting = false;
+
+        public Duration getAccountRecoveryDormancy() {
+            return accountRecoveryDormancy != null ? accountRecoveryDormancy : pinResetCooldown;
+        }
+
+        public Duration getAccountRecoveryWait() {
+            return accountRecoveryWait != null ? accountRecoveryWait : pinResetCooldown;
+        }
+
+        /**
+         * How long a recovery episode stays live from the moment it was requested: the wait, then
+         * at least as long again to finish in, and never less than the dormancy period. Past it
+         * the stamp is a leftover and is treated as absent, so an abandoned request can never
+         * satisfy the wait of the next one.
+         */
+        public Duration getAccountRecoveryEpisodeLife() {
+            Duration wait = getAccountRecoveryWait();
+            Duration dormancy = getAccountRecoveryDormancy();
+            return wait.plus(wait.compareTo(dormancy) >= 0 ? wait : dormancy);
+        }
     }
 
     @Getter
