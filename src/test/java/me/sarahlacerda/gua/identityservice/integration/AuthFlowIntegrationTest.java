@@ -361,10 +361,14 @@ class AuthFlowIntegrationTest {
         login.post("/login/phone", Map.of("phoneNumber", phone));
         Map<?, ?> state = login.post("/login/otp", Map.of("code", readOtpFromRedis(phone)));
         assertThat(state.get("phase")).isEqualTo("PIN_REQUIRED");
-        Map<?, ?> recovery = (Map<?, ?>) state.get("recovery");
-        assertThat(recovery).isNotNull();
+        Object recoveryValue = state.get("recovery");
+        assertThat(recoveryValue).as("recovery=%s", recoveryValue).isInstanceOf(Map.class);
+        Map<?, ?> recovery = (Map<?, ?>) recoveryValue;
         assertThat(recovery.get("status")).isEqualTo("TOO_SOON");
-        assertThat(((Number) recovery.get("availableAtEpochSeconds")).longValue() % 3600).isZero();
+        Object availableAt = recovery.get("availableAtEpochSeconds");
+        assertThat(availableAt).as("availableAtEpochSeconds=%s (%s)", availableAt,
+                availableAt == null ? null : availableAt.getClass().getName()).isInstanceOf(Number.class);
+        assertThat(((Number) availableAt).longValue() % 3600).isZero();
 
         String otpKey = "otp:code:" + phone;
         String codeBefore = redisTemplate.opsForValue().get(otpKey);
