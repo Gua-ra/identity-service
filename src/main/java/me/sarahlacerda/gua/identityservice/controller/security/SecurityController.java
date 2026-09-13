@@ -49,6 +49,7 @@ import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactor;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
+import me.sarahlacerda.gua.identityservice.service.security.PinChangeService;
 import me.sarahlacerda.gua.identityservice.service.security.ReauthOperation;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 
@@ -69,6 +70,7 @@ public class SecurityController {
     private final PasskeyService passkeyService;
     private final AuthFactorPolicy authFactorPolicy;
     private final AccountLocalpartResolver accountLocalparts;
+    private final PinChangeService pinChangeService;
 
     @GetMapping("/pin/status")
     @Operation(summary = "Check the authenticated user's two-step verification state", description = "Returns hasPin=true once the user has configured a security PIN (drives the 'set up two-step verification' nudge), and how long the fresh-2FA hold on the account's PIN still has to run before that PIN can change the phone number. Read it when about to offer the PIN, not as 'can I change my number now': it is silent about the separate 24h phone-change cooldown, and it does not describe the passkey path, which carries its own hold on the age of the asserted credential and is refused the same way. It also reports which factors the account has REGISTERED, which one to offer first, and which ones a phone change accepts in precedence order, so a client offers the right factor instead of hardcoding the rule. Registration is server truth; whether a registered passkey is usable on this device is not reported and is never accepted as an input.", security = @SecurityRequirement(name = "oidcAccessToken"))
@@ -112,20 +114,20 @@ public class SecurityController {
     }
 
     @PostMapping("/pin/change/start")
-    @Operation(summary = "Start an OTP-protected PIN change", description = "Verifies the current PIN, enforces the change cooldown, and sends an OTP to the verified phone. Returns a challenge to redeem at /security/pin/change/complete.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @Operation(summary = "Start an OTP-protected PIN change", description = "Enforces the change cooldown, authorizes the change with a user-verifying passkey step-up assertion (preferred) or the current PIN, and sends an OTP to the verified phone. Returns a challenge to redeem at /security/pin/change/complete.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Challenge created and OTP sent"),
-            @ApiResponse(responseCode = "400", description = "Validation failed or current PIN incorrect", content = @Content),
+            @ApiResponse(responseCode = "400", description = "Validation failed, current PIN incorrect, passkey assertion refused, or twofa_cooldown_active for a freshly registered passkey", content = @Content),
             @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content),
             @ApiResponse(responseCode = "425", description = "Cooldown between PIN changes still active", content = @Content),
             @ApiResponse(responseCode = "429", description = "Too many attempts (PIN locked or rate limited)", content = @Content)
     })
     public ResponseEntity<PinChangeStartResponse> startPinChange(
-            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Current PIN and phone to receive the OTP", required = true, content = @Content(schema = @Schema(implementation = PinChangeStartRequest.class))) @RequestBody @Valid PinChangeStartRequest request,
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Phone to receive the OTP, and a passkey step-up assertion or the current PIN", required = true, content = @Content(schema = @Schema(implementation = PinChangeStartRequest.class))) @RequestBody @Valid PinChangeStartRequest request,
             @Parameter(hidden = true) HttpServletRequest servletRequest) {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
-        String challengeId = userSecurityService.startPinChange(userId, request.getPhone(), request.getCurrentPin(),
-                servletRequest.getRemoteAddr());
+        String challengeId = pinChangeService.start(userId, request.getPhone(), request.getCurrentPin(),
+                request.getPasskeyStepUpId(), request.getPasskeyCredential(), servletRequest.getRemoteAddr());
         long ttlSeconds = properties.getSecurity().getPinChangeChallengeTtl().toSeconds();
         return ResponseEntity.ok(new PinChangeStartResponse(challengeId, ttlSeconds));
     }
@@ -185,7 +187,7 @@ public class SecurityController {
     }
 
     @PostMapping("/passkey/stepup/options")
-    @Operation(summary = "Start a user-verifying passkey step-up", description = "Begins a WebAuthn assertion that may be spent as the step-up factor on a privileged operation, currently POST /account/phone/change/start. The ceremony is pinned to the authenticated account and demands user verification, so possession of an unlocked device is not on its own enough to stand in for the account PIN. Separate from the sign-in ceremony under /login: a challenge minted here cannot complete a login, and a login challenge cannot be spent here.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @Operation(summary = "Start a user-verifying passkey step-up", description = "Begins a WebAuthn assertion that may be spent as the step-up factor on a privileged operation, currently POST /account/phone/change/start and POST /security/pin/change/start. The ceremony is pinned to the authenticated account and demands user verification, so possession of an unlocked device is not on its own enough to stand in for the account PIN. Separate from the sign-in ceremony under /login: a challenge minted here cannot complete a login, and a login challenge cannot be spent here.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Assertion options created"),
             @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content),

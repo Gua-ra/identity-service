@@ -32,6 +32,7 @@ import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
+import me.sarahlacerda.gua.identityservice.service.security.PinChangeService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 import org.junit.jupiter.api.extension.ExtendWith;
 
@@ -53,6 +54,9 @@ class SecurityControllerTest {
     @Mock
     private PasskeyService passkeyService;
 
+    @Mock
+    private PinChangeService pinChangeService;
+
     private MockMvc mockMvc;
     private ObjectMapper objectMapper;
     private IdentityServiceProperties properties;
@@ -71,7 +75,7 @@ class SecurityControllerTest {
                 // Real policy over the mocked services, so the factor report and the enrollment
                 // guard are the ones the application computes.
                 new AuthFactorPolicy(userSecurityService, passkeyService),
-                new AccountLocalpartResolver(directoryService));
+                new AccountLocalpartResolver(directoryService), pinChangeService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new RestExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter())
@@ -127,10 +131,12 @@ class SecurityControllerTest {
     @Test
     void startPinChangeReturnsChallenge() throws Exception {
         org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
-        org.mockito.Mockito.when(userSecurityService.startPinChange(
+        org.mockito.Mockito.when(pinChangeService.start(
                 org.mockito.ArgumentMatchers.eq("@user:domain"),
                 org.mockito.ArgumentMatchers.eq("+12025550123"),
                 org.mockito.ArgumentMatchers.eq("123456"),
+                org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyString())).thenReturn("chal-1");
 
         PinChangeStartRequest request = new PinChangeStartRequest();
@@ -143,6 +149,27 @@ class SecurityControllerTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.challengeId")
                         .value("chal-1"));
+    }
+
+    @Test
+    void startPinChangePassesThePasskeyAssertionThrough() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
+        org.mockito.Mockito.when(pinChangeService.start(
+                org.mockito.ArgumentMatchers.eq("@user:domain"),
+                org.mockito.ArgumentMatchers.eq("+12025550123"),
+                org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.eq("step-1"),
+                org.mockito.ArgumentMatchers.argThat(node -> node != null && "cred-1".equals(node.path("id").asText())),
+                org.mockito.ArgumentMatchers.anyString())).thenReturn("chal-2");
+
+        // No currentPin at all: with an assertion supplied the PIN is not a required field.
+        String body = "{\"phone\":\"+12025550123\",\"passkeyStepUpId\":\"step-1\",\"passkeyCredential\":{\"id\":\"cred-1\"}}";
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/change/start")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.challengeId")
+                        .value("chal-2"));
     }
 
     @Test
