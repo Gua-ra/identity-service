@@ -50,6 +50,7 @@ public class RateLimitingInterceptor implements HandlerInterceptor {
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         long retrySeconds = Math.max(1, retryAfter.toSeconds());
         response.setHeader(HttpHeaders.RETRY_AFTER, Long.toString(retrySeconds));
-        response.getWriter().write("{\"message\":\"Rate limit exceeded\"}");
+        // Same shape as every other error body, so clients can branch on the code.
+        response.getWriter().write("{\"code\":\"rate_limited\",\"message\":\"Rate limit exceeded\"}");
     }
 }
