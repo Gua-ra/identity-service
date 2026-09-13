@@ -33,5 +33,15 @@ public record PinStatusResponse(
         @Schema(description = "The factors POST /account/phone/change/start accepts as its step-up, strongest "
                 + "first. A client should ask for the first one it can actually produce and fall back "
                 + "down the list; producing none of them is 403 step_up_required.",
-                example = "[\"PASSKEY\",\"PIN\"]") List<String> phoneChangeStepUpFactors) {
+                example = "[\"PASSKEY\",\"PIN\"]") List<String> phoneChangeStepUpFactors,
+
+        @Schema(description = "True while a delayed account recovery is live on the account. Every signed-in "
+                + "client shows a banner with a cancel action while it is (POST /security/recovery/cancel). "
+                + "Clients that predate the field treat it as false.", example = "false") boolean accountRecoveryPending,
+
+        @Schema(description = "When the live recovery can be finished, as epoch seconds. Null when no recovery "
+                + "is live.", example = "1760000000", nullable = true) Long accountRecoveryCompletableAtEpochSeconds,
+
+        @Schema(description = "When the live recovery stops being finishable, as epoch seconds. Null when no "
+                + "recovery is live.", example = "1760604800", nullable = true) Long accountRecoveryExpiresAtEpochSeconds) {
 }

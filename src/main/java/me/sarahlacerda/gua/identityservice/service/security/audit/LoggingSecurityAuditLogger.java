@@ -37,13 +37,18 @@ public class LoggingSecurityAuditLogger implements SecurityAuditLogger {
     }
 
     @Override
-    public void pinResetRequested(String userId, String maskedPhone, String requesterIp) {
-        log.info("PIN reset requested for user {} from IP {} (phone={})", userId, requesterIp, maskedPhone);
+    public void accountRecoveryRequested(String userId, String maskedPhone, String requesterIp) {
+        log.warn("Account recovery requested for user {} from IP {} (phone={})", userId, requesterIp, maskedPhone);
     }
 
     @Override
-    public void pinResetCompleted(String userId) {
-        log.info("PIN reset completed for user {}", userId);
+    public void accountRecoveryCompleted(String userId, int passkeysRemoved) {
+        log.warn("Account recovery completed for user {} (passkeysRemoved={})", userId, passkeysRemoved);
+    }
+
+    @Override
+    public void accountRecoveryCancelled(String userId, String requesterIp) {
+        log.warn("Account recovery cancelled by the account holder for user {} from IP {}", userId, requesterIp);
     }
 
     @Override

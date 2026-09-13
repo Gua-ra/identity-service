@@ -105,6 +105,32 @@ class OidcTokenServiceTest {
         }
     }
 
+    /**
+     * E2: only a completed account recovery asks the authentication service to end every other
+     * session, and it asks in the ID token, which is where upstream claims are read.
+     */
+    @Test
+    void onlyARecoverySignInCarriesTheEndOtherSessionsClaimAndOnlyInTheIdToken() throws ParseException {
+        OidcAuthorization recovery = new OidcAuthorization("@alice:gua.global", "+15551234567", "Alice", "alice",
+                Set.of("openid"), "mas", "nonce-1", true);
+        OidcTokenResponse recoveryTokens = tokenService.issueTokens(recovery);
+
+        assertThat(SignedJWT.parse(recoveryTokens.idToken()).getJWTClaimsSet().getClaim("gua_end_other_sessions"))
+                .isEqualTo(true);
+        assertThat(SignedJWT.parse(recoveryTokens.accessToken()).getJWTClaimsSet().getClaims())
+                .doesNotContainKey("gua_end_other_sessions");
+
+        OidcAuthorization ordinary = new OidcAuthorization("@alice:gua.global", "+15551234567", "Alice", "alice",
+                Set.of("openid"), "mas", "nonce-1");
+        OidcTokenResponse ordinaryTokens = tokenService.issueTokens(ordinary);
+
+        assertThat(ordinary.endOtherSessions()).isFalse();
+        assertThat(SignedJWT.parse(ordinaryTokens.idToken()).getJWTClaimsSet().getClaims())
+                .doesNotContainKey("gua_end_other_sessions");
+        assertThat(SignedJWT.parse(ordinaryTokens.accessToken()).getJWTClaimsSet().getClaims())
+                .doesNotContainKey("gua_end_other_sessions");
+    }
+
     @Test
     void parseAccessTokenRoundTrips() {
         OidcAuthorization authorization = new OidcAuthorization(

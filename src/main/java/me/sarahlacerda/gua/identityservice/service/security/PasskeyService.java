@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -69,6 +70,22 @@ public class PasskeyService implements CredentialRepository {
     /** Whether the given account already has at least one registered passkey. */
     public boolean hasPasskey(String userId) {
         return StringUtils.hasText(userId) && repository.existsByUserId(userId);
+    }
+
+    /**
+     * Removes every passkey stored for the account and returns how many there were.
+     *
+     * <p>
+     * Only a completed account recovery calls it, inside its own transaction and under the
+     * account's row lock. Recovery's premise is that these credentials cannot be used by the
+     * account holder, so leaving them in place would leave a lost or stolen device able to sign
+     * straight back in with passkey-first sign-in, which asks for no OTP.
+     */
+    @Transactional
+    public int removeAllForUser(String userId) {
+        List<PasskeyCredential> credentials = repository.findByUserId(userId);
+        repository.deleteAll(credentials);
+        return credentials.size();
     }
 
     public JsonNode startRegistration(String sessionId, LoginSession session) {

@@ -14,7 +14,7 @@ package me.sarahlacerda.gua.identityservice.service;
  *
  * <p>
  * {@code PhoneChangeOtpService} established the shape with
- * {@code otp:code:change:{challengeId}}; these are the same idea for the PIN flows.
+ * {@code otp:code:change:{challengeId}}; this is the same idea for the PIN change.
  */
 public enum OtpScope {
 
@@ -22,13 +22,7 @@ public enum OtpScope {
      * The OTP that completes an OTP-protected PIN change, keyed by the change challenge
      * handed out at {@code /security/pin/change/start}.
      */
-    PIN_CHANGE("pin-change"),
-
-    /**
-     * The OTP that completes a PIN reset, keyed by account. The reset flow has no
-     * challenge id on the wire, and the account is the thing the reset is pending on.
-     */
-    PIN_RESET("pin-reset");
+    PIN_CHANGE("pin-change");
 
     private final String keySegment;
 

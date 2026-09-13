@@ -33,14 +33,47 @@ public class LoginSession {
         OTP_SENT,
         /** Returning user with two-step verification; awaiting the PIN. */
         PIN_REQUIRED,
+        /**
+         * Returning user whose only factor is a passkey; awaiting the assertion. The PIN step is
+         * refused here, and the delayed account recovery is the way back for a user who cannot
+         * present the passkey.
+         */
+        PASSKEY_REQUIRED,
         /** New user; awaiting username + display name. */
         PROFILE_REQUIRED,
-        /** New user; offered to set an account PIN (two-step verification). */
+        /** An account holding no factor, after declining the passkey offer; must set a PIN. */
         PIN_SETUP,
-        /** Phone verification and any PIN step are complete; optional passkey setup. */
+        /**
+         * Passkey offer: the first factor of an account holding none, or an optional extra after a
+         * PIN sign-in.
+         */
         PASSKEY_SETUP,
         /** Authenticated; an authorization code has been issued. */
         COMPLETED
+    }
+
+    /**
+     * Which factor this session actually authenticated with. Deliberately separate from the wire
+     * enum {@code AuthFactor}: these are outcomes of this login, not factors an account holds, and
+     * two of them ({@link #ENROLLED}, {@link #RECOVERY}) are not factors at all.
+     *
+     * <p>
+     * A login is never completed without one. A session persisted before this field existed reads
+     * back without it and is refused at completion with {@code factor_required}; the user starts
+     * the login again.
+     */
+    public enum SessionFactor {
+        /** A passkey assertion resolved to this session's account. */
+        PASSKEY,
+        /** The account PIN was validated. */
+        PIN,
+        /**
+         * This session created the account's first factor: at the moment of enrollment, under the
+         * account's row lock, it held no other.
+         */
+        ENROLLED,
+        /** A delayed account recovery was completed in this session. */
+        RECOVERY
     }
 
     /**
@@ -73,6 +106,14 @@ public class LoginSession {
     /** See {@link Intent}. Absent from sessions persisted before it existed. */
     private Intent intent = Intent.PHONE;
     private String phoneNumber;
+    /**
+     * Set only by a successful {@code POST /login/otp}. A passkey sign-in never sets it, and the
+     * delayed account recovery is only offered to a session that has it, so recovery always starts
+     * from a proved phone number.
+     */
+    private boolean otpVerified;
+    /** See {@link SessionFactor}. Null until this session has authenticated with a factor. */
+    private SessionFactor authenticatedFactor;
     /**
      * Phone (E.164) pre-filled from the OIDC login_hint, shown on the phone step.
      */

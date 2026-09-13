@@ -1,7 +1,6 @@
 package me.sarahlacerda.gua.identityservice.service.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
@@ -15,12 +14,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
  * the phone-change step-up and recovery all get.
  *
  * <p>
- * Most of what is frozen here is what the policy must NOT do. The dangerous edits in this
- * area all look reasonable in isolation: narrow an operation's accepted factors by what the
- * account holds, let a registered passkey stand in for the PIN step, refuse recovery to an
- * account that has a stronger factor. Each of them turns a credential that has quietly
- * become unusable into an account with no way in at all, and this service has no way to
- * remove or replace a registered credential.
+ * Two kinds of thing are frozen here. That an SMS code never finishes a sign-in for an
+ * account holding a factor, including when passkeys are switched off. And what the policy must
+ * NOT do: narrow an operation's accepted factors by what the account holds, or refuse recovery
+ * to an account that has a stronger factor. Either of those turns a credential that has quietly
+ * become unusable into an account with no way back.
  */
 @ExtendWith(MockitoExtension.class)
 class AuthFactorPolicyTest {
@@ -99,43 +97,74 @@ class AuthFactorPolicyTest {
     // -------------------- login --------------------
 
     @Test
-    void aRegisteredPasskeyNeitherAddsNorRemovesThePinStep() {
-        when(passkeyService.isEnabled()).thenReturn(true);
+    void anAccountHoldingAPinIsAskedForItAndMayPresentItsPasskeyInstead() {
         when(passkeyService.hasPasskey(USER)).thenReturn(true);
         when(userSecurityService.hasPin(USER)).thenReturn(true);
 
         AuthFactorPolicy.LoginPolicy withBoth = policy().loginPolicy(USER);
 
-        // Preferred moves to the passkey, the PIN step does not move. Skipping it would let
-        // possession of a device stand in for knowledge on the permissive login side.
-        assertThat(withBoth.preferred()).isEqualTo(AuthFactor.PASSKEY);
         assertThat(withBoth.pinStepRequired()).isTrue();
-        assertThat(withBoth.allows(AuthFactor.PIN)).isTrue();
-        assertThat(withBoth.allows(AuthFactor.PHONE_OTP)).isTrue();
+        assertThat(withBoth.passkeyRequired()).isFalse();
+        assertThat(withBoth.factorSetupRequired()).isFalse();
+        assertThat(withBoth.completesWith(AuthFactor.PIN)).isTrue();
+        assertThat(withBoth.completesWith(AuthFactor.PASSKEY)).isTrue();
     }
 
     @Test
-    void anAccountWithAPasskeyAndNoPinIsNotForcedThroughAPinStep() {
-        when(passkeyService.isEnabled()).thenReturn(true);
+    void anAccountHoldingOnlyAPasskeyMustPresentIt() {
         when(passkeyService.hasPasskey(USER)).thenReturn(true);
         when(userSecurityService.hasPin(USER)).thenReturn(false);
 
-        AuthFactorPolicy.LoginPolicy loginPolicy = policy().loginPolicy(USER);
+        AuthFactorPolicy.LoginPolicy passkeyOnly = policy().loginPolicy(USER);
 
-        // The other half of the same rule: a registered passkey must not make the PIN
-        // mandatory either, or an account whose credential broke would have nothing to offer.
-        assertThat(loginPolicy.pinStepRequired()).isFalse();
-        assertThat(loginPolicy.fallbacks()).containsExactly(AuthFactor.PHONE_OTP);
+        // Not lockout: an account that cannot present it has the delayed recovery.
+        assertThat(passkeyOnly.passkeyRequired()).isTrue();
+        assertThat(passkeyOnly.pinStepRequired()).isFalse();
+        assertThat(passkeyOnly.factorSetupRequired()).isFalse();
+        assertThat(passkeyOnly.completesWith(AuthFactor.PASSKEY)).isTrue();
+        assertThat(passkeyOnly.completesWith(AuthFactor.PIN)).isFalse();
     }
 
     @Test
-    void loginKeepsThePhoneFallbackForEveryAccount() {
-        when(passkeyService.isEnabled()).thenReturn(true);
-        when(passkeyService.hasPasskey(USER)).thenReturn(true);
-        when(userSecurityService.hasPin(USER)).thenReturn(true);
+    void anAccountHoldingNothingMustSetUpAFactor() {
+        when(passkeyService.hasPasskey(USER)).thenReturn(false);
+        when(userSecurityService.hasPin(USER)).thenReturn(false);
 
-        assertThat(policy().loginPolicy(USER).fallbacks())
-                .containsExactly(AuthFactor.PIN, AuthFactor.PHONE_OTP);
+        AuthFactorPolicy.LoginPolicy nothing = policy().loginPolicy(USER);
+
+        assertThat(nothing.factorSetupRequired()).isTrue();
+        assertThat(nothing.pinStepRequired()).isFalse();
+        assertThat(nothing.passkeyRequired()).isFalse();
+    }
+
+    @Test
+    void thePhoneCodeNeverCompletesASignIn() {
+        for (boolean passkey : new boolean[] { true, false }) {
+            for (boolean pin : new boolean[] { true, false }) {
+                assertThat(new AuthFactorPolicy.LoginPolicy(passkey, pin).completesWith(AuthFactor.PHONE_OTP))
+                        .as("passkey=%s pin=%s", passkey, pin)
+                        .isFalse();
+            }
+        }
+    }
+
+    /**
+     * The stored-credential predicate. Switching passkeys off must not turn a passkey-only
+     * account into one the SMS code finishes, because the next step for that account would be
+     * setting a PIN of the SMS holder's choosing.
+     */
+    @Test
+    void aStoredPasskeyStillGatesSignInWhenTheDeploymentHasPasskeysSwitchedOff() {
+        lenient().when(passkeyService.isEnabled()).thenReturn(false);
+        when(passkeyService.hasPasskey(USER)).thenReturn(true);
+        when(userSecurityService.hasPin(USER)).thenReturn(false);
+
+        AuthFactorPolicy policy = policy();
+
+        assertThat(policy.passkeyHeld(USER)).isTrue();
+        assertThat(policy.passkeyRegistered(USER)).isFalse();
+        assertThat(policy.loginPolicy(USER).passkeyRequired()).isTrue();
+        assertThat(policy.loginPolicy(USER).factorSetupRequired()).isFalse();
     }
 
     // -------------------- step-up --------------------
@@ -193,39 +222,25 @@ class AuthFactorPolicyTest {
 
     @Test
     void recoveryIsTheSamePathWhetherOrNotTheAccountHoldsAPasskey() {
-        when(passkeyService.isEnabled()).thenReturn(true);
         when(passkeyService.hasPasskey(USER)).thenReturn(true);
 
         AuthFactorPolicy.RecoveryPolicy withPasskey = policy().recoveryFor(USER);
 
-        // The stronger factor is reported and NOT applied. Applying it would mean an account
-        // whose passkey broke has no login and no recovery, which is a worse failure than the
-        // one it would be closing, and closing it properly needs a protocol that can prove the
-        // passkey is really gone.
+        // Not refused for holding a stronger factor, which would leave that account no way back.
+        // The passkey is removed on completion, because the premise is that it cannot be used.
         assertThat(withPasskey.restores()).isEqualTo(AuthFactor.PIN);
         assertThat(withPasskey.provenBy()).isEqualTo(AuthFactor.PHONE_OTP);
-        assertThat(withPasskey.accountAlsoHoldsPasskey()).isTrue();
+        assertThat(withPasskey.removesPasskeys()).isTrue();
     }
 
     @Test
     void recoveryForAnAccountWithNoPasskeyReportsTheSameRestoreAndProof() {
-        when(passkeyService.isEnabled()).thenReturn(true);
         when(passkeyService.hasPasskey(USER)).thenReturn(false);
 
         AuthFactorPolicy.RecoveryPolicy withoutPasskey = policy().recoveryFor(USER);
 
         assertThat(withoutPasskey.restores()).isEqualTo(AuthFactor.PIN);
         assertThat(withoutPasskey.provenBy()).isEqualTo(AuthFactor.PHONE_OTP);
-        assertThat(withoutPasskey.accountAlsoHoldsPasskey()).isFalse();
-    }
-
-    @Test
-    void recordingARecoveryRequestNeverRefusesIt() {
-        lenient().when(passkeyService.isEnabled()).thenReturn(true);
-        lenient().when(passkeyService.hasPasskey(USER)).thenReturn(true);
-
-        // It leaves a line behind and returns. If this ever starts throwing, recovery has been
-        // gated on holding a stronger factor and the lockout above is back.
-        assertThatCode(() -> policy().recordRecoveryRequest(USER)).doesNotThrowAnyException();
+        assertThat(withoutPasskey.removesPasskeys()).isFalse();
     }
 }

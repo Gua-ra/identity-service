@@ -9,9 +9,10 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 /**
- * Freezes the decisions behind the step-up bar and the OTP namespacing, because each of
- * them is one plausible-looking edit away from either a bypass or a lockout and none of
- * them is visible in the behaviour of a single method.
+ * Freezes the decisions behind the step-up bar, the OTP namespacing, the sign-in factor gate
+ * and the delayed account recovery, because each of them is one plausible-looking edit away
+ * from either a bypass or a lockout and none of them is visible in the behaviour of a single
+ * method.
  */
 class AuthFactorPolicyGuardTest {
 
@@ -75,17 +76,21 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * Neither PIN flow may verify against the per-phone key the unauthenticated public
-     * send writes. Both go through the scoped API, which keys the code to the flow.
+     * The PIN change may not verify against the per-phone key the unauthenticated public send
+     * writes; it goes through the scoped API, which keys the code to the flow. And the account
+     * recovery sends no code at all: the OTP step that made it available already proved the
+     * number, and a second SMS would only be one more message an attacker can trigger.
      */
     @Test
     void thePinFlowsDoNotVerifyAgainstThePerPhoneOtpKey() throws IOException {
         String source = read(MAIN.resolve("service/security/UserSecurityService.java"));
+        String recovery = read(MAIN.resolve("service/security/AccountRecoveryService.java"));
 
         assertThat(source).doesNotContain("otpService.sendOtp(");
         assertThat(source).doesNotContain("otpService.verifyOtp(");
         assertThat(source).contains("OtpScope.PIN_CHANGE");
-        assertThat(source).contains("OtpScope.PIN_RESET");
+        assertThat(recovery).doesNotContain("OtpService");
+        assertThat(recovery).doesNotContain("otpService");
     }
 
     /**
@@ -207,24 +212,30 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * Recovery is not gated on holding a stronger factor, and the service that owns it does
-     * not consult passkeys at all. A gate there is permanent lockout, not a bypass fix: the
-     * account would have no login and no recovery, and nothing here can remove or replace a
-     * registered credential. Closing that hole needs a protocol that can prove the stronger
-     * factor is really gone, which does not exist yet.
+     * Recovery is not gated on holding a stronger factor: an account whose passkey broke would
+     * then have no way back. What recovery does with a passkey is remove it on completion, which
+     * is not a gate. And the service that holds the PIN primitives still does not consult
+     * passkeys at all; the orchestration that knows about both lives in AccountRecoveryService.
      */
     @Test
-    void pinRecoveryIsNotGatedOnARegisteredPasskey() throws IOException {
+    void recoveryIsNotGatedOnHoldingAPasskey() throws IOException {
         String userSecurity = read(MAIN.resolve("service/security/UserSecurityService.java"));
-        String recovery = methodBody(read(MAIN.resolve("service/security/AuthFactorPolicy.java")),
+        String policy = methodBody(read(MAIN.resolve("service/security/AuthFactorPolicy.java")),
                 "public RecoveryPolicy recoveryFor(");
+        String recovery = read(MAIN.resolve("service/security/AccountRecoveryService.java"));
 
         assertThat(userSecurity).doesNotContain("Passkey");
         assertThat(userSecurity).doesNotContain("passkey");
-        // Reported, not branched on: the method hands back what the account holds and refuses
-        // nothing.
-        assertThat(recovery).doesNotContain("if (");
-        assertThat(recovery).doesNotContain("throw ");
+        // Reported, not branched on.
+        assertThat(policy).doesNotContain("if (");
+        assertThat(policy).doesNotContain("throw ");
+        // No status, start or completion asks what the account holds.
+        assertThat(recovery).doesNotContain("hasPasskey");
+        assertThat(recovery).doesNotContain("passkeyHeld");
+        assertThat(recovery).doesNotContain("passkeyRegistered");
+        assertThat(recovery).doesNotContain("hasPin");
+        // E1: the passkeys go, inside the completing transaction.
+        assertThat(methodBody(recovery, "public int complete(")).contains("passkeyService.removeAllForUser(userId)");
     }
 
     /**
@@ -263,6 +274,7 @@ class AuthFactorPolicyGuardTest {
         assertThat(declaration).doesNotContain("Phase.PHONE");
         assertThat(declaration).doesNotContain("Phase.OTP_SENT");
         assertThat(declaration).contains("Phase.PIN_REQUIRED");
+        assertThat(declaration).contains("Phase.PASSKEY_REQUIRED");
 
         // And the phase alone is not enough: the report is keyed by the subject the session
         // actually resolved, never by the number that was submitted to reach it.
@@ -305,6 +317,7 @@ class AuthFactorPolicyGuardTest {
         String phases = methodBody(source, "private void requireAssertionPhase(");
 
         assertThat(phases).contains("Phase.PIN_REQUIRED");
+        assertThat(phases).contains("Phase.PASSKEY_REQUIRED");
         assertThat(phases).doesNotContain("Phase.PROFILE_REQUIRED");
         assertThat(phases).doesNotContain("Phase.PASSKEY_SETUP");
     }
@@ -326,10 +339,10 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * Signup order: the passkey is offered first and the PIN step is what a new account falls
-     * back to. The PIN must stay REACHABLE, because a device with no usable authenticator would
-     * otherwise finish onboarding holding nothing, so the fallback edge is asserted as
-     * explicitly as the order is.
+     * Signup order: the passkey is offered first and the PIN step is what an account holding no
+     * factor falls back to. The PIN must stay REACHABLE, because a device with no usable
+     * authenticator would otherwise have no way to get a factor, and it must stay MANDATORY,
+     * because leaving it without a PIN would finish the sign-in on the phone OTP alone (D2).
      */
     @Test
     void signupOffersThePasskeyFirstAndKeepsThePinStepReachable() throws IOException {
@@ -347,17 +360,21 @@ class AuthFactorPolicyGuardTest {
         assertThat(offer).contains("advanceToPinSetup(sessionId, session)");
         assertThat(offer).contains("Phase.PASSKEY_SETUP");
 
-        // Leaving the offer without a credential sends a new account to the PIN step, not to the
-        // end of the flow. Declined, failed and impossible all arrive at this one endpoint.
+        // Leaving the offer completes only a session that already authenticated with a factor;
+        // everything else goes on to the PIN step. Declined, failed and impossible all arrive here.
         String skip = methodBody(source, "public ResponseEntity<LoginStateResponse> skipPasskeySetup(");
-        assertThat(skip.indexOf("advanceToPinSetup(sessionId, session)"))
-                .isGreaterThan(0)
-                .isLessThan(skip.indexOf("return complete(sessionId, session)"));
-        assertThat(skip).contains("session.isNewUser()");
+        int factorCheck = skip.indexOf("session.getAuthenticatedFactor() != null");
+        assertThat(factorCheck).isPositive();
+        assertThat(skip.indexOf("return complete(sessionId, session)")).isGreaterThan(factorCheck);
+        assertThat(skip.indexOf("return advanceToPinSetup(sessionId, session)"))
+                .isGreaterThan(skip.indexOf("return complete(sessionId, session)"));
 
-        // And the PIN step is the end of signup, so it cannot route back to the offer it was
-        // reached from.
+        // The PIN step refuses to be skipped or left blank before anything else happens, and it is
+        // the end of signup, so it cannot route back to the offer it was reached from.
         String pinSetup = methodBody(source, "public ResponseEntity<LoginStateResponse> submitPinSetup(");
+        assertThat(pinSetup).contains("request.skip() || !StringUtils.hasText(request.pin())");
+        assertThat(pinSetup.indexOf("\"pin_required\"")).isPositive()
+                .isLessThan(pinSetup.indexOf("loginFactorEnrollmentService.setUpFirstPin("));
         assertThat(pinSetup).doesNotContain("advanceToPasskeySetup");
         assertThat(pinSetup).contains("complete(sessionId, session)");
     }
@@ -372,6 +389,12 @@ class AuthFactorPolicyGuardTest {
         String source = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
 
         for (String method : new String[] {
+                "public ResponseEntity<LoginStateResponse> submitPhone(",
+                "public ResponseEntity<LoginStateResponse> submitOtp(",
+                "public ResponseEntity<LoginStateResponse> submitPin(",
+                "public ResponseEntity<LoginStateResponse> finishPasskeyRegistration(",
+                "public ResponseEntity<LoginStateResponse> startRecovery(",
+                "public ResponseEntity<LoginStateResponse> completeRecovery(",
                 "public ResponseEntity<LoginStateResponse> submitProfile(",
                 "public ResponseEntity<LoginStateResponse> submitPinSetup(",
                 "public ResponseEntity<LoginStateResponse> skipPasskeySetup(",
@@ -379,6 +402,127 @@ class AuthFactorPolicyGuardTest {
                 "public ResponseEntity<LoginStateResponse> finishPasskeyAuthentication(" }) {
             assertThat(methodBody(source, method)).as("CSRF check in %s", method).contains("requireCsrf(session, csrf)");
         }
+    }
+
+    /**
+     * D1: nothing issues an authorization code to a session that has not authenticated with a
+     * factor. The check is the first thing completion does, ahead of recording the sign-in and
+     * issuing the code, so no route can reach either past it.
+     */
+    @Test
+    void completionRefusesASessionThatHasNotAuthenticatedWithAFactor() throws IOException {
+        String complete = methodBody(read(MAIN.resolve("controller/oidc/LoginFlowController.java")),
+                "private ResponseEntity<LoginStateResponse> complete(");
+
+        int guard = complete.indexOf("session.getAuthenticatedFactor() == null");
+        assertThat(guard).isPositive();
+        assertThat(complete.indexOf("\"factor_required\"")).isGreaterThan(guard);
+        assertThat(complete.indexOf("recordSuccessfulLogin")).isGreaterThan(guard);
+        assertThat(complete.indexOf("issueCode")).isGreaterThan(guard);
+    }
+
+    /**
+     * E2: the marker that makes the authentication service end every other session is set for a
+     * completed recovery and nothing else. One assignment of the RECOVERY factor, in the recovery
+     * completion; one place it becomes the authorization flag; one place it becomes the claim.
+     */
+    @Test
+    void theEndOtherSessionsMarkerIsOnlyEverSetForARecovery() throws IOException {
+        String login = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
+        String tokens = read(MAIN.resolve("service/oidc/OidcTokenService.java"));
+
+        assertThat(login).containsOnlyOnce("setAuthenticatedFactor(SessionFactor.RECOVERY)");
+        assertThat(methodBody(login, "public ResponseEntity<LoginStateResponse> completeRecovery("))
+                .contains("setAuthenticatedFactor(SessionFactor.RECOVERY)");
+        assertThat(methodBody(login, "private ResponseEntity<LoginStateResponse> complete("))
+                .contains("session.getAuthenticatedFactor() == SessionFactor.RECOVERY");
+        assertThat(tokens).containsOnlyOnce("END_OTHER_SESSIONS_CLAIM, true");
+        assertThat(tokens).contains("authorization.endOtherSessions()");
+    }
+
+    /**
+     * Sign-in routing reads what is STORED. Reading the deployment-gated answer instead would let
+     * switching passkeys off turn every passkey-only account into one an SMS code finishes by
+     * choosing a PIN.
+     */
+    @Test
+    void signInRoutingReadsTheStoredCredentialNotTheDeploymentSwitch() throws IOException {
+        String policy = methodBody(read(MAIN.resolve("service/security/AuthFactorPolicy.java")),
+                "public LoginPolicy loginPolicy(");
+        String login = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
+        String orchestration = read(MAIN.resolve("service/IdentityOrchestrationService.java"));
+
+        assertThat(policy).contains("passkeyHeld(userId)");
+        assertThat(policy).doesNotContain("passkeyRegistered");
+        assertThat(methodBody(login, "private ResponseEntity<LoginStateResponse> routeExistingUser("))
+                .contains("authFactorPolicy.loginPolicy(userId)")
+                .doesNotContain("passkeyRegistered");
+        assertThat(methodBody(login, "private ResponseEntity<LoginStateResponse> advanceToPasskeySetup("))
+                .doesNotContain("passkeyRegistered");
+        assertThat(orchestration).doesNotContain("passkeyRegistered");
+    }
+
+    /**
+     * Recovery starts only from a proved phone number, in a real sign-in. The flag is set in one
+     * place, the OTP step, and every condition of availability is checked together.
+     */
+    @Test
+    void recoveryIsOfferedOnlyAfterAnOtpInASignIn() throws IOException {
+        String login = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
+
+        assertThat(login).containsOnlyOnce("setOtpVerified(true)");
+        assertThat(methodBody(login, "public ResponseEntity<LoginStateResponse> submitOtp("))
+                .contains("setOtpVerified(true)");
+        String available = methodBody(login, "private boolean recoveryAvailable(");
+        assertThat(available).contains("session.isOtpVerified()");
+        assertThat(available).contains("session.getReauthUserId() == null");
+        assertThat(available).contains("!session.isEnroll()");
+        assertThat(available).contains("RECOVERY_PHASES.contains(session.getPhase())");
+        for (String endpoint : new String[] {
+                "public ResponseEntity<LoginStateResponse> startRecovery(",
+                "public ResponseEntity<LoginStateResponse> completeRecovery(" }) {
+            assertThat(methodBody(login, endpoint)).contains("requireRecoveryAvailable(session)");
+        }
+    }
+
+    /**
+     * Every recovery writer, and every sign-in writer that ends an episode, reads the account row
+     * under its lock, so cancel and complete can never both win and a sign-in cannot write back a
+     * PIN hash or a stamp another transaction just committed.
+     */
+    @Test
+    void everyRecoveryWriterTakesTheRowLock() throws IOException {
+        String recovery = read(MAIN.resolve("service/security/AccountRecoveryService.java"));
+        String userSecurity = read(MAIN.resolve("service/security/UserSecurityService.java"));
+
+        assertThat(methodBody(recovery, "public AccountRecoveryState start(")).contains("lockOrCreateUser(userId)");
+        assertThat(methodBody(recovery, "public int complete(")).contains("lockUser(userId)");
+        assertThat(methodBody(recovery, "public boolean cancel(")).contains("lockUser(userId)");
+        for (String writer : new String[] { "public AccountRecoveryState start(", "public int complete(",
+                "public boolean cancel(" }) {
+            assertThat(methodBody(recovery, writer)).doesNotContain("findUser(");
+        }
+        assertThat(methodBody(userSecurity, "public void recordSuccessfulLogin(")).contains("lockOrCreateUser(userId)");
+        assertThat(methodBody(userSecurity, "public void validatePinOrThrow(")).contains("findByUserIdForUpdate");
+        assertThat(methodBody(userSecurity, "IdentityUser lockOrCreateUser(")).contains("findByUserIdForUpdate");
+    }
+
+    /**
+     * E3: the unauthenticated reset is retired. Its handler takes nothing and touches nothing, and
+     * the paths are not listed among the open endpoints.
+     */
+    @Test
+    void theRetiredPinResetDoesNothingButRefuse() throws IOException {
+        String security = read(MAIN.resolve("controller/security/SecurityController.java"));
+        String config = read(MAIN.resolve("config/SecurityConfig.java"));
+
+        String retired = methodBody(security, "public ResponseEntity<Void> retiredPinReset(");
+        assertThat(retired).contains("throw new EndpointRetiredException(");
+        assertThat(retired).doesNotContain("Service.");
+        // No parameters at all, so no body is read and no validation runs before the refusal.
+        assertThat(security).contains("public ResponseEntity<Void> retiredPinReset() {");
+        int open = config.indexOf("OPEN_POST_ENDPOINTS = List.of(");
+        assertThat(config.substring(open, config.indexOf(");", open))).doesNotContain("/security/pin/reset");
     }
 
     /**

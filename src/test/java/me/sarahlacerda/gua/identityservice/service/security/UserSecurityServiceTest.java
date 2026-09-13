@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -20,13 +19,11 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
-import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.domain.IdentityUser;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinException;
 import me.sarahlacerda.gua.identityservice.exception.PinChangeChallengeNotFoundException;
 import me.sarahlacerda.gua.identityservice.exception.PinChangeCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinLockedException;
-import me.sarahlacerda.gua.identityservice.exception.PinResetCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException;
 import me.sarahlacerda.gua.identityservice.repository.IdentityUserRepository;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
@@ -74,20 +71,6 @@ class UserSecurityServiceTest {
     }
 
     @Test
-    void requestPinResetFailsWithinCooldown() {
-        IdentityUser user = IdentityUser.builder()
-                .userId("@user:gua.global")
-                .build();
-        user.setPinHash(passwordEncoder.encode("123456"));
-        user.setLastLoginAt(Instant.now().minus(Duration.ofDays(2)));
-
-        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
-
-        assertThatThrownBy(() -> service.requestPinReset("@user:gua.global", "+12025550123", "127.0.0.1"))
-                .isInstanceOf(PinResetCooldownException.class);
-    }
-
-    @Test
     void validatePinLocksAfterRepeatedFailures() {
         IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
         user.setPinHash(passwordEncoder.encode("123456"));
@@ -107,101 +90,10 @@ class UserSecurityServiceTest {
         verify(auditLogger).pinLocked(eq("@user:gua.global"), any(Instant.class));
     }
 
-    @Test
-    void requestPinResetSendsOtpAfterCooldown() {
-        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
-        user.setPinHash(passwordEncoder.encode("123456"));
-        user.setLastLoginAt(Instant.now().minus(Duration.ofDays(8)));
-
-        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
-        when(phoneNumberHasher.digest("+12025550123")).thenReturn("digest");
-        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(directoryEntry("@user:gua.global")));
-        doNothing().when(otpService)
-                .sendScopedOtp(OtpScope.PIN_RESET, "@user:gua.global", "+12025550123", "127.0.0.1", null);
-
-        service.requestPinReset("@user:gua.global", "+12025550123", "127.0.0.1");
-
-        // Keyed to the account, not to the phone, so the unauthenticated public send cannot
-        // put a code where this flow looks for one.
-        verify(otpService).sendScopedOtp(OtpScope.PIN_RESET, "@user:gua.global", "+12025550123", "127.0.0.1", null);
-        verify(otpService, org.mockito.Mockito.never()).sendOtp(any(), any(), any());
-        verify(auditLogger).pinResetRequested(eq("@user:gua.global"), any(String.class), eq("127.0.0.1"));
-        assertThat(user.getPinResetRequestedAt()).isNotNull();
-    }
+    // -------------------- what ends a pending recovery episode --------------------
 
     @Test
-    void requestPinResetLeavesTheStampAloneOnARepeatRequest() {
-        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
-        user.setPinHash(passwordEncoder.encode("123456"));
-        user.setLastLoginAt(Instant.now().minus(Duration.ofDays(30)));
-        Instant openedAt = Instant.now().minus(Duration.ofDays(9));
-        user.setPinResetRequestedAt(openedAt);
-
-        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
-        when(phoneNumberHasher.digest("+12025550123")).thenReturn("digest");
-        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(directoryEntry("@user:gua.global")));
-
-        service.requestPinReset("@user:gua.global", "+12025550123", "127.0.0.1");
-
-        // A second request re-sends the code so the reset stays completable once the wait is
-        // over, and does NOT restart the wait. Restarting it would put completion permanently
-        // out of reach, because the code that completes the reset lives for minutes and the
-        // wait runs for days.
-        verify(otpService).sendScopedOtp(OtpScope.PIN_RESET, "@user:gua.global", "+12025550123", "127.0.0.1", null);
-        assertThat(user.getPinResetRequestedAt()).isEqualTo(openedAt);
-    }
-
-    @Test
-    void completePinResetUpdatesPinAndClearsState() {
-        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
-        user.setPinHash(passwordEncoder.encode("123456"));
-        user.setPinResetRequestedAt(Instant.now().minus(Duration.ofDays(8)));
-
-        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
-        when(phoneNumberHasher.digest("+12025550123")).thenReturn("digest");
-        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(directoryEntry("@user:gua.global")));
-
-        service.completePinReset("@user:gua.global", "+12025550123", "876543", "284917");
-
-        verify(otpService).verifyScopedOtp(OtpScope.PIN_RESET, "@user:gua.global", "876543");
-        verify(otpService, org.mockito.Mockito.never()).verifyOtp(any(), any());
-        verify(auditLogger).pinResetCompleted("@user:gua.global");
-        assertThat(passwordEncoder.matches("284917", user.getPinHash())).isTrue();
-        assertThat(user.getPinResetRequestedAt()).isNull();
-    }
-
-    // -------------------- what ends a pending reset episode --------------------
-
-    @Test
-    void aResetNobodyFinishedStopsSatisfyingTheWaitingPeriod() {
-        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
-        user.setPinHash(passwordEncoder.encode("123456"));
-        user.setLastLoginAt(Instant.now().minus(Duration.ofDays(40)));
-        // Asked for a year ago and walked away from. Nothing since: no login, no PIN check.
-        user.setPinResetRequestedAt(Instant.now().minus(Duration.ofDays(365)));
-
-        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
-        when(phoneNumberHasher.digest("+12025550123")).thenReturn("digest");
-        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(directoryEntry("@user:gua.global")));
-
-        service.requestPinReset("@user:gua.global", "+12025550123", "127.0.0.1");
-
-        // That episode is long over, so this request opens a new one and the account holder
-        // gets the whole waiting period to see the SMS and intervene. Left in place, the old
-        // stamp would have satisfied the wait for ever: request and complete could then run
-        // in the same minute, which is the seven days collapsing to nothing for exactly the
-        // accounts nobody is watching.
-        assertThat(user.getPinResetRequestedAt()).isAfter(Instant.now().minus(Duration.ofMinutes(1)));
-
-        assertThatThrownBy(
-                () -> service.completePinReset("@user:gua.global", "+12025550123", "876543", "284917"))
-                .isInstanceOf(PinResetCooldownException.class);
-        verify(otpService, org.mockito.Mockito.never()).verifyScopedOtp(any(), any(), any());
-        assertThat(passwordEncoder.matches("284917", user.getPinHash())).isFalse();
-    }
-
-    @Test
-    void provingThePinEndsAPendingReset() {
+    void provingThePinEndsAPendingRecovery() {
         IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
         user.setPinHash(passwordEncoder.encode("123456"));
         user.setPinResetRequestedAt(Instant.now().minus(Duration.ofDays(8)));
@@ -210,13 +102,13 @@ class UserSecurityServiceTest {
 
         service.validatePinOrThrow("@user:gua.global", "123456");
 
-        // Somebody who can produce the PIN is not waiting on a reset of it, and a stamp left
-        // behind would keep the waiting period permanently satisfied for whoever comes next.
+        // Somebody who can produce the PIN is not the person locked out of it, and a recovery
+        // left running would hand the account to whoever started it once the wait was over.
         assertThat(user.getPinResetRequestedAt()).isNull();
     }
 
     @Test
-    void aWrongPinLeavesAPendingResetExactlyWhereItWas() {
+    void aWrongPinLeavesAPendingRecoveryExactlyWhereItWas() {
         IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
         user.setPinHash(passwordEncoder.encode("123456"));
         Instant openedAt = Instant.now().minus(Duration.ofDays(3));
@@ -227,35 +119,52 @@ class UserSecurityServiceTest {
         assertThatThrownBy(() -> service.validatePinOrThrow("@user:gua.global", "000000"))
                 .isInstanceOf(InvalidPinException.class);
 
-        // Guessing at the PIN is not proof of anything, so it must not be able to shorten or
-        // cancel a reset the account holder is waiting on.
+        // Guessing at the PIN is not proof of anything, so it must not be able to cancel a
+        // recovery that is in progress.
         assertThat(user.getPinResetRequestedAt()).isEqualTo(openedAt);
     }
 
     @Test
-    void aFinishedSignInEndsAPendingReset() {
+    void aFinishedSignInEndsAPendingRecoveryUnderTheRowLock() {
         IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
         user.setPinHash(passwordEncoder.encode("123456"));
         user.setPinResetRequestedAt(Instant.now().minus(Duration.ofDays(3)));
 
-        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
+        when(repository.findByUserIdForUpdate("@user:gua.global")).thenReturn(Optional.of(user));
 
         service.recordSuccessfulLogin("@user:gua.global");
 
-        // Only a finished sign-in reaches here, so the person is not the one locked out of the
-        // factor the reset would give back. It costs a live reset nothing the dormancy gate in
-        // requestPinReset was not already costing it.
+        // Only a finished sign-in reaches here, so the person produced a factor and is not the
+        // one locked out. Read under the lock, so the write cannot put back a PIN hash or a
+        // stamp a concurrent recovery completion or cancel had just committed.
         assertThat(user.getPinResetRequestedAt()).isNull();
         assertThat(user.getLastLoginAt()).isNotNull();
+        verify(repository, org.mockito.Mockito.never()).findByUserId("@user:gua.global");
     }
 
-    private DirectoryEntry directoryEntry(String userId) {
-        DirectoryEntry entry = DirectoryEntry.builder()
-                .phoneDigest("digest")
-                .userId(userId)
-                .displayName("User")
-                .build();
-        return entry;
+    @Test
+    void recordingASignInCreatesTheRowForAnAccountThatNeverHadOne() {
+        when(repository.findByUserIdForUpdate("@new:gua.global")).thenReturn(Optional.empty());
+        when(repository.save(any(IdentityUser.class))).thenAnswer(call -> call.getArgument(0));
+
+        service.recordSuccessfulLogin("@new:gua.global");
+
+        org.mockito.ArgumentCaptor<IdentityUser> saved = org.mockito.ArgumentCaptor.forClass(IdentityUser.class);
+        verify(repository).save(saved.capture());
+        assertThat(saved.getValue().getUserId()).isEqualTo("@new:gua.global");
+        assertThat(saved.getValue().getLastLoginAt()).isNotNull();
+    }
+
+    @Test
+    void settingTheFirstPinReadsTheRowUnderTheLock() {
+        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
+        when(repository.findByUserIdForUpdate("@user:gua.global")).thenReturn(Optional.of(user));
+
+        service.setInitialPin("@user:gua.global", "284917");
+
+        assertThat(passwordEncoder.matches("284917", user.getPinHash())).isTrue();
+        verify(auditLogger).pinInitialized("@user:gua.global");
+        verify(repository, org.mockito.Mockito.never()).findByUserId("@user:gua.global");
     }
 
     @Test
@@ -347,7 +256,7 @@ class UserSecurityServiceTest {
     void everyPathThatMintsAPinReopensTheHold() {
         IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
         when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
-        when(repository.save(any(IdentityUser.class))).thenAnswer(call -> call.getArgument(0));
+        when(repository.findByUserIdForUpdate("@user:gua.global")).thenReturn(Optional.of(user));
 
         // Created.
         service.setInitialPin("@user:gua.global", "284917");
@@ -356,17 +265,15 @@ class UserSecurityServiceTest {
         // Changed: the hold reopens rather than carrying the old PIN's age forward.
         user.setPinSetAt(Instant.now().minus(Duration.ofDays(30)));
         assertThat(service.changePhonePinHoldRemainingSeconds("@user:gua.global")).isZero();
-        when(repository.findByUserIdForUpdate("@user:gua.global")).thenReturn(Optional.of(user));
         service.updatePin("@user:gua.global", "284917", "391748");
         assertThat(service.changePhonePinHoldRemainingSeconds("@user:gua.global")).isPositive();
 
-        // Reset.
+        // Recovered: a PIN chosen by an account recovery is exactly as new as any other.
         user.setPinSetAt(Instant.now().minus(Duration.ofDays(30)));
         user.setPinResetRequestedAt(Instant.now().minus(Duration.ofDays(8)));
-        when(phoneNumberHasher.digest("+12025550123")).thenReturn("digest");
-        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(directoryEntry("@user:gua.global")));
-        service.completePinReset("@user:gua.global", "+12025550123", "876543", "509382");
+        service.applyRecoveredPin(user, "509382");
         assertThat(service.changePhonePinHoldRemainingSeconds("@user:gua.global")).isPositive();
+        assertThat(user.getPinResetRequestedAt()).isNull();
     }
 
     @Test

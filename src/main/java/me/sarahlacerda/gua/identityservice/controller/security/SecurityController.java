@@ -30,14 +30,13 @@ import me.sarahlacerda.gua.identityservice.controller.dto.PasskeyStepUpStartResp
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeCompleteRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeStartRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeStartResponse;
-import me.sarahlacerda.gua.identityservice.controller.dto.PinResetCompleteRequest;
-import me.sarahlacerda.gua.identityservice.controller.dto.PinResetRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinStatusResponse;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinUpdateRequest;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.config.OidcProperties;
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
+import me.sarahlacerda.gua.identityservice.exception.EndpointRetiredException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinOperationException;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
@@ -46,6 +45,8 @@ import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.Phase;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
+import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryService;
+import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryState;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactor;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
@@ -57,7 +58,7 @@ import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 @RequestMapping("/security")
 @Validated
 @RequiredArgsConstructor
-@Tag(name = "Security", description = "PIN management and recovery flows")
+@Tag(name = "Security", description = "PIN management, passkey enrollment and account recovery cancel")
 public class SecurityController {
 
     private final UserSecurityService userSecurityService;
@@ -71,9 +72,10 @@ public class SecurityController {
     private final AuthFactorPolicy authFactorPolicy;
     private final AccountLocalpartResolver accountLocalparts;
     private final PinChangeService pinChangeService;
+    private final AccountRecoveryService accountRecoveryService;
 
     @GetMapping("/pin/status")
-    @Operation(summary = "Check the authenticated user's two-step verification state", description = "Returns hasPin=true once the user has configured a security PIN (drives the 'set up two-step verification' nudge), and how long the fresh-2FA hold on the account's PIN still has to run before that PIN can change the phone number. Read it when about to offer the PIN, not as 'can I change my number now': it is silent about the separate 24h phone-change cooldown, and it does not describe the passkey path, which carries its own hold on the age of the asserted credential and is refused the same way. It also reports which factors the account has REGISTERED, which one to offer first, and which ones a phone change accepts in precedence order, so a client offers the right factor instead of hardcoding the rule. Registration is server truth; whether a registered passkey is usable on this device is not reported and is never accepted as an input.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @Operation(summary = "Check the authenticated user's two-step verification state", description = "Returns hasPin=true once the user has configured a security PIN (drives the 'set up two-step verification' nudge), and how long the fresh-2FA hold on the account's PIN still has to run before that PIN can change the phone number. Read it when about to offer the PIN, not as 'can I change my number now': it is silent about the separate 24h phone-change cooldown, and it does not describe the passkey path, which carries its own hold on the age of the asserted credential and is refused the same way. It also reports which factors the account has REGISTERED, which one to offer first, and which ones a phone change accepts in precedence order, so a client offers the right factor instead of hardcoding the rule. Registration is server truth; whether a registered passkey is usable on this device is not reported and is never accepted as an input. Finally it reports whether a delayed account recovery is live on the account (accountRecoveryPending), with when it can be finished and when it expires, so every signed-in app can show a banner and offer POST /security/recovery/cancel.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "PIN status"),
             @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content)
@@ -86,6 +88,7 @@ public class SecurityController {
         // that a factor is unavailable: that claim costs an attacker nothing, so it could
         // only ever be a way to ask for something weaker.
         AuthFactorPolicy.RegisteredFactors factors = authFactorPolicy.registeredFactors(userId);
+        AccountRecoveryState recovery = accountRecoveryService.pendingFor(userId).orElse(null);
         return ResponseEntity.ok(new PinStatusResponse(
                 factors.pin(),
                 userSecurityService.changePhonePinHoldRemainingSeconds(userId),
@@ -93,7 +96,10 @@ public class SecurityController {
                 factors.preferred().name(),
                 authFactorPolicy.stepUpFor(ReauthOperation.PHONE_CHANGE).accepted().stream()
                         .map(AuthFactor::name)
-                        .toList()));
+                        .toList(),
+                recovery != null,
+                recovery == null ? null : recovery.completableAtEpochSeconds(),
+                recovery == null ? null : recovery.expiresAtEpochSeconds()));
     }
 
     @PostMapping("/pin")
@@ -148,41 +154,27 @@ public class SecurityController {
         return ResponseEntity.noContent().build();
     }
 
-    @PostMapping("/pin/reset")
-    @Operation(summary = "Request a PIN reset", description = "Initiates the PIN recovery flow by sending an OTP to the verified phone number.", security = {})
+    @PostMapping({ "/pin/reset", "/pin/reset/complete" })
+    @Operation(summary = "Retired: unauthenticated PIN reset", description = "Always 410 endpoint_retired. The unauthenticated reset shared the recovery episode but not its rules (it could reset a PIN on an account whose passkey was still in use). Recovery now runs inside the interactive login, from the PIN or passkey step after an OTP: POST /login/recovery/start and /login/recovery/complete.", security = {})
     @ApiResponses({
-            @ApiResponse(responseCode = "202", description = "Reset initiated"),
-            @ApiResponse(responseCode = "400", description = "Validation or cooldown failure", content = @Content),
-            @ApiResponse(responseCode = "404", description = "User or phone not found", content = @Content),
-            @ApiResponse(responseCode = "429", description = "Too many reset requests", content = @Content)
+            @ApiResponse(responseCode = "410", description = "This endpoint is retired", content = @Content)
     })
-    public ResponseEntity<Void> requestPinReset(
-            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "User identifier and verified phone number to receive the OTP", required = true, content = @Content(schema = @Schema(implementation = PinResetRequest.class))) @RequestBody @Valid PinResetRequest request,
-            @Parameter(hidden = true) HttpServletRequest servletRequest) {
-        userSecurityService.requestPinReset(request.getUserId(), request.getPhone(), servletRequest.getRemoteAddr());
-        // Recovery can finally see the rest of the account's factors. It deliberately does not
-        // act on them: refusing recovery to an account that holds a passkey would make an
-        // unusable credential into an unusable account, with no login and no way back. What it
-        // does instead is leave a line behind, because recovering a knowledge factor on an
-        // account that also holds a stronger one is worth being able to find later. Recorded
-        // after the request was accepted, so a refusal produces nothing and this cannot be
-        // used to probe which accounts hold passkeys.
-        authFactorPolicy.recordRecoveryRequest(request.getUserId());
-        return ResponseEntity.accepted().build();
+    public ResponseEntity<Void> retiredPinReset() {
+        // Takes no body and touches nothing, so an old client learns the path is gone instead of
+        // tripping a validation error first.
+        throw new EndpointRetiredException(
+                "PIN reset moved into sign-in. Open Gua, enter your number, and choose the recovery option.");
     }
 
-    @PostMapping("/pin/reset/complete")
-    @Operation(summary = "Complete a PIN reset", description = "Verifies the OTP sent during the reset request and applies the new PIN.", security = {})
+    @PostMapping("/recovery/cancel")
+    @Operation(summary = "Cancel a delayed account recovery", description = "The account holder's cancel, from any signed-in app showing the recovery banner. Ends a live recovery episode on the authenticated account and counts as account activity, so a new recovery cannot be requested until the dormancy period has passed again. 204 whether or not a recovery was live.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
-            @ApiResponse(responseCode = "204", description = "PIN reset successful"),
-            @ApiResponse(responseCode = "400", description = "Validation failed", content = @Content),
-            @ApiResponse(responseCode = "401", description = "OTP invalid or expired", content = @Content),
-            @ApiResponse(responseCode = "429", description = "Too many reset attempts", content = @Content)
+            @ApiResponse(responseCode = "204", description = "No recovery is live on the account any more"),
+            @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content)
     })
-    public ResponseEntity<Void> completePinReset(
-            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "OTP and new PIN payload to finalize recovery", required = true, content = @Content(schema = @Schema(implementation = PinResetCompleteRequest.class))) @RequestBody @Valid PinResetCompleteRequest request) {
-        userSecurityService.completePinReset(request.getUserId(), request.getPhone(), request.getCode(),
-                request.getNewPin());
+    public ResponseEntity<Void> cancelAccountRecovery(@Parameter(hidden = true) HttpServletRequest servletRequest) {
+        String userId = authenticatedUserAccessor.requireCurrentUserId();
+        accountRecoveryService.cancel(userId, servletRequest.getRemoteAddr());
         return ResponseEntity.noContent().build();
     }
 
