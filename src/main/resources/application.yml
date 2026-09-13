@@ -166,16 +166,19 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_LIMIT:20}
         refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_REFRESH:PT5M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_TIMEOUT:PT0S}
-      # Delayed account recovery. Start opens an episode on the account, so it is held to a few
-      # per hour per address; complete sets a PIN; cancel is bearer-gated and called by the apps.
+      # Delayed account recovery. These calls carry no bearer token, so they are keyed by client
+      # address, and behind the ingress that address is shared by every client: a low limit here
+      # throttles everyone recovering at once. The per-account defences are elsewhere: both need a
+      # session that already passed an OTP, start cannot be guessed at, and complete needs the
+      # episode to be READY. Cancel is bearer-gated and called by the apps.
       - path: /login/recovery/start
         methods: [POST]
-        limit-for-period: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_START_LIMIT:3}
+        limit-for-period: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_START_LIMIT:30}
         refresh-period: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_START_REFRESH:PT1H}
         timeout-duration: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_START_TIMEOUT:PT0S}
       - path: /login/recovery/complete
         methods: [POST]
-        limit-for-period: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_COMPLETE_LIMIT:5}
+        limit-for-period: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_COMPLETE_LIMIT:30}
         refresh-period: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_COMPLETE_REFRESH:PT1H}
         timeout-duration: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_COMPLETE_TIMEOUT:PT0S}
       - path: /security/recovery/cancel
