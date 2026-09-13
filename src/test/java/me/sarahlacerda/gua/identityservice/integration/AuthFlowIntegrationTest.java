@@ -361,14 +361,12 @@ class AuthFlowIntegrationTest {
         login.post("/login/phone", Map.of("phoneNumber", phone));
         Map<?, ?> state = login.post("/login/otp", Map.of("code", readOtpFromRedis(phone)));
         assertThat(state.get("phase")).isEqualTo("PIN_REQUIRED");
-        Object recoveryValue = state.get("recovery");
-        assertThat(recoveryValue).as("recovery=%s", recoveryValue).isInstanceOf(Map.class);
-        Map<?, ?> recovery = (Map<?, ?>) recoveryValue;
+        Map<?, ?> recovery = (Map<?, ?>) state.get("recovery");
+        assertThat(recovery).isNotNull();
         assertThat(recovery.get("status")).isEqualTo("TOO_SOON");
-        Object availableAt = recovery.get("availableAtEpochSeconds");
-        assertThat(availableAt).as("availableAtEpochSeconds=%s (%s)", availableAt,
-                availableAt == null ? null : availableAt.getClass().getName()).isInstanceOf(Number.class);
-        assertThat(((Number) availableAt).longValue() % 3600).isZero();
+        // A JSON number, which is what the web and both apps decode.
+        assertThat(recovery.get("availableAtEpochSeconds")).isInstanceOf(Number.class);
+        assertThat(((Number) recovery.get("availableAtEpochSeconds")).longValue() % 3600).isZero();
 
         String otpKey = "otp:code:" + phone;
         String codeBefore = redisTemplate.opsForValue().get(otpKey);
@@ -589,6 +587,10 @@ class AuthFlowIntegrationTest {
 
         private HttpHeaders headers() {
             HttpHeaders headers = new HttpHeaders();
+            // RestTemplate lists XML first when jackson-dataformat-xml is on the classpath (the
+            // Twilio SDK brings it), and the server honours that, which turns every number in the
+            // body into a string. The web and the apps ask for JSON, so this does too.
+            headers.setAccept(List.of(MediaType.APPLICATION_JSON));
             headers.add(HttpHeaders.COOKIE, LOGIN_COOKIE + "=" + cookie);
             if (csrf != null) {
                 headers.add(CSRF_HEADER, csrf);
