@@ -2,8 +2,6 @@ package me.sarahlacerda.gua.identityservice.service.security;
 
 import java.util.List;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import lombok.RequiredArgsConstructor;
@@ -20,9 +18,9 @@ import lombok.RequiredArgsConstructor;
  * <li>{@link #registeredFactors(String)}, and {@link #preferredFactor(String)} for one of
  * its halves: what the account holds and which of it ranks highest. Decided here, and read
  * by the status endpoint and by the interactive login state.</li>
- * <li>{@link #loginPolicy(String)}: what signing in may fall back to. Decided here; both
- * sign-in paths take their PIN-step answer from it and no longer keep one of their
- * own.</li>
+ * <li>{@link #loginPolicy(String)}: which factor finishes a sign-in after the phone OTP.
+ * Decided here; the interactive login flow and the legacy {@code /otp/verify} path both
+ * take their routing from it and keep none of their own.</li>
  * <li>{@link #stepUpFor(ReauthOperation)}: what a privileged operation accepts. Published,
  * not enforced. {@code GET /security/pin/status} hands the list to clients as
  * {@code phoneChangeStepUpFactors}, while {@code PhoneChangeService.enforceStepUp} carries
@@ -32,80 +30,82 @@ import lombok.RequiredArgsConstructor;
  * or a bypass. The price is that the two can drift, with nothing but tests holding them
  * together, so editing either one alone makes the server misdescribe what it will
  * take.</li>
- * <li>{@link #recoveryFor(String)}: how a lost PIN is recovered. Written down here, called
- * nowhere. Recovery runs in {@link UserSecurityService}, which reaches nothing in this
- * class except {@link #recordRecoveryRequest(String)}. It is written down because what
- * recovery must NOT do is the load-bearing half, and a guard test freezes this method's
- * body as the statement that it branches on nothing at all.</li>
+ * <li>{@link #recoveryFor(String)}: what recovering an account restores and removes.
+ * Written down here, called nowhere. The delayed recovery runs in
+ * {@link AccountRecoveryService}; a guard test freezes this method's body as a statement
+ * that branches on nothing.</li>
  * </ol>
  *
- * <p>
- * It exists because those answers had drifted apart. "Does this account need a PIN step"
- * was decided in three services, "does this account already have a passkey" in two
- * controllers, and the service that owns PIN change and recovery could not see passkeys at
- * all, so the recovery side of the product could not even state what it was recovering
- * past. Any one of those sites could be edited into disagreeing with the others without a
- * single test noticing.
- *
- * <h2>Registered is server truth, usable is client truth</h2>
+ * <h2>Held, registered and usable</h2>
  *
  * <p>
- * Everything this component reports is <b>registered</b>: rows this service can look up.
- * It never reports, accepts or infers <b>usable on this device</b>, which only the client
- * knows and which anyone holding a session can claim. The two must not be confused in
- * either direction:
+ * Three different things, and each question above reads exactly one of them:
  * <ul>
- * <li>A client may not say "my passkey is unavailable" and be given a weaker path. That
- * claim costs an attacker nothing, so honouring it would turn the strongest factor into an
- * optional one. There is no such downgrade anywhere in this service and none may be
- * added.</li>
- * <li>Equally, a registered passkey may not be turned into a requirement with no fallback,
- * and may not be used to skip a step-up. Registration says a credential exists, not that
- * this person can use it today. A credential can be left behind on a lost phone or dropped
- * by a credential manager, and the account holds no way to remove or replace one, so
- * requiring it would be permanent lockout: no login, and no recovery either.</li>
+ * <li><b>Held</b>: a credential row exists. {@link #passkeyHeld(String)} and
+ * {@link #pinRegistered(String)}. This is what sign-in routing, the legacy REST checks and
+ * recovery read, and it ignores whether this deployment currently has passkeys switched on.
+ * Switching passkeys off must not turn a passkey-only account into one that an SMS code
+ * alone can finish, because that account's next step would be setting a PIN of the SMS
+ * holder's choosing.</li>
+ * <li><b>Registered</b>: held AND this deployment can assert it.
+ * {@link #passkeyRegistered(String)}. This is what the published status fields report, so a
+ * client is never offered a ceremony the server cannot run.</li>
+ * <li><b>Usable on this device</b>: only the client knows, and anyone holding a session can
+ * claim it. It is never reported, accepted or inferred here. There is no field anywhere for a
+ * client to say "my passkey is unavailable" and be given a weaker path; that claim costs an
+ * attacker nothing.</li>
  * </ul>
  *
- * <p>
- * The net effect is that a passkey can <em>satisfy</em> a requirement here and can
- * <em>outrank</em> another factor, but it can never <em>remove</em> the fallback underneath
- * it.
- *
- * <h2>What this component deliberately does not decide</h2>
+ * <h2>Why a held passkey can now be required</h2>
  *
  * <p>
- * It does not gate PIN recovery on a registered passkey. That gate is the missing half of
- * the product rule ("recovery must not let an attacker bypass a registered stronger
- * factor"), and it cannot be closed by refusing recovery: an account whose passkey broke
- * would then have no login and no recovery. Closing it needs a recovery protocol that
- * proves the stronger factor is genuinely gone, which does not exist yet. Until it does,
- * {@link #recoveryFor(String)} reports the stronger factor rather than acting on it, and
- * {@link #recordRecoveryRequest(String)} makes the event visible to whoever is watching
- * the logs. Visible is not the same as prevented, and this comment is not a claim that it
- * is.
+ * An account that holds a passkey and no PIN must present the passkey after the OTP. That
+ * used to be refused here as permanent lockout, since a credential left on a lost phone
+ * could not be removed or replaced. It is no longer lockout, because the account has a way
+ * back that does not need the credential: the delayed recovery in
+ * {@link AccountRecoveryService}. Recovery waits out a dormancy period and a waiting period,
+ * is cancelled by any sign-in with a factor and by any signed-in app, and on completion sets a
+ * new PIN and removes the passkeys it assumed were lost. The wait is what proves the stronger
+ * factor is really gone: an account holder who still has it has a week to use it.
+ *
+ * <p>
+ * The PIN stays the fallback underneath a held passkey. An account holding both is asked for
+ * the PIN and may present the passkey instead; a held passkey never removes the PIN step's
+ * availability, and a PIN never makes the passkey unacceptable.
  */
 @Service
 @RequiredArgsConstructor
 public class AuthFactorPolicy {
 
-    private static final Logger log = LoggerFactory.getLogger(AuthFactorPolicy.class);
-
     private final UserSecurityService userSecurityService;
     private final PasskeyService passkeyService;
 
     /**
-     * Whether the account holds a registered passkey AND this deployment has passkeys
-     * switched on. Both halves matter: with passkeys disabled a stored credential cannot be
-     * asserted, so treating the account as holding one would offer a factor that cannot be
-     * used.
+     * Whether the account holds a passkey this deployment can assert: a stored credential AND
+     * passkeys switched on. For the published status fields only, so a client is never
+     * offered a ceremony the server cannot run.
      *
      * <p>
-     * Server truth about registration only. It says nothing about whether the caller's
-     * device can use that credential right now, and no caller may read it as "so demand a
-     * passkey" or as "so skip the step-up".
+     * Not a routing input. Sign-in, the legacy REST checks and recovery read
+     * {@link #passkeyHeld(String)}, which does not change meaning when passkeys are switched
+     * off.
      */
     public boolean passkeyRegistered(String userId) {
-        return passkeyService.isEnabled() && passkeyService.hasPasskey(userId);
+        return passkeyService.isEnabled() && passkeyHeld(userId);
+    }
+
+    /**
+     * Whether a passkey credential is stored for the account, whatever this deployment's
+     * passkey switch says.
+     *
+     * <p>
+     * The stored-credential predicate. It is what decides that a sign-in must present the
+     * passkey, so switching passkeys off never downgrades a passkey-only account to one an SMS
+     * code alone can finish. Server truth about storage only: it says nothing about whether
+     * the caller's device can produce that credential today.
+     */
+    public boolean passkeyHeld(String userId) {
+        return passkeyService.hasPasskey(userId);
     }
 
     /**
@@ -152,22 +152,23 @@ public class AuthFactorPolicy {
     }
 
     /**
-     * What signing in may use for this account.
+     * Which factor finishes signing in to this account once the phone OTP has been verified.
      *
      * <p>
-     * Login is the permissive side by design and stays that way: a PIN step is required
-     * exactly when the account has a PIN, and a registered passkey neither adds a step nor
-     * removes one. In particular a registered passkey must not cause the PIN step to be
-     * skipped, which would let possession of a device stand in for knowledge, nor to be
-     * demanded, which would strand a user whose credential broke.
+     * The phone OTP is never enough on its own for an account that holds a factor, and it
+     * never counts as the completing factor for any account:
+     * <ul>
+     * <li>a held PIN puts the PIN step in front of completion; a held passkey may be presented
+     * there instead of it;</li>
+     * <li>a held passkey with no PIN makes the passkey required;</li>
+     * <li>an account holding neither must set one up before the sign-in completes.</li>
+     * </ul>
+     * Read off {@link #passkeyHeld(String)}, not {@link #passkeyRegistered(String)}, for the
+     * reason given there. An account that cannot produce what this demands has the delayed
+     * recovery, not a weaker path.
      */
     public LoginPolicy loginPolicy(String userId) {
-        boolean passkey = passkeyRegistered(userId);
-        boolean pin = pinRegistered(userId);
-        List<AuthFactor> fallbacks = pin
-                ? List.of(AuthFactor.PIN, AuthFactor.PHONE_OTP)
-                : List.of(AuthFactor.PHONE_OTP);
-        return new LoginPolicy(strongestHeld(passkey, pin), fallbacks);
+        return new LoginPolicy(passkeyHeld(userId), pinRegistered(userId));
     }
 
     /**
@@ -199,37 +200,18 @@ public class AuthFactorPolicy {
     }
 
     /**
-     * How a lost PIN is recovered, and what else the account holds while that happens.
+     * What recovering an account restores, and what it takes away.
      *
      * <p>
-     * The path itself is unchanged and unconditional: a PIN is restored by proving the
-     * number on file, under the dormancy and cooldown gates that
-     * {@link UserSecurityService} already enforces. {@code accountAlsoHoldsPasskey} is
-     * reported, never applied. Applying it would be the lockout described on this class.
+     * Recovery is the same path whatever the account holds: after the OTP, a user who cannot
+     * present a factor starts a delayed recovery in {@link AccountRecoveryService}, and
+     * completing it sets a new PIN. {@code removesPasskeys} is reported, never branched on:
+     * recovery is not refused to an account because it holds a stronger factor (that account
+     * would then have no way back), and the passkeys are removed on completion because the
+     * premise of recovering is that they cannot be used.
      */
     public RecoveryPolicy recoveryFor(String userId) {
-        return new RecoveryPolicy(AuthFactor.PIN, AuthFactor.PHONE_OTP, passkeyRegistered(userId));
-    }
-
-    /**
-     * Records that PIN recovery was requested, noting whether the account also holds a
-     * stronger factor.
-     *
-     * <p>
-     * This is the one thing the cross-factor view buys the recovery flow today. Recovering
-     * a knowledge factor on an account that also holds a passkey is the shape of a takeover
-     * attempt, and until a recovery protocol exists that can tell that apart from an
-     * ordinary lost PIN, the honest thing is to leave the path open and make the event
-     * legible. Call it only after the request has been accepted, so a refused attempt does
-     * not produce a line, and so this never becomes a way to probe which accounts hold
-     * passkeys.
-     */
-    public void recordRecoveryRequest(String userId) {
-        if (passkeyRegistered(userId)) {
-            log.warn("PIN recovery requested for user {}, which also holds a registered passkey", userId);
-            return;
-        }
-        log.debug("PIN recovery requested for user {}", userId);
+        return new RecoveryPolicy(AuthFactor.PIN, AuthFactor.PHONE_OTP, passkeyHeld(userId));
     }
 
     private static AuthFactor strongestHeld(boolean passkey, boolean pin) {
@@ -246,8 +228,9 @@ public class AuthFactorPolicy {
      * What the account has registered on the server, and which of it ranks highest.
      *
      * @param passkey   a WebAuthn credential exists and this deployment can assert it. NOT a
-     *                  statement that any particular device can use it, and never a reason to
-     *                  require a passkey or to skip a step-up
+     *                  statement that any particular device can use it, never a reason to skip
+     *                  a step-up, and not what sign-in routing reads (that is
+     *                  {@link AuthFactorPolicy#passkeyHeld(String)})
      * @param pin       an account PIN is set
      * @param preferred the strongest of the above, falling back to
      *                  {@link AuthFactor#PHONE_OTP}
@@ -256,18 +239,35 @@ public class AuthFactorPolicy {
     }
 
     /**
-     * What signing in to this account looks like: the factor to offer first, and everything
-     * it may fall back to, strongest first.
+     * What finishing a sign-in to this account demands, read from what it holds.
+     *
+     * @param passkeyHeld a passkey credential is stored, whether or not passkeys are switched on
+     * @param pinHeld     an account PIN is set
      */
-    public record LoginPolicy(AuthFactor preferred, List<AuthFactor> fallbacks) {
+    public record LoginPolicy(boolean passkeyHeld, boolean pinHeld) {
 
-        /** Whether the login flow must interpose the PIN step. */
+        /** The login flow must interpose the PIN step; a passkey assertion is accepted there too. */
         public boolean pinStepRequired() {
-            return fallbacks.contains(AuthFactor.PIN);
+            return pinHeld;
         }
 
-        public boolean allows(AuthFactor factor) {
-            return preferred == factor || fallbacks.contains(factor);
+        /** The passkey is the only factor this account holds, so the sign-in must present it. */
+        public boolean passkeyRequired() {
+            return passkeyHeld && !pinHeld;
+        }
+
+        /** The account holds no factor, so it must set one up before the sign-in completes. */
+        public boolean factorSetupRequired() {
+            return !passkeyHeld && !pinHeld;
+        }
+
+        /** Whether presenting {@code factor} finishes the sign-in. Never true for the phone OTP. */
+        public boolean completesWith(AuthFactor factor) {
+            return switch (factor) {
+                case PASSKEY -> passkeyHeld;
+                case PIN -> pinHeld;
+                case PHONE_OTP -> false;
+            };
         }
     }
 
@@ -303,13 +303,13 @@ public class AuthFactorPolicy {
     /**
      * The recovery path for an account.
      *
-     * @param restores                the factor recovery gives back
-     * @param provenBy                what the user proves to get it back
-     * @param accountAlsoHoldsPasskey whether a stronger factor is registered. Reported for
-     *                                visibility and for what a client shows. It is not a
-     *                                gate and must not be made one without a protocol that
-     *                                can prove the stronger factor is really gone.
+     * @param restores        the factor recovery gives back
+     * @param provenBy        what the user proves before recovery can start; the waiting period
+     *                        is what proves they no longer hold anything stronger
+     * @param removesPasskeys whether completing it removes stored passkeys, which it does
+     *                        whenever the account holds one. Reported, not a gate: recovery is
+     *                        never refused because the account holds a stronger factor
      */
-    public record RecoveryPolicy(AuthFactor restores, AuthFactor provenBy, boolean accountAlsoHoldsPasskey) {
+    public record RecoveryPolicy(AuthFactor restores, AuthFactor provenBy, boolean removesPasskeys) {
     }
 }

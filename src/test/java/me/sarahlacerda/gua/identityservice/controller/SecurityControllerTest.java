@@ -21,8 +21,6 @@ import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.config.OidcProperties;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeCompleteRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeStartRequest;
-import me.sarahlacerda.gua.identityservice.controller.dto.PinResetCompleteRequest;
-import me.sarahlacerda.gua.identityservice.controller.dto.PinResetRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinUpdateRequest;
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
@@ -30,6 +28,8 @@ import me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
+import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryService;
+import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryState;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.PinChangeService;
@@ -57,6 +57,9 @@ class SecurityControllerTest {
     @Mock
     private PinChangeService pinChangeService;
 
+    @Mock
+    private AccountRecoveryService accountRecoveryService;
+
     private MockMvc mockMvc;
     private ObjectMapper objectMapper;
     private IdentityServiceProperties properties;
@@ -75,7 +78,7 @@ class SecurityControllerTest {
                 // Real policy over the mocked services, so the factor report and the enrollment
                 // guard are the ones the application computes.
                 new AuthFactorPolicy(userSecurityService, passkeyService),
-                new AccountLocalpartResolver(directoryService), pinChangeService);
+                new AccountLocalpartResolver(directoryService), pinChangeService, accountRecoveryService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new RestExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter())
@@ -96,36 +99,6 @@ class SecurityControllerTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNoContent());
 
         verify(userSecurityService).setInitialPin("@user:domain", "123456");
-    }
-
-    @Test
-    void requestPinResetDelegatesToService() throws Exception {
-        PinResetRequest request = new PinResetRequest();
-        request.setUserId("@user:domain");
-        request.setPhone("+12025550123");
-
-        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/reset")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsBytes(request)))
-                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isAccepted());
-
-        verify(userSecurityService).requestPinReset("@user:domain", "+12025550123", "127.0.0.1");
-    }
-
-    @Test
-    void completePinResetDelegatesToService() throws Exception {
-        PinResetCompleteRequest request = new PinResetCompleteRequest();
-        request.setUserId("@user:domain");
-        request.setPhone("+12025550123");
-        request.setCode("876543");
-        request.setNewPin("123456");
-
-        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/reset/complete")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsBytes(request)))
-                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNoContent());
-
-        verify(userSecurityService).completePinReset("@user:domain", "+12025550123", "876543", "123456");
     }
 
     @Test
@@ -358,24 +331,77 @@ class SecurityControllerTest {
                         .jsonPath("$.phoneChangeStepUpFactors.length()").value(2));
     }
 
+    /**
+     * E3: the unauthenticated reset shared the recovery episode but not its rules. Both paths now
+     * answer 410 whatever is sent, without reading a body and without touching any account.
+     */
     @Test
-    void requestingAPinResetIsAcceptedForAnAccountThatAlsoHoldsAPasskey() throws Exception {
-        PinResetRequest request = new PinResetRequest();
-        request.setUserId("@user:domain");
-        request.setPhone("+12025550123");
-        org.mockito.Mockito.when(passkeyService.isEnabled()).thenReturn(true);
-        org.mockito.Mockito.when(passkeyService.hasPasskey("@user:domain")).thenReturn(true);
+    void theRetiredPinResetEndpointsAnswerGoneAndTouchNothing() throws Exception {
+        for (String path : new String[] { "/security/pin/reset", "/security/pin/reset/complete" }) {
+            mockMvc.perform(MockMvcRequestBuilders.post(path)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"userId\":\"@user:domain\",\"phone\":\"+12025550123\",\"code\":\"876543\",\"newPin\":\"284917\"}"))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isGone())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code")
+                            .value("endpoint_retired"));
+            // No body at all is the same answer, not a validation error.
+            mockMvc.perform(MockMvcRequestBuilders.post(path))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isGone());
+        }
 
-        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/reset")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsBytes(request)))
-                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isAccepted());
+        org.mockito.Mockito.verifyNoInteractions(userSecurityService, accountRecoveryService, passkeyService,
+                directoryService);
+    }
 
-        // Recovery is NOT gated on holding a stronger factor. Gating it would mean an account
-        // whose passkey broke has no login and no recovery, and nothing in this service can
-        // remove or replace a registered credential. The cross-factor view is spent on making
-        // the event findable, not on refusing it.
-        verify(userSecurityService).requestPinReset("@user:domain", "+12025550123", "127.0.0.1");
+    @Test
+    void cancellingARecoveryDelegatesForTheAuthenticatedAccountAndAnswersNoContent() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
+        org.mockito.Mockito.when(accountRecoveryService.cancel("@user:domain", "127.0.0.1")).thenReturn(true);
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/recovery/cancel"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNoContent());
+
+        verify(accountRecoveryService).cancel("@user:domain", "127.0.0.1");
+    }
+
+    @Test
+    void cancellingWhenNoRecoveryIsLiveIsTheSameAnswer() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
+        org.mockito.Mockito.when(accountRecoveryService.cancel("@user:domain", "127.0.0.1")).thenReturn(false);
+
+        // 204 either way: the banner only needs to know nothing is live any more.
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/recovery/cancel"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNoContent());
+    }
+
+    @Test
+    void pinStatusReportsALiveRecoverySoEverySignedInAppCanShowTheBanner() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
+        org.mockito.Mockito.when(accountRecoveryService.pendingFor("@user:domain")).thenReturn(java.util.Optional.of(
+                new AccountRecoveryState(AccountRecoveryState.Status.PENDING, null, 1_760_000_000L, 1_760_604_800L)));
+
+        mockMvc.perform(MockMvcRequestBuilders.get("/security/pin/status"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.accountRecoveryPending").value(true))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.accountRecoveryCompletableAtEpochSeconds").value(1_760_000_000L))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.accountRecoveryExpiresAtEpochSeconds").value(1_760_604_800L));
+    }
+
+    @Test
+    void pinStatusReportsNoRecoveryWithNullTimes() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
+
+        mockMvc.perform(MockMvcRequestBuilders.get("/security/pin/status"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.accountRecoveryPending").value(false))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.accountRecoveryCompletableAtEpochSeconds").doesNotExist())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.accountRecoveryExpiresAtEpochSeconds").doesNotExist());
     }
 
     @Test

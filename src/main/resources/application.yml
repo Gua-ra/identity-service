@@ -31,6 +31,11 @@ identity:
     phone-change-cooldown: ${IDENTITY_SECURITY_PHONE_CHANGE_COOLDOWN:PT24H}
     phone-change-challenge-ttl: ${IDENTITY_SECURITY_PHONE_CHANGE_CHALLENGE_TTL:PT10M}
     max-phone-change-otp-attempts: ${IDENTITY_SECURITY_MAX_PHONE_CHANGE_OTP_ATTEMPTS:5}
+    # Delayed account recovery. Both default to pin-reset-cooldown when unset. Startup refuses
+    # either below PT24H unless allow-short-for-testing is true, which only dev may set.
+    account-recovery-dormancy: ${IDENTITY_SECURITY_ACCOUNT_RECOVERY_DORMANCY:}
+    account-recovery-wait: ${IDENTITY_SECURITY_ACCOUNT_RECOVERY_WAIT:}
+    account-recovery-allow-short-for-testing: ${IDENTITY_SECURITY_ACCOUNT_RECOVERY_ALLOW_SHORT_FOR_TESTING:false}
   # Account genesis and the accountId (ADM-008 Phase 3). Every flag is off by default: a deployment
   # that sets none of them behaves exactly as it did before the feature existed. Nothing here is read
   # for routing or for login in this phase.
@@ -161,16 +166,23 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_LIMIT:20}
         refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_REFRESH:PT5M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_TIMEOUT:PT0S}
-      - path: /security/pin/reset
+      # Delayed account recovery. Start opens an episode on the account, so it is held to a few
+      # per hour per address; complete sets a PIN; cancel is bearer-gated and called by the apps.
+      - path: /login/recovery/start
         methods: [POST]
-        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_LIMIT:3}
-        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_REFRESH:PT1H}
-        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_TIMEOUT:PT0S}
-      - path: /security/pin/reset/complete
+        limit-for-period: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_START_LIMIT:3}
+        refresh-period: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_START_REFRESH:PT1H}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_START_TIMEOUT:PT0S}
+      - path: /login/recovery/complete
         methods: [POST]
-        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_COMPLETE_LIMIT:3}
-        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_COMPLETE_REFRESH:PT1H}
-        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_COMPLETE_TIMEOUT:PT0S}
+        limit-for-period: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_COMPLETE_LIMIT:5}
+        refresh-period: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_COMPLETE_REFRESH:PT1H}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_COMPLETE_TIMEOUT:PT0S}
+      - path: /security/recovery/cancel
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_RECOVERY_CANCEL_LIMIT:20}
+        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_RECOVERY_CANCEL_REFRESH:PT5M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_RECOVERY_CANCEL_TIMEOUT:PT0S}
       - path: /security/pin/change/start
         methods: [POST]
         limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_CHANGE_START_LIMIT:5}

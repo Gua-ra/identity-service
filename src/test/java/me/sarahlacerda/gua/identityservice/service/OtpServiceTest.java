@@ -313,10 +313,10 @@ class OtpServiceTest {
     @Test
     void aPublicCodeDoesNotSatisfyAScopedVerify() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("otp:code:pin-reset:@user:gua.global")).thenReturn(null);
+        when(valueOperations.get("otp:code:pin-change:chal-1")).thenReturn(null);
 
-        // A code the public send minted for this number is presented to the reset flow.
-        assertThatThrownBy(() -> otpService.verifyScopedOtp(OtpScope.PIN_RESET, "@user:gua.global", "654321"))
+        // A code the public send minted for this number is presented to the PIN change flow.
+        assertThatThrownBy(() -> otpService.verifyScopedOtp(OtpScope.PIN_CHANGE, "chal-1", "654321"))
                 .isInstanceOf(InvalidOtpException.class);
 
         // The per-phone key is never even read, so whatever lives under it is irrelevant.
@@ -328,13 +328,13 @@ class OtpServiceTest {
     @Test
     void aScopedCodeIsSingleUseAndCarriesTheSameGuessBudget() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        String codeKey = "otp:code:pin-reset:@user:gua.global";
-        String attemptsKey = "otp:attempts:pin-reset:@user:gua.global";
+        String codeKey = "otp:code:pin-change:chal-1";
+        String attemptsKey = "otp:attempts:pin-change:chal-1";
         when(valueOperations.get(codeKey)).thenReturn("654321");
         when(valueOperations.increment(attemptsKey)).thenReturn(1L, 2L, 3L, 4L, 5L);
 
         for (int guess = 1; guess <= properties.getOtp().getMaxVerifyAttempts(); guess++) {
-            assertThatThrownBy(() -> otpService.verifyScopedOtp(OtpScope.PIN_RESET, "@user:gua.global", "000000"))
+            assertThatThrownBy(() -> otpService.verifyScopedOtp(OtpScope.PIN_CHANGE, "chal-1", "000000"))
                     .isInstanceOf(InvalidOtpException.class);
         }
 
