@@ -263,7 +263,7 @@ The consequence is deliberate and worth stating plainly: recovery is the one pla
 | --- | --- | --- |
 | `GET /security/pin/status` | Bearer | Whether the user has a PIN set (drives the "set up two-step verification" nudge), plus `changePhoneCooldownRemainingSeconds` (how long the fresh-2FA hold below still has to run) and the account's factor report: `passkeyRegistered`, `preferredFactor` and `phoneChangeStepUpFactors` (see [Which factor applies where](#which-factor-applies-where)). |
 | `POST /security/pin` | Bearer | Set the **initial** PIN. Rejects payloads containing `currentPin`: changes must use the flow below. |
-| `POST /security/pin/change/start` | Bearer | Verify current PIN, enforce the 24h change cooldown, and send an OTP. Returns a challenge id (`425` if cooldown active). |
+| `POST /security/pin/change/start` | Bearer | Enforce the 24h change cooldown, authorize with a passkey step-up assertion (`passkeyStepUpId` + `passkeyCredential`, preferred) or the current PIN, and send an OTP. A freshly registered passkey is held (`400 twofa_cooldown_active`) and the PIN path stays available. Returns a challenge id (`425` if cooldown active). |
 | `POST /security/pin/change/complete` | Bearer | Redeem the challenge + OTP to apply the new PIN. |
 | `POST /security/pin/reset` | Public | Begin PIN recovery by sending an OTP to the verified phone. |
 | `POST /security/pin/reset/complete` | Public | Verify the reset OTP and set a new PIN. |
