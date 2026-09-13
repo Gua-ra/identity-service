@@ -424,7 +424,9 @@ class AuthFactorPolicyGuardTest {
     /**
      * E2: the marker that makes the authentication service end every other session is set for a
      * completed recovery and nothing else. One assignment of the RECOVERY factor, in the recovery
-     * completion; one place it becomes the authorization flag; one place it becomes the claim.
+     * completion; one place it becomes the authorization flag; one place it becomes the claim. The
+     * only other way to the flag is a sign-out a completed recovery still owes, which only the
+     * recovery completion records, and which is settled where the claim is issued.
      */
     @Test
     void theEndOtherSessionsMarkerIsOnlyEverSetForARecovery() throws IOException {
@@ -438,6 +440,22 @@ class AuthFactorPolicyGuardTest {
                 .contains("session.getAuthenticatedFactor() == SessionFactor.RECOVERY");
         assertThat(tokens).containsOnlyOnce("END_OTHER_SESSIONS_CLAIM, true");
         assertThat(tokens).contains("authorization.endOtherSessions()");
+
+        try (var sources = Files.walk(MAIN)) {
+            for (Path file : sources.filter(path -> path.toString().endsWith(".java")).toList()) {
+                String source = read(file);
+                if (file.endsWith(Path.of("service/security/AccountRecoveryService.java"))) {
+                    assertThat(source).containsOnlyOnce("endOtherSessionsService.markOwed(");
+                    assertThat(methodBody(source, "public int complete(")).contains("endOtherSessionsService.markOwed(");
+                } else if (!file.endsWith(Path.of("service/security/EndOtherSessionsService.java"))) {
+                    assertThat(source).as(file.toString()).doesNotContain(".markOwed(");
+                }
+                if (!file.endsWith(Path.of("service/oidc/OidcTokenService.java"))
+                        && !file.endsWith(Path.of("service/security/EndOtherSessionsService.java"))) {
+                    assertThat(source).as(file.toString()).doesNotContain("endOtherSessionsService.settle(");
+                }
+            }
+        }
     }
 
     /**

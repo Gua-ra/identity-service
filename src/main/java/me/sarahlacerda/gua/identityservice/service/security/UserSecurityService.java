@@ -78,7 +78,7 @@ public class UserSecurityService {
 
     @Transactional
     public void updatePin(String userId, String currentPin, String newPin) {
-        IdentityUser user = requireExistingUser(userId);
+        IdentityUser user = requireLockedUser(userId);
         if (!user.hasPin()) {
             throw new InvalidPinOperationException("No existing PIN to update");
         }
@@ -130,7 +130,7 @@ public class UserSecurityService {
      */
     @Transactional
     public void completePinChange(String userId, String challengeId, String otpCode, String newPin) {
-        IdentityUser user = requireExistingUser(userId);
+        IdentityUser user = requireLockedUser(userId);
         if (!user.hasPin()) {
             throw new InvalidPinOperationException("PIN not set for user");
         }
@@ -283,12 +283,13 @@ public class UserSecurityService {
     /**
      * Stamps the time of a successful phone-number change. Called inside the swap
      * transaction so the cooldown clock starts atomically with the mapping switch.
-     * Uses {@link #ensureUser(String)} because a token-only account may not yet have
-     * an identity_users row.
+     * Creates the row when a token-only account does not have one yet, and locks it like
+     * every other writer of this row: an unlocked read here would write back whatever
+     * recovery stamp or PIN hash it had read over a cancel or completion committed in between.
      */
     @Transactional
     public void stampPhoneChange(String userId) {
-        IdentityUser user = ensureUser(userId);
+        IdentityUser user = lockOrCreateUser(userId);
         user.setLastPhoneChangeAt(Instant.now());
     }
 
@@ -384,10 +385,22 @@ public class UserSecurityService {
     /**
      * Locks the account row, creating it first when the account has never had one. An account
      * that signed in only through paths that never wrote security state has no row yet.
+     *
+     * <p>
+     * A missing row has nothing to lock, so the insert is flushed at once: two transactions
+     * creating the same row then meet on the {@code user_id} unique index, the second waits for
+     * the first and fails with a {@code DataIntegrityViolationException} instead of carrying on
+     * as if it held the only row.
      */
     IdentityUser lockOrCreateUser(String userId) {
         return repository.findByUserIdForUpdate(userId)
-                .orElseGet(() -> repository.save(IdentityUser.builder().userId(userId).build()));
+                .orElseGet(() -> repository.saveAndFlush(IdentityUser.builder().userId(userId).build()));
+    }
+
+    /** Locks the row of an account that must already have one. */
+    private IdentityUser requireLockedUser(String userId) {
+        return repository.findByUserIdForUpdate(userId)
+                .orElseThrow(() -> new UnknownUserException("Unknown user: " + userId));
     }
 
     /** Opens a recovery episode on a locked row. The stamp is {@code pin_reset_requested_at}. */

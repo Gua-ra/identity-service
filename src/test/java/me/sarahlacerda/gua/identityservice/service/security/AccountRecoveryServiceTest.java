@@ -54,6 +54,7 @@ class AccountRecoveryServiceTest {
     private final MutableClock clock = new MutableClock(T0);
     private IdentityUserRepository repository;
     private PasskeyService passkeyService;
+    private EndOtherSessionsService endOtherSessionsService;
     private SecurityAuditLogger auditLogger;
     private IdentityServiceProperties properties;
     private PasswordEncoder passwordEncoder;
@@ -64,6 +65,7 @@ class AccountRecoveryServiceTest {
     void setUp() {
         repository = mock(IdentityUserRepository.class);
         passkeyService = mock(PasskeyService.class);
+        endOtherSessionsService = mock(EndOtherSessionsService.class);
         auditLogger = mock(SecurityAuditLogger.class);
         passwordEncoder = new BCryptPasswordEncoder(4);
         properties = new IdentityServiceProperties();
@@ -72,7 +74,8 @@ class AccountRecoveryServiceTest {
         UserSecurityService userSecurityService = new UserSecurityService(repository, passwordEncoder, properties,
                 mock(DirectoryService.class), mock(PhoneNumberHasher.class), mock(OtpService.class), auditLogger,
                 mock(StringRedisTemplate.class), new PinPolicy());
-        service = new AccountRecoveryService(userSecurityService, passkeyService, properties, auditLogger, clock);
+        service = new AccountRecoveryService(userSecurityService, passkeyService, endOtherSessionsService, properties,
+                auditLogger, clock);
 
         user = IdentityUser.builder().userId(USER).build();
         user.setPinHash(passwordEncoder.encode("482913"));
@@ -243,7 +246,7 @@ class AccountRecoveryServiceTest {
     @Test
     void startingForAnAccountWithNoRowCreatesTheRowUnderTheLock() {
         when(repository.findByUserIdForUpdate(USER)).thenReturn(Optional.empty());
-        when(repository.save(any(IdentityUser.class))).thenAnswer(call -> call.getArgument(0));
+        when(repository.saveAndFlush(any(IdentityUser.class))).thenAnswer(call -> call.getArgument(0));
 
         assertThat(service.start(USER, "••••4567", "203.0.113.9").status()).isEqualTo(Status.PENDING);
     }
@@ -274,6 +277,22 @@ class AccountRecoveryServiceTest {
         verify(auditLogger).accountRecoveryCompleted(USER, 2);
     }
 
+    /**
+     * D5 must survive a login that cannot be finished after the commit, and the account must not
+     * look dormant because the sign-in record after the commit never ran.
+     */
+    @Test
+    void completingARecoveryRecordsTheOwedSignOutAndCountsAsActivity() {
+        readyEpisode();
+        user.setLastLoginAt(T0.minus(Duration.ofDays(30)));
+
+        service.complete(USER, "739164");
+
+        verify(endOtherSessionsService).markOwed(USER);
+        assertThat(user.getLastLoginAt()).isEqualTo(T0);
+        assertThat(service.stateFor(USER).status()).isEqualTo(Status.TOO_SOON);
+    }
+
     @Test
     void completingAPendingEpisodeIsNotReadyAndChangesNothing() {
         user.setPinResetRequestedAt(T0.minus(WAIT).plusSeconds(1));
@@ -284,7 +303,7 @@ class AccountRecoveryServiceTest {
                 .isEqualTo(Status.PENDING);
 
         assertThat(passwordEncoder.matches("482913", user.getPinHash())).isTrue();
-        verifyNoInteractions(passkeyService);
+        verifyNoInteractions(passkeyService, endOtherSessionsService);
     }
 
     @Test
@@ -320,7 +339,7 @@ class AccountRecoveryServiceTest {
         assertThat(passwordEncoder.matches("482913", user.getPinHash())).isTrue();
         assertThat(user.getPinResetRequestedAt()).isEqualTo(T0.minus(WAIT));
         assertThat(user.getPinFailureCount()).isEqualTo(3);
-        verifyNoInteractions(passkeyService);
+        verifyNoInteractions(passkeyService, endOtherSessionsService);
     }
 
     // -------------------- cancel --------------------

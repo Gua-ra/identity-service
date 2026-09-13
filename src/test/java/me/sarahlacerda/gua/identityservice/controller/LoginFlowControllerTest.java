@@ -64,6 +64,7 @@ import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryServi
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryState;
 import me.sarahlacerda.gua.identityservice.service.security.LoginFactorEnrollmentService;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
+import me.sarahlacerda.gua.identityservice.service.security.EndOtherSessionsService;
 import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
@@ -164,6 +165,8 @@ class LoginFlowControllerTest {
     private AccountRecoveryService accountRecoveryService;
     @MockitoBean
     private TokenRevocationService tokenRevocationService;
+    @MockitoBean
+    private EndOtherSessionsService endOtherSessionsService;
 
     @BeforeEach
     void setUp() {
@@ -505,6 +508,7 @@ class LoginFlowControllerTest {
         session.setUserId("u1");
         session.setDisplayName("Alice");
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.isEnabled()).thenReturn(true);
 
         mockMvc.perform(post("/login/pin")
                 .cookie(cookie())
@@ -516,6 +520,56 @@ class LoginFlowControllerTest {
 
         verify(userSecurityService).validatePinOrThrow("u1", "123456");
         assertEquals(SessionFactor.PIN, session.getAuthenticatedFactor());
+    }
+
+    /** A deployment without passkeys has no ceremony to offer, so a PIN sign-in is simply done. */
+    @Test
+    void submitPinCompletesStraightThroughWhenPasskeysAreOff() throws Exception {
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("u1");
+        session.setDisplayName("Alice");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.isEnabled()).thenReturn(false);
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        mockMvc.perform(post("/login/pin")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pin\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.redirectUrl").value(CALLBACK + "?code=auth-code&state=xyz"));
+
+        assertEquals(SessionFactor.PIN, session.getAuthenticatedFactor());
+        assertEquals(false, issuedAuthorization().endOtherSessions());
+        verify(loginSessionService, org.mockito.Mockito.never()).save(eq(SID), any());
+    }
+
+    /**
+     * D5 survives a recovery whose own login could not be finished: while its sign-out is still
+     * owed, the account's next completed sign-in carries the claim.
+     */
+    @Test
+    void aSignInWhileARecoveryStillOwesItsSignOutCarriesTheClaim() throws Exception {
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("u1");
+        session.setDisplayName("Alice");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(endOtherSessionsService.isOwed("u1")).thenReturn(true);
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        mockMvc.perform(post("/login/pin")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pin\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+
+        assertEquals(true, issuedAuthorization().endOtherSessions());
+        // Settled only when the ID token carrying the claim is issued, not here.
+        verify(endOtherSessionsService, org.mockito.Mockito.never()).settle(any());
     }
 
     @Test
@@ -2257,9 +2311,11 @@ class LoginFlowControllerTest {
         for (LoginSession session : List.of(noOtp, reauth, enrollment, passkeyFirst, wrongStep, noSubject)) {
             when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
 
+            // Sent as an explicit null, as the contract states, rather than left out.
             mockMvc.perform(get("/login/context").cookie(cookie()))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.recovery").doesNotExist());
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                            .string(org.hamcrest.Matchers.containsString("\"recovery\":null")));
             postJson("/login/recovery/start", "{}")
                     .andExpect(status().isConflict())
                     .andExpect(jsonPath("$.code").value("recovery_unavailable"));

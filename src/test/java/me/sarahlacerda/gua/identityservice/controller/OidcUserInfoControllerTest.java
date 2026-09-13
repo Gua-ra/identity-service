@@ -89,7 +89,9 @@ class OidcUserInfoControllerTest {
                 ios.setClientId("gua-ios");
                 properties.setClients(java.util.List.of(mas, ios));
             }
-            return new OidcTokenService(properties, oidcSigningKey, tokenRevocationService);
+            return new OidcTokenService(properties, oidcSigningKey, tokenRevocationService,
+                    org.mockito.Mockito.mock(
+                            me.sarahlacerda.gua.identityservice.service.security.EndOtherSessionsService.class));
         }
     }
 }

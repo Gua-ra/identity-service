@@ -2,6 +2,7 @@ package me.sarahlacerda.gua.identityservice.service.security;
 
 import lombok.RequiredArgsConstructor;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -45,7 +46,7 @@ public class LoginFactorEnrollmentService {
      */
     @Transactional
     public void setUpFirstPin(String userId, String pin) {
-        IdentityUser user = userSecurityService.lockOrCreateUser(userId);
+        IdentityUser user = lockForEnrollment(userId);
         if (user.hasPin() || passkeyService.hasPasskey(userId)) {
             throw factorRequired();
         }
@@ -66,13 +67,28 @@ public class LoginFactorEnrollmentService {
             throw new LoginFlowException(HttpStatus.CONFLICT, "passkey_user_unknown",
                     "Passkey setup requires a verified account");
         }
-        IdentityUser user = userSecurityService.lockOrCreateUser(session.getUserId());
+        IdentityUser user = lockForEnrollment(session.getUserId());
         boolean heldAFactor = user.hasPin() || passkeyService.hasPasskey(session.getUserId());
         if (heldAFactor && session.getAuthenticatedFactor() == null) {
             throw factorRequired();
         }
         passkeyService.finishRegistration(sessionId, session, credential);
         return !heldAFactor;
+    }
+
+    /**
+     * Locks the account row, creating it when the account has none. Two sessions for an account
+     * without a row both find nothing to lock; the second to create it fails on the unique
+     * {@code user_id} once the first commits. That session lost the race to an account that is
+     * now being written, so it gets the same answer as one that found a factor under the lock,
+     * and its transaction, including anything it would have stored, rolls back.
+     */
+    private IdentityUser lockForEnrollment(String userId) {
+        try {
+            return userSecurityService.lockOrCreateUser(userId);
+        } catch (DataIntegrityViolationException ex) {
+            throw factorRequired();
+        }
     }
 
     private static LoginFlowException factorRequired() {

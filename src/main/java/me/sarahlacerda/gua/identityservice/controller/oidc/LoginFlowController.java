@@ -68,6 +68,7 @@ import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryState
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy;
 import me.sarahlacerda.gua.identityservice.service.security.LoginFactorEnrollmentService;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
+import me.sarahlacerda.gua.identityservice.service.security.EndOtherSessionsService;
 import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 
@@ -148,6 +149,7 @@ public class LoginFlowController {
     private final LoginFactorEnrollmentService loginFactorEnrollmentService;
     private final AccountRecoveryService accountRecoveryService;
     private final TokenRevocationService tokenRevocationService;
+    private final EndOtherSessionsService endOtherSessionsService;
 
     @GetMapping("/context")
     @Operation(summary = "Fetch the current login state", description = "Returns the current step, the login intent (PHONE or PASSKEY, from the OIDC login_hint), a CSRF token to echo on subsequent calls, the masked phone when known, and whether this is an in-app passkey enrollment. Once the step is one the flow can only reach with the subject resolved, it also reports passkeyRegistered, preferredFactor and passkeysEnabled; all are absent before then, and in particular at the phone step, where the session holds a submitted number and nothing proved. At PIN_REQUIRED and PASSKEY_REQUIRED after an OTP it also reports recovery, the delayed account recovery state, which is absent whenever recovery is not available to this session.")
@@ -656,6 +658,8 @@ public class LoginFlowController {
         accountRecoveryService.complete(session.getUserId(), newPin);
         // Committed. identity-service's own access tokens are cut off here; the tokens the apps
         // actually hold are ended by the authentication service, on the claim this login carries.
+        // The commit also recorded that sign-out as owed, so if anything from here on fails, the
+        // account's next completed sign-in carries the claim instead.
         tokenRevocationService.revokeAllTokens(session.getUserId());
         session.setAuthenticatedFactor(SessionFactor.RECOVERY);
         return complete(sessionId, session);
@@ -678,6 +682,15 @@ public class LoginFlowController {
         }
         userSecurityService.recordSuccessfulLogin(session.getUserId());
 
+        // Only a completed recovery asks the authentication service to end every other session of
+        // the account: this one, or an earlier one whose own login could not be finished, which is
+        // why its sign-out is still owed. No other sign-in may carry it.
+        boolean endOtherSessions = session.getAuthenticatedFactor() == SessionFactor.RECOVERY
+                || endOtherSessionsService.isOwed(session.getUserId());
+        if (endOtherSessions && session.getAuthenticatedFactor() != SessionFactor.RECOVERY) {
+            log.warn("Sign-in for user {} carries the sign-out of other sessions still owed by its recovery",
+                    session.getUserId());
+        }
         OidcAuthorization authorization = new OidcAuthorization(
                 session.getUserId(),
                 session.getPhoneNumber(),
@@ -686,9 +699,7 @@ public class LoginFlowController {
                 new LinkedHashSet<>(session.getScope()),
                 session.getClientId(),
                 session.getNonce(),
-                // Only a completed recovery asks the authentication service to end every other
-                // session of the account. No other sign-in may carry it.
-                session.getAuthenticatedFactor() == SessionFactor.RECOVERY);
+                endOtherSessions);
         OidcAuthorizationCode code = authorizationService.issueCode(
                 authorization, session.getRedirectUri(), session.getCodeChallenge());
 
@@ -776,9 +787,10 @@ public class LoginFlowController {
 
     private ResponseEntity<LoginStateResponse> advanceToPasskeySetup(String sessionId, LoginSession session) {
         // Reached only after a PIN sign-in. Don't re-offer passkey setup to an account that already
-        // has one: re-registering the same device only fails. Such a user is done authenticating;
-        // complete the login straight through.
-        if (authFactorPolicy.passkeyHeld(session.getUserId())) {
+        // has one: re-registering the same device only fails. Nor on a deployment that cannot run a
+        // passkey ceremony, where the offer is a step nobody can take. Either way the user is done
+        // authenticating; complete the login straight through.
+        if (!authFactorPolicy.passkeysSupported() || authFactorPolicy.passkeyHeld(session.getUserId())) {
             return complete(sessionId, session);
         }
         session.setPhase(Phase.PASSKEY_SETUP);
@@ -1035,10 +1047,12 @@ public class LoginFlowController {
              */
             boolean enrollment,
             /**
-             * The delayed account recovery state for this account. Null, and omitted from the
-             * JSON, whenever recovery is not available to this session, which is the signal for
-             * the UI to hide the recovery link.
+             * The delayed account recovery state for this account. Null whenever recovery is not
+             * available to this session, which is the signal for the UI to hide the recovery link.
+             * Unlike the fields above it is always present, as an explicit {@code null}, so a
+             * client testing {@code recovery !== null} and one testing {@code recovery == null}
+             * reach the same answer.
              */
-            AccountRecoveryState recovery) {
+            @JsonInclude(JsonInclude.Include.ALWAYS) AccountRecoveryState recovery) {
     }
 }
