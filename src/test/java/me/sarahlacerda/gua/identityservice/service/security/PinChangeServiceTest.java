@@ -100,21 +100,6 @@ class PinChangeServiceTest {
     }
 
     @Test
-    void withoutAnAssertionTheCurrentPinIsStillRequired() {
-        userWithPin();
-
-        assertThatThrownBy(() -> service.start(USER, PHONE, null, null, null, IP))
-                .isInstanceOf(InvalidPinException.class);
-        // A step-up id with no credential, or with an explicit JSON null, is not an assertion.
-        assertThatThrownBy(() -> service.start(USER, PHONE, null, "step-1", null, IP))
-                .isInstanceOf(InvalidPinException.class);
-        assertThatThrownBy(() -> service.start(USER, PHONE, null, "step-1", JsonNodeFactory.instance.nullNode(), IP))
-                .isInstanceOf(InvalidPinException.class);
-        verify(passkeyService, never()).finishStepUpAssertion(any(), any());
-        verify(otpService, never()).sendScopedOtp(any(), any(), any(), any(), any());
-    }
-
-    @Test
     void theCurrentPinStillStartsTheChange() {
         userWithPin();
 
@@ -148,6 +133,7 @@ class PinChangeServiceTest {
 
         assertThatThrownBy(() -> service.start(USER, PHONE, null, "step-1", credential, IP))
                 .isInstanceOf(TwoFactorCooldownException.class);
+        verify(auditLogger).reauthFailed(USER, "PIN_CHANGE", IP);
         verify(otpService, never()).sendScopedOtp(any(), any(), any(), any(), any());
     }
 
@@ -178,6 +164,75 @@ class PinChangeServiceTest {
         assertThatThrownBy(() -> service.start(USER, PHONE, null, "step-1", credential(), IP))
                 .isInstanceOf(InvalidPinOperationException.class);
         verify(passkeyService, never()).finishStepUpAssertion(any(), any());
+    }
+
+    @Test
+    void aWrongCurrentPinIsRefusedCountedAndSendsNothing() {
+        IdentityUser user = userWithPin();
+
+        assertThatThrownBy(() -> service.start(USER, PHONE, "000000", null, null, IP))
+                .isInstanceOf(InvalidPinException.class);
+
+        assertThat(user.getPinFailureCount()).isEqualTo(1);
+        verify(auditLogger).pinValidationFailed(USER, 1);
+        verify(otpService, never()).sendScopedOtp(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void theCooldownStillAppliesToThePinPath() {
+        IdentityUser user = userWithPin();
+        user.setLastPinChangeAt(Instant.now().minus(Duration.ofHours(1)));
+
+        assertThatThrownBy(() -> service.start(USER, PHONE, "123456", null, null, IP))
+                .isInstanceOf(PinChangeCooldownException.class);
+        verify(repository, never()).findByUserIdForUpdate(any());
+        verify(otpService, never()).sendScopedOtp(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void offeringNeitherFactorIsRefusedWithoutChargingAnAttempt() {
+        IdentityUser user = userWithPin();
+
+        assertThatThrownBy(() -> service.start(USER, PHONE, null, null, null, IP))
+                .isInstanceOf(InvalidPinOperationException.class);
+        assertThatThrownBy(() -> service.start(USER, PHONE, " ", "step-1", JsonNodeFactory.instance.nullNode(), IP))
+                .isInstanceOf(InvalidPinOperationException.class);
+
+        assertThat(user.getPinFailureCount()).isZero();
+        verify(repository, never()).findByUserIdForUpdate(any());
+        verify(passkeyService, never()).finishStepUpAssertion(any(), any());
+        verify(otpService, never()).sendScopedOtp(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void aCredentialWithoutAStepUpIdIsNotAnAssertionAndTheCurrentPinDecides() {
+        IdentityUser user = userWithPin();
+
+        assertThatThrownBy(() -> service.start(USER, PHONE, "000000", null, credential(), IP))
+                .isInstanceOf(InvalidPinException.class);
+        assertThat(user.getPinFailureCount()).isEqualTo(1);
+
+        String challengeId = service.start(USER, PHONE, "123456", " ", credential(), IP);
+        assertThat(challengeId).isNotBlank();
+        verify(passkeyService, never()).finishStepUpAssertion(any(), any());
+    }
+
+    @Test
+    void aCeremonyTheServerRefusesSendsNothingAndIsAudited() {
+        IdentityUser user = userWithPin();
+        JsonNode credential = credential();
+        when(passkeyService.finishStepUpAssertion("step-1", credential))
+                .thenThrow(new IllegalStateException("user verification missing"));
+
+        assertThatThrownBy(() -> service.start(USER, PHONE, "123456", "step-1", credential, IP))
+                .isInstanceOf(IllegalStateException.class);
+
+        verify(auditLogger).reauthFailed(USER, "PIN_CHANGE", IP);
+        // A refused assertion does not quietly fall back to the PIN that came with it.
+        verify(repository, never()).findByUserIdForUpdate(any());
+        assertThat(user.getPinFailureCount()).isZero();
+        verify(otpService, never()).sendScopedOtp(any(), any(), any(), any(), any());
+        verify(valueOps, never()).set(any(), any(), any(Duration.class));
     }
 
     private IdentityUser userWithPin() {

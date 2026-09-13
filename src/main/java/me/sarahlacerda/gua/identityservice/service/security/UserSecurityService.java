@@ -85,22 +85,9 @@ public class UserSecurityService {
     }
 
     /**
-     * Step 1 of the OTP-protected PIN change authorized by the current PIN: enforce the
-     * change cooldown, verify the current PIN, and send an OTP to the verified phone. Returns
-     * an opaque challenge that the caller must redeem in step 2. The start authorized by the stronger factor
-     * is {@link PinChangeService}, which reaches the same checks and the same send.
-     */
-    @Transactional
-    public String startPinChange(String userId, String phone, String currentPin, String requesterIp) {
-        preparePinChange(userId, phone);
-        validatePinOrThrow(userId, currentPin);
-        return issuePinChangeChallenge(userId, phone, requesterIp);
-    }
-
-    /**
-     * The checks every PIN change start runs before its authorizing factor is weighed: the
-     * account has a PIN, the change cooldown has passed, and the number belongs to the caller.
-     * Run first so a refusal here never spends a factor.
+     * Step 1 of the OTP-protected PIN change, first half: the account has a PIN, the change
+     * cooldown has passed, and the number belongs to the caller. {@link PinChangeService} runs it
+     * before weighing the factor that authorizes the change, so a refusal here spends nothing.
      */
     void preparePinChange(String userId, String phone) {
         IdentityUser user = requireExistingUser(userId);
@@ -112,9 +99,10 @@ public class UserSecurityService {
     }
 
     /**
-     * Sends the PIN change code and records the challenge. Package-private and unguarded on
-     * purpose: it authorizes nothing, so its only callers are the two starts, each of which
-     * has already run {@link #preparePinChange(String, String)} and accepted a factor.
+     * Step 1, second half: sends the PIN change code and records the challenge. Package-private
+     * and unguarded on purpose: it authorizes nothing, so its only caller is
+     * {@link PinChangeService}, after {@link #preparePinChange(String, String)} and an accepted
+     * factor.
      */
     String issuePinChangeChallenge(String userId, String phone, String requesterIp) {
         // The challenge id is minted before the send because it is what the code is keyed
@@ -248,7 +236,7 @@ public class UserSecurityService {
         long remaining = freshFactorHoldRemainingSeconds(factorCreatedAt);
         if (remaining > 0) {
             throw new TwoFactorCooldownException(
-                    "Two-step verification was set up too recently to change the phone number", remaining);
+                    "Two-step verification was set up too recently to authorize this change", remaining);
         }
     }
 
