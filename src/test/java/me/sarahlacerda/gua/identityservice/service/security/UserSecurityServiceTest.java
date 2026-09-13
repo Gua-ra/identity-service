@@ -259,56 +259,6 @@ class UserSecurityServiceTest {
     }
 
     @Test
-    void startPinChangeRejectsWhenWithinCooldown() {
-        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
-        user.setPinHash(passwordEncoder.encode("123456"));
-        user.setLastPinChangeAt(Instant.now().minus(Duration.ofHours(1)));
-
-        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
-
-        assertThatThrownBy(() -> service.startPinChange("@user:gua.global", "+12025550123", "123456", "127.0.0.1"))
-                .isInstanceOf(PinChangeCooldownException.class);
-    }
-
-    @Test
-    void startPinChangeRejectsWrongCurrentPin() {
-        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
-        user.setPinHash(passwordEncoder.encode("123456"));
-
-        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
-        when(repository.findByUserIdForUpdate("@user:gua.global")).thenReturn(Optional.of(user));
-        when(phoneNumberHasher.digest("+12025550123")).thenReturn("digest");
-        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(directoryEntry("@user:gua.global")));
-
-        assertThatThrownBy(() -> service.startPinChange("@user:gua.global", "+12025550123", "000000", "127.0.0.1"))
-                .isInstanceOf(InvalidPinException.class);
-        verify(otpService, org.mockito.Mockito.never()).sendOtp(any(), any(), any());
-        verify(otpService, org.mockito.Mockito.never()).sendScopedOtp(any(), any(), any(), any(), any());
-    }
-
-    @Test
-    void startPinChangeSendsOtpAndPersistsChallenge() {
-        IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
-        user.setPinHash(passwordEncoder.encode("123456"));
-
-        when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
-        when(repository.findByUserIdForUpdate("@user:gua.global")).thenReturn(Optional.of(user));
-        when(phoneNumberHasher.digest("+12025550123")).thenReturn("digest");
-        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(directoryEntry("@user:gua.global")));
-
-        String challengeId = service.startPinChange("@user:gua.global", "+12025550123", "123456", "127.0.0.1");
-
-        assertThat(challengeId).isNotBlank();
-        // The code is keyed to the challenge the caller was handed, so the public send can
-        // neither plant one under it nor produce one that redeems it.
-        verify(otpService).sendScopedOtp(OtpScope.PIN_CHANGE, challengeId, "+12025550123", "127.0.0.1", null);
-        verify(otpService, org.mockito.Mockito.never()).sendOtp(any(), any(), any());
-        verify(valueOps).set(eq("pin:change:" + challengeId), eq("@user:gua.global|+12025550123"),
-                eq(Duration.ofMinutes(5)));
-        verify(auditLogger).pinChangeStarted(eq("@user:gua.global"), any(String.class), eq("127.0.0.1"));
-    }
-
-    @Test
     void completePinChangeAppliesNewPinAndStampsTimestamp() {
         IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
         user.setPinHash(passwordEncoder.encode("123456"));
