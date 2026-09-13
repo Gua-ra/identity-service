@@ -181,7 +181,7 @@ public class AccountRecoveryService {
         if (lastLogin != null) {
             Instant availableAt = lastLogin.plus(security.getAccountRecoveryDormancy());
             if (now.isBefore(availableAt)) {
-                return AccountRecoveryState.tooSoon(ceilToHour(availableAt).getEpochSecond());
+                return AccountRecoveryState.tooSoon(publishedAvailableAt(availableAt).getEpochSecond());
             }
         }
         return AccountRecoveryState.available();
@@ -197,8 +197,21 @@ public class AccountRecoveryService {
         return instant.getNano() == 0 ? instant.getEpochSecond() : instant.getEpochSecond() + 1;
     }
 
-    private static Instant ceilToHour(Instant instant) {
-        Instant floor = instant.truncatedTo(ChronoUnit.HOURS);
-        return floor.equals(instant) ? floor : floor.plus(Duration.ofHours(1));
+    /**
+     * The time a too-soon account is told it can start recovery, rounded up so it does not give
+     * away the exact time of the last sign-in. A whole UTC hour normally; a whole minute when short
+     * durations are allowed for testing, where an hour would dwarf a dormancy of a few minutes.
+     * The cooldown's retry-after is derived from this value, so the two always agree.
+     */
+    private Instant publishedAvailableAt(Instant availableAt) {
+        ChronoUnit unit = properties.getSecurity().isAccountRecoveryAllowShortForTesting()
+                ? ChronoUnit.MINUTES
+                : ChronoUnit.HOURS;
+        return ceilTo(availableAt, unit);
+    }
+
+    private static Instant ceilTo(Instant instant, ChronoUnit unit) {
+        Instant floor = instant.truncatedTo(unit);
+        return floor.equals(instant) ? floor : floor.plus(unit.getDuration());
     }
 }
