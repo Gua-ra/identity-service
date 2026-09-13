@@ -21,9 +21,22 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
  * carries {@code gua_end_other_sessions} has been issued, let alone handed to the authentication
  * service. Anything that fails in between (a Redis error issuing the code, a browser that never
  * follows the redirect) would otherwise lose the sign-out for good: the episode is over, so a retry
- * is refused, and the next sign-in is an ordinary one with the new PIN. So the recovery transaction
- * records that the sign-out is owed, every completed sign-in of the account carries the claim while
- * it is, and it is settled only when an ID token carrying the claim is issued.
+ * is refused, and the next sign-in is an ordinary one with the new PIN. So the mark has three states:
+ * <ul>
+ * <li><b>owed</b>: written by the recovery transaction just before it commits, and kept for the
+ * recovery wait;</li>
+ * <li><b>re-issued</b>: while it is owed, every completed sign-in of the account carries the claim,
+ * whatever factor it used, not only the recovery's own;</li>
+ * <li><b>settled</b>: deleted when the token endpoint issues an ID token carrying the claim. Sign-ins
+ * after that are ordinary again.</li>
+ * </ul>
+ *
+ * <p>
+ * Known limit: settling records the hand-over, not the sign-out. MAS exchanges the code for the ID
+ * token first and acts on the claim only when it finishes the upstream link page for that login.
+ * If it never finishes that page (the browser does not follow the redirect to it, or the page
+ * fails), the claim is spent without signing anything out, and no later sign-in re-issues it
+ * because the mark is already settled. Closing this would need MAS to confirm the sign-out back.
  *
  * <p>
  * Only a completed recovery ever marks an account. The mark lives for the recovery wait. Carrying
