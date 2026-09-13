@@ -130,6 +130,37 @@ class AccountRecoveryServiceTest {
                 .isEqualTo(Instant.parse("2026-09-08T10:00:00Z").getEpochSecond());
     }
 
+    /**
+     * With short testing durations a whole hour would dwarf a dormancy of minutes, so the published
+     * time is rounded up to the next whole minute instead.
+     */
+    @Test
+    void underShortTestingDurationsTooSoonPublishesTheNextWholeMinute() {
+        useShortTestingDurations();
+        user.setLastLoginAt(Instant.parse("2026-09-01T10:14:20Z"));
+
+        AccountRecoveryState state = service.stateFor(USER);
+
+        assertThat(state.status()).isEqualTo(Status.TOO_SOON);
+        assertThat(state.availableAtEpochSeconds())
+                .isEqualTo(Instant.parse("2026-09-01T10:18:00Z").getEpochSecond());
+    }
+
+    @Test
+    void underShortTestingDurationsADormancyEndingExactlyOnTheMinuteIsNotPushedAnotherMinute() {
+        useShortTestingDurations();
+        user.setLastLoginAt(Instant.parse("2026-09-01T10:15:00Z"));
+
+        assertThat(service.stateFor(USER).availableAtEpochSeconds())
+                .isEqualTo(Instant.parse("2026-09-01T10:18:00Z").getEpochSecond());
+    }
+
+    private void useShortTestingDurations() {
+        properties.getSecurity().setAccountRecoveryDormancy(Duration.ofMinutes(3));
+        properties.getSecurity().setAccountRecoveryWait(Duration.ofMinutes(2));
+        properties.getSecurity().setAccountRecoveryAllowShortForTesting(true);
+    }
+
     @Test
     void anEpisodeIsPendingUntilTheWaitEndsAndReadyFromThatInstant() {
         Instant stamp = T0.minus(WAIT);
@@ -233,14 +264,33 @@ class AccountRecoveryServiceTest {
     @Test
     void startingOnARecentlyUsedAccountIsRefusedWithTheRoundedWaitAndWritesNothing() {
         user.setLastLoginAt(Instant.parse("2026-08-30T09:20:00Z"));
+        long published = service.stateFor(USER).availableAtEpochSeconds();
+        assertThat(published).isEqualTo(Instant.parse("2026-09-06T10:00:00Z").getEpochSecond());
 
         assertThatThrownBy(() -> service.start(USER, "••••4567", "203.0.113.9"))
                 .isInstanceOf(AccountRecoveryCooldownException.class)
                 .extracting(ex -> ((AccountRecoveryCooldownException) ex).getRemainingSeconds())
-                .isEqualTo(Instant.parse("2026-09-06T10:00:00Z").getEpochSecond() - T0.getEpochSecond());
+                .isEqualTo(published - T0.getEpochSecond());
 
         assertThat(user.getPinResetRequestedAt()).isNull();
         verify(auditLogger, never()).accountRecoveryRequested(any(), any(), any());
+    }
+
+    /** The retry-after under short testing durations points at the same whole minute that is published. */
+    @Test
+    void underShortTestingDurationsStartingTooSoonRetriesAtThePublishedMinute() {
+        useShortTestingDurations();
+        user.setLastLoginAt(Instant.parse("2026-09-01T10:14:20Z"));
+        long published = service.stateFor(USER).availableAtEpochSeconds();
+        assertThat(published).isEqualTo(Instant.parse("2026-09-01T10:18:00Z").getEpochSecond());
+
+        assertThatThrownBy(() -> service.start(USER, "••••4567", "203.0.113.9"))
+                .isInstanceOf(AccountRecoveryCooldownException.class)
+                .extracting(ex -> ((AccountRecoveryCooldownException) ex).getRemainingSeconds())
+                .isEqualTo(published - T0.getEpochSecond())
+                .isEqualTo(150L);
+
+        assertThat(user.getPinResetRequestedAt()).isNull();
     }
 
     @Test
