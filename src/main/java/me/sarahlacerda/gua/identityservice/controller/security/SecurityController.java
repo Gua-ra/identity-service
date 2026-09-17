@@ -120,7 +120,7 @@ public class SecurityController {
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Enrollment session created; open the returned enrollUrl in a web view"),
             @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content),
-            @ApiResponse(responseCode = "409", description = "pin_already_set: the account already has a PIN", content = @Content)
+            @ApiResponse(responseCode = "409", description = "pin_already_set: the account already has a PIN, or step_up_unavailable: the only factor this account holds is one this deployment cannot run", content = @Content)
     })
     public ResponseEntity<PinEnrollStartResponse> startPinEnrollment() {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
@@ -213,7 +213,7 @@ public class SecurityController {
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Enrollment session created; open the returned enrollUrl in a web view"),
             @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content),
-            @ApiResponse(responseCode = "409", description = "passkey_already_registered: the account already has a passkey", content = @Content)
+            @ApiResponse(responseCode = "409", description = "passkey_already_registered: the account already has a passkey, or step_up_unavailable: the only factor this account holds is one this deployment cannot run", content = @Content)
     })
     public ResponseEntity<PasskeyEnrollStartResponse> startPasskeyEnrollment() {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
@@ -255,6 +255,8 @@ public class SecurityController {
      * strongest proof the account can give was the point.
      */
     private String startFactorEnrollment(String userId, LoginSession.EnrollTarget target) {
+        requireAProofThisDeploymentCanRun(userId);
+
         // Same localpart source as login (ADM-001 S6). An enrollment session never issues
         // an authorization code, but it must not carry a value login would refuse.
         List<DirectoryEntry> entries = directoryService.findByUserId(userId);
@@ -289,6 +291,35 @@ public class SecurityController {
                 .path("/login/enroll/{token}")
                 .buildAndExpand(enrollToken)
                 .toUriString();
+    }
+
+    /**
+     * Refuses to open an enrollment session whose step-up no proof could pass.
+     *
+     * <p>
+     * The step-up takes a passkey assertion, the account PIN, or, only from an account that
+     * holds neither, its own number and a code sent to it. One account falls outside all three:
+     * one that holds a passkey and no PIN on a deployment where passkeys are switched off. The
+     * assertion cannot run here, there is no PIN to give, and the SMS proof is not a way out,
+     * because it is confined to accounts that hold nothing at all (see
+     * {@link AuthFactorPolicy} on held versus registered, and why switching passkeys off must
+     * not downgrade such an account).
+     *
+     * <p>
+     * Left to run, that session would publish {@code passkeyRegistered=false} and
+     * {@code preferredFactor=PHONE_OTP}, which points the web at the phone step, and then be
+     * refused there with {@code step_up_factor_available}: its own published state pointing the
+     * client at the one path the server will not take. Saying so at the entry point is the
+     * honest answer. The way back for that account is the delayed recovery, which waits.
+     */
+    private void requireAProofThisDeploymentCanRun(String userId) {
+        boolean canProve = authFactorPolicy.passkeyRegistered(userId)
+                || authFactorPolicy.pinRegistered(userId)
+                || authFactorPolicy.loginPolicy(userId).factorSetupRequired();
+        if (!canProve) {
+            throw new LoginFlowException(HttpStatus.CONFLICT, "step_up_unavailable",
+                    "This account is confirmed with a passkey, and passkeys are turned off here.");
+        }
     }
 
     /**

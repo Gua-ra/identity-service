@@ -225,6 +225,52 @@ class SecurityControllerTest {
                 .create(org.mockito.ArgumentMatchers.any(LoginSession.class));
     }
 
+    /**
+     * The one account the step-up has no proof for: it holds a passkey, holds no PIN, and this
+     * deployment cannot run a passkey ceremony. The assertion is impossible here, there is no
+     * PIN to give, and the SMS proof is refused to an account that holds a factor, so the
+     * session would publish PHONE_OTP as the thing to offer and then refuse it. Both entry
+     * points say so instead of handing out that session.
+     */
+    @Test
+    void enrollmentIsRefusedWhenNoProofCanRunOnThisDeployment() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
+        org.mockito.Mockito.when(passkeyService.isEnabled()).thenReturn(false);
+        org.mockito.Mockito.when(passkeyService.hasPasskey("@alice:dev.local")).thenReturn(true);
+
+        for (String path : java.util.List.of("/security/pin/enroll/start", "/security/passkey/enroll/start")) {
+            mockMvc.perform(MockMvcRequestBuilders.post(path)
+                    .contentType(MediaType.APPLICATION_JSON))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isConflict())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code")
+                            .value("step_up_unavailable"));
+        }
+
+        verify(loginSessionService, org.mockito.Mockito.never())
+                .create(org.mockito.ArgumentMatchers.any(LoginSession.class));
+    }
+
+    /** The same account on a deployment that can run the ceremony gets its session as usual. */
+    @Test
+    void aPasskeyHolderMayStillAddAPinWhereThePasskeyCanBeAsserted() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
+        org.mockito.Mockito.when(passkeyService.isEnabled()).thenReturn(true);
+        org.mockito.Mockito.when(passkeyService.hasPasskey("@alice:dev.local")).thenReturn(true);
+        org.mockito.Mockito.when(directoryService.findByUserId("@alice:dev.local"))
+                .thenReturn(java.util.List.of());
+        org.mockito.Mockito.when(loginSessionService.create(org.mockito.ArgumentMatchers.any(LoginSession.class)))
+                .thenReturn("sess-1");
+        org.mockito.Mockito.when(loginSessionService.newToken()).thenReturn("csrf-1");
+        org.mockito.Mockito.when(loginSessionService.createEnrollToken(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenReturn("tok-1");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/enroll/start")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+
+        verify(loginSessionService).create(org.mockito.ArgumentMatchers.any(LoginSession.class));
+    }
+
     @Test
     void startPasskeyEnrollmentReturnsAbsoluteEnrollUrl() throws Exception {
         org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
