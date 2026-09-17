@@ -80,7 +80,8 @@ public class OidcTokenService {
             if (!properties.getIssuer().equals(claims.getIssuer())) {
                 return Optional.empty();
             }
-            if (!hasKnownAudience(claims.getAudience())) {
+            String audienceClientId = knownAudience(claims.getAudience()).orElse(null);
+            if (audienceClientId == null) {
                 return Optional.empty();
             }
             Instant issuedAt = claims.getIssueTime() == null ? null : claims.getIssueTime().toInstant();
@@ -98,7 +99,8 @@ public class OidcTokenService {
                     claims.getStringClaim("phone_number"),
                     displayName,
                     claims.getStringClaim("preferred_username"),
-                    scopes));
+                    scopes,
+                    audienceClientId));
         } catch (ParseException | JOSEException ex) {
             return Optional.empty();
         }
@@ -137,16 +139,19 @@ public class OidcTokenService {
      * Per RFC 9068 a resource server must reject access tokens that were not issued
      * for it. Every token we mint carries the requesting client id as its audience,
      * so we accept a token only when its audience includes a currently-registered
-     * client.
+     * client, and the client it matched on is the client behind the caller.
+     *
+     * @return the registered client id the token was accepted on, or empty when its
+     *         audience names none, which is the token being refused
      */
-    private boolean hasKnownAudience(List<String> audience) {
+    private Optional<String> knownAudience(List<String> audience) {
         if (audience == null || audience.isEmpty()) {
-            return false;
+            return Optional.empty();
         }
         Set<String> knownClientIds = properties.getClients().stream()
                 .map(OidcProperties.ClientRegistration::getClientId)
                 .collect(Collectors.toSet());
-        return audience.stream().anyMatch(knownClientIds::contains);
+        return audience.stream().filter(knownClientIds::contains).findFirst();
     }
 
     private SignedJWT buildJwt(OidcAuthorization authorization, long ttlSeconds, boolean includeNonce) {

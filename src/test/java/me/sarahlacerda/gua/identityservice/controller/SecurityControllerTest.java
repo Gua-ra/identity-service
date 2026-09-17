@@ -210,6 +210,74 @@ class SecurityControllerTest {
         org.junit.jupiter.api.Assertions.assertTrue(created.isEnroll());
     }
 
+    /**
+     * The sheet has to return to the build that opened it, and each build registers its own
+     * scheme, so the redirect comes from the caller's own client rather than from one value
+     * for the whole deployment. The client is read off the verified token, never from anything
+     * the caller sends.
+     */
+    @Test
+    void theEnrollmentRedirectComesFromTheClientBehindTheToken() throws Exception {
+        OidcProperties.ClientRegistration qaBuild = new OidcProperties.ClientRegistration();
+        qaBuild.setClientId("gua-ios-dev");
+        qaBuild.setRedirectUris(java.util.List.of("global.gua.dev:/oidc"));
+        oidcProperties.setClients(java.util.List.of(qaBuild));
+        org.mockito.Mockito.when(authenticatedUserAccessor.currentClientId())
+                .thenReturn(java.util.Optional.of("gua-ios-dev"));
+        stubEnrollmentSessionFor("@alice:dev.local");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/enroll/start")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+
+        org.junit.jupiter.api.Assertions.assertEquals("global.gua.dev:/oidc", createdSession().getRedirectUri());
+    }
+
+    /**
+     * A homeserver-issued token names no client of ours, and a registered client may have no
+     * redirect at all. Both fall back to the configured value rather than to nothing.
+     */
+    @Test
+    void theEnrollmentRedirectFallsBackToTheConfiguredValue() throws Exception {
+        OidcProperties.ClientRegistration noRedirects = new OidcProperties.ClientRegistration();
+        noRedirects.setClientId("gua-ios");
+        noRedirects.setRedirectUris(java.util.List.of());
+        oidcProperties.setClients(java.util.List.of(noRedirects));
+        loginProperties.getEnroll().setRedirectUri("global.gua:/oidc");
+
+        for (java.util.Optional<String> client : java.util.List.of(
+                java.util.Optional.<String>empty(), java.util.Optional.of("gua-ios"))) {
+            org.mockito.Mockito.reset(loginSessionService);
+            org.mockito.Mockito.when(authenticatedUserAccessor.currentClientId()).thenReturn(client);
+            stubEnrollmentSessionFor("@alice:dev.local");
+
+            mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/enroll/start")
+                    .contentType(MediaType.APPLICATION_JSON))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+
+            org.junit.jupiter.api.Assertions.assertEquals("global.gua:/oidc", createdSession().getRedirectUri());
+        }
+    }
+
+    private void stubEnrollmentSessionFor(String userId) {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn(userId);
+        org.mockito.Mockito.when(userSecurityService.hasPin(userId)).thenReturn(false);
+        org.mockito.Mockito.when(directoryService.findByUserId(userId))
+                .thenReturn(java.util.List.of(DirectoryEntry.builder().userId(userId).displayName("Alice").build()));
+        org.mockito.Mockito.when(loginSessionService.create(org.mockito.ArgumentMatchers.any(LoginSession.class)))
+                .thenReturn("sess-1");
+        org.mockito.Mockito.when(loginSessionService.newToken()).thenReturn("csrf-1");
+        org.mockito.Mockito.when(loginSessionService.createEnrollToken(
+                org.mockito.ArgumentMatchers.eq("sess-1"), org.mockito.ArgumentMatchers.any()))
+                .thenReturn("tok-1");
+    }
+
+    private LoginSession createdSession() {
+        org.mockito.ArgumentCaptor<LoginSession> captor = org.mockito.ArgumentCaptor.forClass(LoginSession.class);
+        verify(loginSessionService).create(captor.capture());
+        return captor.getValue();
+    }
+
     @Test
     void startPinEnrollmentRefusesAnAccountThatAlreadyHasAPin() throws Exception {
         org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");

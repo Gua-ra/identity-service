@@ -277,7 +277,7 @@ public class SecurityController {
         session.setPreferredUsername(preferredUsername);
         // The app scheme the OIDC client uses; only echoed back if enrollment reaches
         // completion, and never reachable as an open login (reauthUserId is set above).
-        session.setRedirectUri(loginProperties.getEnroll().getRedirectUri());
+        session.setRedirectUri(enrollRedirectUri());
         session.setPhase(Phase.ENROLL_STEP_UP);
         session.setCsrfToken(loginSessionService.newToken());
 
@@ -291,6 +291,40 @@ public class SecurityController {
                 .path("/login/enroll/{token}")
                 .buildAndExpand(enrollToken)
                 .toUriString();
+    }
+
+    /**
+     * Where the enrollment sheet sends the app back when the ceremony completes.
+     *
+     * <p>
+     * It is the first redirect the caller's own OIDC client has registered, because the app that
+     * opened the sheet is the app that has to receive the handoff and each build registers its
+     * own scheme: the store build answers {@code global.gua}, the QA build
+     * {@code global.gua.dev}, an Android debug build {@code global.gua.debug}. One configured
+     * value for the whole deployment meant the sheet on a QA build handed off to a scheme that
+     * build does not answer, so it never dismissed itself, and on a phone that also has the
+     * store build installed the completion went to the wrong app.
+     *
+     * <p>
+     * The client is the one the bearer token was issued to, read off the audience this service
+     * verified before accepting the token. A caller cannot name it and cannot supply a redirect:
+     * this is still a bearer-authenticated endpoint that hands back a URL on our own origin, and
+     * accepting a redirect from the caller would turn it into one that hands a session's
+     * completion wherever the caller says.
+     *
+     * <p>
+     * Falls back to {@code idp.login.enroll.redirect-uri} when the token names no client of ours
+     * (every homeserver-issued token) or when that client registered no redirect.
+     */
+    private String enrollRedirectUri() {
+        return authenticatedUserAccessor.currentClientId()
+                .flatMap(clientId -> oidcProperties.getClients().stream()
+                        .filter(client -> clientId.equals(client.getClientId()))
+                        .findFirst())
+                .map(OidcProperties.ClientRegistration::getRedirectUris)
+                .filter(uris -> !uris.isEmpty())
+                .map(List::getFirst)
+                .orElseGet(() -> loginProperties.getEnroll().getRedirectUri());
     }
 
     /**

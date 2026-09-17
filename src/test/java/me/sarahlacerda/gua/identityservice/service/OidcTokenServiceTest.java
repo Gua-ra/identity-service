@@ -162,6 +162,9 @@ class OidcTokenServiceTest {
         assertThat(principal.userId()).isEqualTo("user-99");
         assertThat(principal.phoneNumber()).isEqualTo("+15550009999");
         assertThat(principal.scope()).containsExactly("openid");
+        // The client the token was accepted on, which is what tells the enrollment handoff
+        // which app scheme to return to.
+        assertThat(principal.clientId()).isEqualTo("gua-ios");
     }
 
     @Test

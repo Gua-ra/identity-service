@@ -474,6 +474,32 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
+     * The app the enrollment sheet returns to is decided by the token, never by the caller.
+     *
+     * <p>
+     * Each build of the apps answers its own scheme, so the redirect has to vary per client, and
+     * the tempting way to do that is to let the caller say which one. That would turn a
+     * bearer-authenticated endpoint into one that hands a session's completion wherever the
+     * caller asks. It is read off the client the token was accepted on instead, which is a value
+     * this service verified before the request reached the controller.
+     */
+    @Test
+    void theEnrollmentRedirectIsReadFromTheTokenAndNeverFromTheCaller() throws IOException {
+        String source = read(MAIN.resolve("controller/security/SecurityController.java"));
+
+        String resolver = methodBody(source, "private String enrollRedirectUri(");
+        assertThat(resolver).contains("authenticatedUserAccessor.currentClientId()");
+        assertThat(resolver).contains("loginProperties.getEnroll().getRedirectUri()");
+        // Nothing submitted reaches it: no servlet request, no body, no query or path value.
+        assertThat(resolver).doesNotContain("request");
+        assertThat(resolver).doesNotContain("Request");
+
+        // And the endpoints that open a session take no body to put one in.
+        assertThat(source).contains("public ResponseEntity<PinEnrollStartResponse> startPinEnrollment() {");
+        assertThat(source).contains("public ResponseEntity<PasskeyEnrollStartResponse> startPasskeyEnrollment() {");
+    }
+
+    /**
      * The sign-in assertion reaches the PIN step, which is where the people who would most want
      * it end up, and never the profile step, which belongs to a session that matched no account.
      * An assertion accepted there would be an assertion reaching account creation.

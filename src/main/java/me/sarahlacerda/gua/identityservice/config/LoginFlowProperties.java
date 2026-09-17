@@ -60,8 +60,16 @@ public class LoginFlowProperties {
     @Setter
     public static class Enroll {
         /**
-         * App redirect URI the enrollment {@link LoginSession} echoes back when the
-         * passkey ceremony completes (the OIDC app scheme, e.g. {@code global.gua:/oidc}).
+         * Fallback app redirect URI the enrollment {@link LoginSession} echoes back when the
+         * ceremony completes (the OIDC app scheme, e.g. {@code global.gua:/oidc}).
+         *
+         * <p>
+         * The redirect normally comes from the first one registered by the caller's own OIDC
+         * client, because each build of the apps answers its own scheme. This value is used only
+         * when the bearer token names no client of ours, which is every homeserver-issued token,
+         * or when that client registered no redirect.
+         *
+         * <p>
          * It is never reached as an open login because the session is pinned to the
          * authenticated subject via {@code reauthUserId}.
          */
