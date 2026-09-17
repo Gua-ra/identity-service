@@ -336,7 +336,7 @@ A bearer session on its own never adds a durable factor. A session is the thing 
 
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
-| `POST /security/passkey/enroll/start` · `POST /security/pin/enroll/start` | Bearer | Create the enrollment session and return its `enrollUrl`. `409` when the account already holds that factor. |
+| `POST /security/passkey/enroll/start` · `POST /security/pin/enroll/start` | Bearer | Create the enrollment session and return its `enrollUrl`. `409` when the account already holds that factor, or `409 step_up_unavailable` when no proof the account could give is one this deployment can run. |
 | `POST /login/enroll/stepup/passkey/options` · `…/passkey/verify` | Session cookie + CSRF | The preferred proof: a **user-verifying** assertion pinned to the session's account. |
 | `POST /login/enroll/stepup/pin` | Session cookie + CSRF | `{ "pin" }`. The proof for an account that holds a PIN and no passkey. Counted and locked out like the sign-in PIN step. `409 pin_not_set` when the account has none. |
 | `POST /login/enroll/stepup/otp/send` · `…/otp/verify` | Session cookie + CSRF | `{ "phoneNumber" }` then `{ "phoneNumber", "code" }`. Only for an account that holds **no** factor: `409 step_up_factor_available` otherwise. The number is checked against the account's own directory binding exactly as [reauthentication](#privileged-account-operations) does, so the refusal for someone else's number says nothing about whose it is. |
@@ -344,6 +344,8 @@ A bearer session on its own never adds a durable factor. A session is the thing 
 The session starts at a new phase `ENROLL_STEP_UP` and publishes the same factor fields as the sign-in factor steps (`passkeyRegistered`, `preferredFactor`, `passkeysEnabled`) plus `enrollment: true`, so the UI offers the right proof instead of guessing. `recovery` is always `null` there: recovery is the way back for someone who cannot get in, and this session belongs to someone who is already signed in.
 
 **Strongest first, and only one of them.** An account that produces a passkey is never also asked for its PIN, for the same reason the phone-change step-up does not ask: demanding the knowledge factor as well from someone who just proved the stronger one would make the stronger one worth less than the weaker one.
+
+**An account with nothing to prove itself with is told so at the door.** The three proofs cover every account but one: an account holding a passkey and no PIN, on a deployment where passkeys are switched off, can run no assertion, has no PIN to give, and is not offered the SMS proof either, which is confined to accounts that hold nothing at all. Opening a session for it would publish `passkeyRegistered: false` and `preferredFactor: PHONE_OTP`, point the web at the phone step, and then refuse that step with `step_up_factor_available`. So both entry points refuse it up front with `409 step_up_unavailable` instead of handing out a session whose own published state points at the one path the server will not take. That account's way back is the [delayed account recovery](#delayed-account-recovery).
 
 **Why SMS is allowed here at all, and only here.** An account holding no factor has nothing stronger to prove itself with, and it is the account that most needs to acquire one. The proof is a fresh reauthentication of the current account and an OTP to its current number, which establishes a **login** factor and nothing else: no account-authority transition is reachable from an enrollment session, and neither is recovery. An account that *does* hold a factor is refused this path, because letting a code sent to the number stand in for a held factor is exactly the SIM-swap downgrade the factor gate exists to refuse. Someone who cannot produce what their account holds has the [delayed account recovery](#delayed-account-recovery), which waits.
 
@@ -368,7 +370,7 @@ Each privileged operation requires a fresh **reauth token** proving phone posses
 
 - **Nothing is stored.** Verify re-derives everything from the number submitted again, so there is no pending-phone record and no raw number anywhere.
 - **Nothing is revealed.** A number that is not this account's is `403 reauth_phone_mismatch`, in the same words whether it is unknown, belongs to somebody else, or simply is not this one, so the endpoint cannot be used to ask who owns a number. A number that does not parse is `400 invalid_phone_number` from the normalizer, which is a function of the submitted string alone and says nothing about any account.
-- **Guessing is bounded.** The account's own number is the secret being guessed by a stolen session, so wrong numbers are counted per user in Redis and further attempts are refused with `429` once `identity.security.max-reauth-phone-attempts-per-hour` (default **5**) is spent. The budget is spent by mismatches only, so retyping your own number never locks you out of it. Successful sends stay inside the ordinary per-phone and per-address OTP limits.
+- **Guessing is bounded.** The account's own number is the secret being guessed by a stolen session, so wrong numbers are counted per user in Redis and further attempts are refused with `429` once `identity.security.max-reauth-phone-attempts-per-hour` (default **5**) is spent. The attempt is reserved by an atomic increment *before* the comparison, so a burst of parallel guesses is bounded by the same budget as a sequence of them, and it is given back when the number turns out to be the account's own, so the budget is spent by mismatches only and retyping your own number never locks you out of it. Both reauth endpoints also carry their own per-user, per-address [rate limit](#-rate-limiting). Successful sends stay inside the ordinary per-phone and per-address OTP limits.
 
 This replaced a lookup of the homeserver's `msisdn` threepid binding, which an account created through the real interactive signup does not have, so phone change, deactivation and identity reset were unreachable for exactly the accounts a user can create (identity-service#44). Writing that binding at signup was the alternative and was rejected: it would put the raw MSISDN of every account on the homeserver, the admin API that serves it is unreliable under MAS delegated authentication, and the directory already holds the authoritative binding.
 
@@ -493,6 +495,8 @@ Every public endpoint is protected by a **Resilience4j**-based rate limiter, so 
 | `POST /otp/send` | 5 | 1 min |
 | `POST /otp/verify` | 10 | 1 min |
 | `POST /account/genesis` | 10 | 1 min |
+| `POST /account/reauth/start` | 5 | 1 min |
+| `POST /account/reauth/verify` | 10 | 1 min |
 | `POST /account/phone/change/start` | 3 | 1 hour |
 | `POST /account/phone/change/complete` | 10 | 1 hour |
 | `POST /signup/complete` | 10 | 1 min |
