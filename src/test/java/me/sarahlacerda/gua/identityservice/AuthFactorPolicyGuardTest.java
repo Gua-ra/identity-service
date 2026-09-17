@@ -239,18 +239,185 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * Setting a first PIN stays free of any step-up. An account whose passkey stopped working
-     * needs to be able to acquire the fallback, and a step-up it cannot satisfy would strand
-     * it with a 403 and no way past it.
+     * R2: setting a first PIN from a bearer session alone is retired. It used to be deliberately
+     * free of any step-up, on the reasoning that an account whose passkey stopped working needs
+     * to be able to acquire the fallback. That reasoning had the wrong actor in mind: a session
+     * is what an attacker gets, and a PIN set from one is a second way in that outlives the
+     * session. The account whose passkey stopped working now has two ways through that do not
+     * hand a session holder a factor: the enrollment step-up, which asks for the strongest thing
+     * the account can produce, and, when it can produce none, the delayed recovery, which waits.
+     *
+     * <p>
+     * The handler takes no body and touches nothing, so an older client is told where to go
+     * rather than failing validation on a payload that was never going to be stored.
      */
     @Test
-    void settingTheFirstPinDemandsNoStepUp() throws IOException {
-        String setInitialPin = methodBody(read(MAIN.resolve("controller/security/SecurityController.java")),
-                "public ResponseEntity<Void> setInitialPin(");
+    void theBearerFirstPinIsRetiredInFavourOfTheEnrollmentStepUp() throws IOException {
+        String security = read(MAIN.resolve("controller/security/SecurityController.java"));
+        String setInitialPin = methodBody(security, "public ResponseEntity<Void> setInitialPin(");
 
-        assertThat(setInitialPin).doesNotContain("authFactorPolicy");
-        assertThat(setInitialPin).doesNotContain("passkey");
-        assertThat(setInitialPin).doesNotContain("stepUp");
+        assertThat(setInitialPin).contains("throw new StepUpRequiredException(");
+        assertThat(setInitialPin).contains("/security/pin/enroll/start");
+        assertThat(setInitialPin).doesNotContain("userSecurityService");
+        // No parameters at all, so no body is read and no validation runs before the refusal.
+        assertThat(security).contains("public ResponseEntity<Void> setInitialPin() {");
+    }
+
+    /**
+     * Both enrollment entry points park at the step-up, and neither drops a session straight
+     * into a step that stores a factor. This is the whole of R2 on the server side: what the
+     * bearer token buys is a session that has still proved nothing.
+     */
+    @Test
+    void factorEnrollmentStartsAtTheStepUpAndNotAtASetupStep() throws IOException {
+        String security = read(MAIN.resolve("controller/security/SecurityController.java"));
+
+        for (String method : new String[] {
+                "public ResponseEntity<PasskeyEnrollStartResponse> startPasskeyEnrollment(",
+                "public ResponseEntity<PinEnrollStartResponse> startPinEnrollment(" }) {
+            String body = methodBody(security, method);
+            assertThat(body).as("%s hands out a session, never a phase", method)
+                    .doesNotContain("Phase.PASSKEY_SETUP")
+                    .doesNotContain("Phase.PIN_SETUP");
+            assertThat(body).contains("startFactorEnrollment(");
+        }
+
+        String builder = methodBody(security, "private String startFactorEnrollment(");
+        assertThat(builder).contains("session.setPhase(Phase.ENROLL_STEP_UP)");
+        assertThat(builder).doesNotContain("Phase.PASSKEY_SETUP");
+        assertThat(builder).doesNotContain("Phase.PIN_SETUP");
+        // Nothing is proved yet, so nothing may be recorded as proved.
+        assertThat(builder).doesNotContain("setEnrollStepUpFactor");
+        assertThat(builder).doesNotContain("setAuthenticatedFactor");
+    }
+
+    /**
+     * Only the step-up moves an enrollment session to a step that stores a factor, and the
+     * steps that store one refuse a session that has not been through it.
+     *
+     * <p>
+     * The phase alone would already say so, since the accept method below is the only writer of
+     * those phases for an enrollment. The second check exists because "a bearer session never
+     * adds a factor" is too important to rest on one route being the only one that sets a phase.
+     */
+    @Test
+    void anEnrollmentStoresNoFactorBeforeTheStepUp() throws IOException {
+        String source = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
+
+        String accept = methodBody(source, "private ResponseEntity<LoginStateResponse> acceptEnrollStepUp(");
+        assertThat(accept).contains("session.setEnrollStepUpFactor(provedWith)");
+        assertThat(accept).contains("Phase.PIN_SETUP");
+        assertThat(accept).contains("Phase.PASSKEY_SETUP");
+        // An enrollment must not become a session that can finish a sign-in.
+        assertThat(accept).doesNotContain("setAuthenticatedFactor");
+
+        String guard = methodBody(source, "private void requireEnrollStepUpDone(");
+        assertThat(guard).contains("session.isEnroll() && session.getEnrollStepUpFactor() == null");
+        assertThat(guard).contains("StepUpRequiredException");
+
+        for (String method : new String[] {
+                "public ResponseEntity<PasskeyOptionsResponse> startPasskeyRegistration(",
+                "public ResponseEntity<LoginStateResponse> finishPasskeyRegistration(",
+                "public ResponseEntity<LoginStateResponse> submitPinSetup(" }) {
+            assertThat(methodBody(source, method)).as("step-up check in %s", method)
+                    .contains("requireEnrollStepUpDone(session)");
+        }
+    }
+
+    /**
+     * The SMS proof is confined to the one case the owner allowed it in: an account that holds
+     * no factor at all. Anywhere else it would let a code sent to the number stand in for the
+     * factor the account already has, which is the SIM-swap downgrade the factor gate exists to
+     * refuse. It establishes a LOGIN factor and nothing else: no account-authority transition is
+     * reachable from here.
+     */
+    @Test
+    void theSmsStepUpIsOnlyForAnAccountThatHoldsNoFactor() throws IOException {
+        String source = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
+
+        String guard = methodBody(source, "private void requireNoStrongerFactor(");
+        assertThat(guard).contains("authFactorPolicy.loginPolicy(session.getUserId()).factorSetupRequired()");
+        assertThat(guard).contains("\"step_up_factor_available\"");
+
+        for (String method : new String[] {
+                "public ResponseEntity<LoginStateResponse> sendEnrollStepUpOtp(",
+                "public ResponseEntity<LoginStateResponse> verifyEnrollStepUpOtp(" }) {
+            String body = methodBody(source, method);
+            assertThat(body).as("factor check in %s", method).contains("requireNoStrongerFactor(session)");
+            // And the number is checked by the one component that compares it with the account's
+            // own directory binding, rather than being trusted or looked up here.
+            assertThat(body).contains("accountReauthService.");
+        }
+    }
+
+    /**
+     * An enrollment session issues no authorization code, whatever step it finishes at. It
+     * carries no OIDC request at all, so a code is not merely unnecessary there, it is a sign-in
+     * for a client that never asked for one.
+     */
+    @Test
+    void anEnrollmentSessionNeverIssuesAnAuthorizationCode() throws IOException {
+        String source = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
+
+        String completeEnrollment = methodBody(source,
+                "private ResponseEntity<LoginStateResponse> completeEnrollment(");
+        assertThat(completeEnrollment).doesNotContain("issueCode");
+        assertThat(completeEnrollment).doesNotContain("authorizationService");
+        assertThat(completeEnrollment).doesNotContain("recordSuccessfulLogin");
+
+        // Every terminal step an enrollment can reach branches to it before the login completion.
+        for (String method : new String[] {
+                "public ResponseEntity<LoginStateResponse> finishPasskeyRegistration(",
+                "public ResponseEntity<LoginStateResponse> skipPasskeySetup(",
+                "public ResponseEntity<LoginStateResponse> submitPinSetup(" }) {
+            String body = methodBody(source, method);
+            int branch = body.indexOf("session.isEnroll()");
+            assertThat(branch).as("enrollment branch in %s", method).isPositive();
+            assertThat(body.indexOf("completeEnrollment(sessionId, session)")).as("in %s", method)
+                    .isGreaterThan(branch);
+        }
+    }
+
+    /**
+     * An enrollment touches no account genesis and no account-authority transition. SMS may
+     * establish a LOGIN factor there; it may never adopt or move an account's root.
+     */
+    @Test
+    void anEnrollmentSessionNeverTouchesAccountGenesis() throws IOException {
+        String login = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
+        String security = read(MAIN.resolve("controller/security/SecurityController.java"));
+
+        assertThat(security).as("the enrollment entry points know nothing about genesis")
+                .doesNotContain("enesis");
+
+        for (String method : new String[] {
+                "public ResponseEntity<PasskeyOptionsResponse> startEnrollStepUpPasskey(",
+                "public ResponseEntity<LoginStateResponse> finishEnrollStepUpPasskey(",
+                "public ResponseEntity<LoginStateResponse> submitEnrollStepUpPin(",
+                "public ResponseEntity<LoginStateResponse> sendEnrollStepUpOtp(",
+                "public ResponseEntity<LoginStateResponse> verifyEnrollStepUpOtp(",
+                "private ResponseEntity<LoginStateResponse> acceptEnrollStepUp(",
+                "private ResponseEntity<LoginStateResponse> completeEnrollment(" }) {
+            assertThat(methodBody(login, method)).as("genesis in %s", method)
+                    .doesNotContain("enesis")
+                    .doesNotContain("ADOPT_ROOT");
+        }
+    }
+
+    /**
+     * An enrollment session cannot satisfy a recovery. Recovery is the way back for someone who
+     * cannot get in; an enrollment belongs to someone who is already signed in, and letting it
+     * count would turn a held session into a way to take the account.
+     */
+    @Test
+    void anEnrollmentSessionNeverSatisfiesRecovery() throws IOException {
+        String source = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
+
+        int phases = source.indexOf("RECOVERY_PHASES = ");
+        assertThat(phases).isPositive();
+        assertThat(source.substring(phases, source.indexOf(";", phases))).doesNotContain("ENROLL_STEP_UP");
+
+        assertThat(methodBody(source, "private boolean recoveryAvailable(")).contains("!session.isEnroll()");
     }
 
     /**
@@ -399,7 +566,12 @@ class AuthFactorPolicyGuardTest {
                 "public ResponseEntity<LoginStateResponse> submitPinSetup(",
                 "public ResponseEntity<LoginStateResponse> skipPasskeySetup(",
                 "public ResponseEntity<PasskeyOptionsResponse> startPasskeyAuthentication(",
-                "public ResponseEntity<LoginStateResponse> finishPasskeyAuthentication(" }) {
+                "public ResponseEntity<LoginStateResponse> finishPasskeyAuthentication(",
+                "public ResponseEntity<PasskeyOptionsResponse> startEnrollStepUpPasskey(",
+                "public ResponseEntity<LoginStateResponse> finishEnrollStepUpPasskey(",
+                "public ResponseEntity<LoginStateResponse> submitEnrollStepUpPin(",
+                "public ResponseEntity<LoginStateResponse> sendEnrollStepUpOtp(",
+                "public ResponseEntity<LoginStateResponse> verifyEnrollStepUpOtp(" }) {
             assertThat(methodBody(source, method)).as("CSRF check in %s", method).contains("requireCsrf(session, csrf)");
         }
     }

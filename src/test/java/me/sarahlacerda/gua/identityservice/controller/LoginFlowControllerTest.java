@@ -164,6 +164,8 @@ class LoginFlowControllerTest {
     @MockitoBean
     private AccountRecoveryService accountRecoveryService;
     @MockitoBean
+    private me.sarahlacerda.gua.identityservice.service.security.AccountReauthService accountReauthService;
+    @MockitoBean
     private TokenRevocationService tokenRevocationService;
     @MockitoBean
     private EndOtherSessionsService endOtherSessionsService;
@@ -707,7 +709,7 @@ class LoginFlowControllerTest {
      */
     @Test
     void passkeyEnrollmentVerifyRedirectsToAppSchemeAndIssuesNoCode() throws Exception {
-        LoginSession session = enrollSession();
+        LoginSession session = enrollSessionPastStepUp(LoginSession.EnrollTarget.PASSKEY);
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
 
         mockMvc.perform(post("/login/passkey/register/verify")
@@ -725,7 +727,7 @@ class LoginFlowControllerTest {
 
     @Test
     void passkeyEnrollmentSkipRedirectsToAppSchemeAndIssuesNoCode() throws Exception {
-        LoginSession session = enrollSession();
+        LoginSession session = enrollSessionPastStepUp(LoginSession.EnrollTarget.PASSKEY);
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
 
         mockMvc.perform(post("/login/passkey/setup-skip")
@@ -740,7 +742,7 @@ class LoginFlowControllerTest {
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
-    /** Mirrors SecurityController.startPasskeyEnrollment: an enrollment session has no OIDC client. */
+    /** Mirrors SecurityController.startFactorEnrollment: an enrollment session has no OIDC client. */
     private LoginSession enrollSession() {
         LoginSession session = new LoginSession();
         session.setEnroll(true);
@@ -748,7 +750,18 @@ class LoginFlowControllerTest {
         session.setReauthUserId("@alice:gua.local");
         session.setRedirectUri(ENROLL_APP_SCHEME);
         session.setCsrfToken(CSRF);
-        session.setPhase(Phase.PASSKEY_SETUP);
+        session.setEnrollTarget(LoginSession.EnrollTarget.PASSKEY);
+        session.setPhase(Phase.ENROLL_STEP_UP);
+        return session;
+    }
+
+    /** The same session after the step-up: at the setup step, with what it proved recorded. */
+    private LoginSession enrollSessionPastStepUp(LoginSession.EnrollTarget target) {
+        LoginSession session = enrollSession();
+        session.setEnrollTarget(target);
+        session.setEnrollStepUpFactor(
+                me.sarahlacerda.gua.identityservice.service.security.AuthFactor.PIN);
+        session.setPhase(target == LoginSession.EnrollTarget.PIN ? Phase.PIN_SETUP : Phase.PASSKEY_SETUP);
         return session;
     }
 
@@ -2411,6 +2424,255 @@ class LoginFlowControllerTest {
         }
 
         org.mockito.Mockito.verifyNoInteractions(accountRecoveryService, tokenRevocationService);
+    }
+
+    // --- R2: adding a factor from settings needs a step-up ------------------------------
+
+    /**
+     * A bearer session alone cannot add a passkey. The session the enroll endpoint hands out
+     * starts before the setup step, and arriving at the setup step without having proved the
+     * account is refused, so neither the ceremony nor the credential storage is reachable.
+     */
+    @Test
+    void aBearerSessionAloneCannotAddAPasskey() throws Exception {
+        LoginSession session = enrollSession();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        // At the step-up, the setup endpoints are not this session's step at all.
+        mockMvc.perform(post("/login/passkey/register/options")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("unexpected_step"));
+
+        // And a session that reached the setup step with nothing proved is refused there too.
+        session.setPhase(Phase.PASSKEY_SETUP);
+        mockMvc.perform(post("/login/passkey/register/verify")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("step_up_required"));
+
+        verify(passkeyService, org.mockito.Mockito.never()).startRegistration(any(), any());
+        verify(passkeyService, org.mockito.Mockito.never()).finishRegistration(any(), any(), any());
+    }
+
+    /** The same for a PIN: nothing is stored by a session that has proved nothing. */
+    @Test
+    void aBearerSessionAloneCannotAddAPin() throws Exception {
+        LoginSession session = enrollSession();
+        session.setEnrollTarget(LoginSession.EnrollTarget.PIN);
+        session.setPhase(Phase.PIN_SETUP);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(post("/login/pin-setup")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"pin\":\"284917\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("step_up_required"));
+
+        verify(loginFactorEnrollmentService, org.mockito.Mockito.never()).setUpEnrolledPin(any(), any());
+        verify(loginFactorEnrollmentService, org.mockito.Mockito.never()).setUpFirstPin(any(), any());
+    }
+
+    /**
+     * An account that holds a passkey adds a PIN by producing the passkey, and is never also
+     * asked for a PIN it does not have. The assertion is the step-up ceremony, which demands
+     * user verification, not the sign-in one.
+     */
+    @Test
+    void anExistingPasskeyAuthorizesAddingAPin() throws Exception {
+        LoginSession session = enrollSession();
+        session.setEnrollTarget(LoginSession.EnrollTarget.PIN);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.hasPasskey("@alice:gua.local")).thenReturn(true);
+        when(passkeyService.finishStepUpAssertion(eq(SID), any())).thenReturn(
+                new PasskeyService.PasskeyAuthentication("@alice:gua.local", REGISTERED_LONG_AGO));
+
+        mockMvc.perform(post("/login/enroll/stepup/passkey/verify")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+
+        // Nothing asked for the PIN on the way, which is the point of producing the stronger factor.
+        verify(userSecurityService, org.mockito.Mockito.never()).validatePinOrThrow(any(), any());
+
+        // And the PIN step now stores the new PIN and ends the enrollment without a code.
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        mockMvc.perform(post("/login/pin-setup")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"pin\":\"284917\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.redirectUrl").value(ENROLL_APP_SCHEME));
+
+        verify(loginFactorEnrollmentService).setUpEnrolledPin("@alice:gua.local", "284917");
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    /** An account that holds a PIN adds a passkey by producing the PIN. */
+    @Test
+    void anExistingPinAuthorizesAddingAPasskey() throws Exception {
+        LoginSession session = enrollSession();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(userSecurityService.hasPin("@alice:gua.local")).thenReturn(true);
+
+        mockMvc.perform(post("/login/enroll/stepup/pin")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"pin\":\"284917\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"));
+
+        verify(userSecurityService).validatePinOrThrow("@alice:gua.local", "284917");
+    }
+
+    /** An account with no PIN is told so, rather than counting a guess against a PIN it lacks. */
+    @Test
+    void thePinStepUpIsRefusedWhenTheAccountHasNoPin() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(enrollSession()));
+
+        mockMvc.perform(post("/login/enroll/stepup/pin")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"pin\":\"284917\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("pin_not_set"));
+
+        verify(userSecurityService, org.mockito.Mockito.never()).validatePinOrThrow(any(), any());
+    }
+
+    /**
+     * An account that holds no factor proves itself with its own number and a code sent to it,
+     * which is the fresh reauthentication the owner asked for before a first strong factor.
+     */
+    @Test
+    void anAccountWithNoFactorReauthenticatesWithItsNumberAndACode() throws Exception {
+        LoginSession session = enrollSession();
+        session.setEnrollTarget(LoginSession.EnrollTarget.PIN);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(post("/login/enroll/stepup/otp/send")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phoneNumber\":\"" + PHONE + "\",\"locale\":\"pt-BR\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("ENROLL_STEP_UP"));
+
+        verify(accountReauthService).startReauth(eq("@alice:gua.local"), eq(PHONE), any(), eq("pt-BR"));
+
+        mockMvc.perform(post("/login/enroll/stepup/otp/verify")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phoneNumber\":\"" + PHONE + "\",\"code\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+
+        verify(accountReauthService).verifyPhoneOtp(eq("@alice:gua.local"), eq(PHONE), eq("123456"),
+                eq("ENROLL_STEP_UP"), any());
+    }
+
+    /**
+     * The SMS proof is only for an account with nothing stronger. An account holding a passkey
+     * or a PIN must produce it, so a code sent to the number can never stand in for the factor
+     * the account already has.
+     */
+    @Test
+    void theOtpStepUpIsRefusedForAnAccountThatHoldsAFactor() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(enrollSession()));
+        when(passkeyService.hasPasskey("@alice:gua.local")).thenReturn(true);
+
+        mockMvc.perform(post("/login/enroll/stepup/otp/send")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phoneNumber\":\"" + PHONE + "\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("step_up_factor_available"));
+
+        mockMvc.perform(post("/login/enroll/stepup/otp/verify")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phoneNumber\":\"" + PHONE + "\",\"code\":\"123456\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("step_up_factor_available"));
+
+        org.mockito.Mockito.verifyNoInteractions(accountReauthService);
+    }
+
+    /** A passkey that answers for another account never authorizes this one's enrollment. */
+    @Test
+    void aPasskeyFromAnotherAccountDoesNotSettleTheStepUp() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(enrollSession()));
+        when(passkeyService.finishStepUpAssertion(eq(SID), any())).thenReturn(
+                new PasskeyService.PasskeyAuthentication("@mallory:gua.local", REGISTERED_LONG_AGO));
+
+        mockMvc.perform(post("/login/enroll/stepup/passkey/verify")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("passkey_user_mismatch"));
+    }
+
+    /** The step-up steps belong to enrollment sessions; a sign-in cannot walk into them. */
+    @Test
+    void theEnrollmentStepUpIsNotReachableFromASignIn() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PIN_REQUIRED)));
+
+        for (String path : new String[] { "/login/enroll/stepup/passkey/options", "/login/enroll/stepup/pin",
+                "/login/enroll/stepup/otp/send", "/login/enroll/stepup/otp/verify" }) {
+            mockMvc.perform(post(path)
+                    .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"pin\":\"284917\",\"phoneNumber\":\"" + PHONE + "\",\"code\":\"123456\"}"))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.code").value("unexpected_step"));
+        }
+    }
+
+    /** Every enrollment step-up step carries the double-submit check. */
+    @Test
+    void theEnrollmentStepUpStepsCheckTheCsrfToken() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(enrollSession()));
+
+        for (String path : new String[] { "/login/enroll/stepup/passkey/options",
+                "/login/enroll/stepup/passkey/verify", "/login/enroll/stepup/pin",
+                "/login/enroll/stepup/otp/send", "/login/enroll/stepup/otp/verify" }) {
+            mockMvc.perform(post(path)
+                    .cookie(cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"pin\":\"284917\",\"phoneNumber\":\"" + PHONE
+                            + "\",\"code\":\"123456\",\"credential\":{\"id\":\"c\"}}"))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.code").value("csrf_failed"));
+        }
+
+        org.mockito.Mockito.verifyNoInteractions(accountReauthService);
+        verify(passkeyService, org.mockito.Mockito.never()).finishStepUpAssertion(any(), any());
+    }
+
+    /**
+     * The enrollment step-up publishes what the account can produce, so the web knows which
+     * proof to offer, and publishes no recovery: recovery belongs to a sign-in that cannot get
+     * in, not to a signed-in user adding a factor.
+     */
+    @Test
+    void theStepUpStatePublishesTheAccountsFactorsAndNoRecovery() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(enrollSession()));
+        when(passkeyService.isEnabled()).thenReturn(true);
+        when(passkeyService.hasPasskey("@alice:gua.local")).thenReturn(true);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("ENROLL_STEP_UP"))
+                .andExpect(jsonPath("$.enrollment").value(true))
+                .andExpect(jsonPath("$.passkeyRegistered").value(true))
+                .andExpect(jsonPath("$.preferredFactor").value("PASSKEY"))
+                .andExpect(jsonPath("$.passkeysEnabled").value(true))
+                .andExpect(jsonPath("$.recovery").doesNotExist());
+
+        org.mockito.Mockito.verifyNoInteractions(accountRecoveryService);
     }
 
     @Test

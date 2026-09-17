@@ -5,6 +5,8 @@ import java.util.List;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
+import me.sarahlacerda.gua.identityservice.service.security.AuthFactor;
+
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -41,6 +43,15 @@ public class LoginSession {
         PASSKEY_REQUIRED,
         /** New user; awaiting username + display name. */
         PROFILE_REQUIRED,
+        /**
+         * An already-signed-in user adding a factor from settings, before anything is stored:
+         * the session must first prove the account with the strongest thing it can produce (a
+         * user-verifying passkey assertion, else the account PIN, else the account's own number
+         * and an OTP sent to it). Only the enrollment sessions created by
+         * {@code POST /security/passkey/enroll/start} and {@code POST /security/pin/enroll/start}
+         * ever reach it, and it never issues an authorization code.
+         */
+        ENROLL_STEP_UP,
         /** An account holding no factor, after declining the passkey offer; must set a PIN. */
         PIN_SETUP,
         /**
@@ -74,6 +85,12 @@ public class LoginSession {
         ENROLLED,
         /** A delayed account recovery was completed in this session. */
         RECOVERY
+    }
+
+    /** Which factor an enrollment session was opened to add. */
+    public enum EnrollTarget {
+        PASSKEY,
+        PIN
     }
 
     /**
@@ -160,6 +177,25 @@ public class LoginSession {
      * still a real OIDC authorize with a client, whereas an enrollment is not.
      */
     private boolean enroll;
+
+    /**
+     * Which factor this enrollment session is adding, so the step it moves to after the step-up
+     * is the setup step for that factor. Null for every session that is not an enrollment.
+     */
+    private EnrollTarget enrollTarget;
+
+    /**
+     * What an enrollment session proved at {@link Phase#ENROLL_STEP_UP}: a passkey assertion,
+     * the account PIN, or the account's number and an OTP sent to it. Null until it has proved
+     * one, which is what keeps a bearer session on its own from adding a durable factor.
+     *
+     * <p>
+     * Deliberately not {@link #authenticatedFactor}. That field is what lets a session finish a
+     * sign-in, and an enrollment session must never finish one: keeping the two apart means
+     * that even a route which wrongly sent an enrollment session to completion would still be
+     * refused there for having authenticated with nothing.
+     */
+    private AuthFactor enrollStepUpFactor;
 
     /**
      * Single-use attach handle taken from a {@code gua:} login hint, naming an {@code AccountGenesis}

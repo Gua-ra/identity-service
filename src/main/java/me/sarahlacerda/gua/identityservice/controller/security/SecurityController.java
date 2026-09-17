@@ -30,15 +30,15 @@ import me.sarahlacerda.gua.identityservice.controller.dto.PasskeyStepUpStartResp
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeCompleteRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeStartRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeStartResponse;
+import me.sarahlacerda.gua.identityservice.controller.dto.PinEnrollStartResponse;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinStatusResponse;
-import me.sarahlacerda.gua.identityservice.controller.dto.PinUpdateRequest;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.config.OidcProperties;
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.exception.EndpointRetiredException;
-import me.sarahlacerda.gua.identityservice.exception.InvalidPinOperationException;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
+import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
@@ -103,20 +103,35 @@ public class SecurityController {
     }
 
     @PostMapping("/pin")
-    @Operation(summary = "Set the initial account PIN", description = "Stores the user's first security PIN. Updating an existing PIN must use /security/pin/change/start + /complete (OTP-protected).", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @Operation(summary = "Set the initial account PIN (step-up required)", description = "Always 403 step_up_required. A bearer session on its own must not add a durable factor: a session is the thing an attacker gets, and a PIN set from one is a second way into the account for whoever holds it. Setting a first PIN now runs through POST /security/pin/enroll/start, whose web session confirms the account first, with a passkey, the existing PIN, or the account's own number and a code sent to it. Changing an existing PIN still uses /security/pin/change/start + /complete.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
-            @ApiResponse(responseCode = "204", description = "PIN stored"),
-            @ApiResponse(responseCode = "400", description = "Validation failed or PIN already set (use change flow)", content = @Content),
-            @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content)
+            @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content),
+            @ApiResponse(responseCode = "403", description = "step_up_required: use POST /security/pin/enroll/start", content = @Content)
     })
-    public ResponseEntity<Void> setInitialPin(
-            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Payload containing the user identifier and the new PIN", required = true, content = @Content(schema = @Schema(implementation = PinUpdateRequest.class))) @RequestBody @Valid PinUpdateRequest request) {
-        authenticatedUserAccessor.requireUserIdMatches(request.getUserId());
-        if (request.getCurrentPin() != null && !request.getCurrentPin().isBlank()) {
-            throw new InvalidPinOperationException("Use /security/pin/change/start to change an existing PIN");
+    public ResponseEntity<Void> setInitialPin() {
+        // Takes no body and touches nothing, so an older client is told what to do instead of
+        // tripping a validation error on a payload that was never going to be stored.
+        throw new StepUpRequiredException(
+                "Confirm it is you before adding a PIN: start at POST /security/pin/enroll/start.");
+    }
+
+    @PostMapping("/pin/enroll/start")
+    @Operation(summary = "Start in-app PIN enrollment", description = "Lets an already-signed-in user add a PIN from settings. Mirrors POST /security/passkey/enroll/start: it builds a login session pinned to the authenticated user and returns a one-time enroll URL the client opens in an authenticated web view. The session starts at ENROLL_STEP_UP and stores nothing until the account is confirmed there.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Enrollment session created; open the returned enrollUrl in a web view"),
+            @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content),
+            @ApiResponse(responseCode = "409", description = "pin_already_set: the account already has a PIN", content = @Content)
+    })
+    public ResponseEntity<PinEnrollStartResponse> startPinEnrollment() {
+        String userId = authenticatedUserAccessor.requireCurrentUserId();
+        // Same shape as the passkey guard below: an account that already has one is told so,
+        // rather than being walked into a setup step that would refuse under the row lock.
+        if (authFactorPolicy.pinRegistered(userId)) {
+            throw new LoginFlowException(HttpStatus.CONFLICT, "pin_already_set",
+                    "This account already has a PIN.");
         }
-        userSecurityService.setInitialPin(request.getUserId(), request.getNewPin());
-        return ResponseEntity.noContent().build();
+        return ResponseEntity.ok(new PinEnrollStartResponse(
+                startFactorEnrollment(userId, LoginSession.EnrollTarget.PIN)));
     }
 
     @PostMapping("/pin/change/start")
@@ -194,10 +209,11 @@ public class SecurityController {
     }
 
     @PostMapping("/passkey/enroll/start")
-    @Operation(summary = "Start in-app passkey enrollment", description = "Lets an already-signed-in user add a passkey from settings. Builds a login session pinned to the authenticated user and returns a one-time enroll URL the client opens in an authenticated web view, which reuses the same passkey setup step as onboarding.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @Operation(summary = "Start in-app passkey enrollment", description = "Lets an already-signed-in user add a passkey from settings. Builds a login session pinned to the authenticated user and returns a one-time enroll URL the client opens in an authenticated web view. The session starts at ENROLL_STEP_UP and runs the passkey setup step only once the account has been confirmed there.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Enrollment session created; open the returned enrollUrl in a web view"),
-            @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content)
+            @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content),
+            @ApiResponse(responseCode = "409", description = "passkey_already_registered: the account already has a passkey", content = @Content)
     })
     public ResponseEntity<PasskeyEnrollStartResponse> startPasskeyEnrollment() {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
@@ -212,18 +228,33 @@ public class SecurityController {
         // the outside like passkeys being broken.
         // Same question, same answer as LoginFlowController.advanceToPasskeySetup, because both
         // now ask AuthFactorPolicy rather than each assembling it from isEnabled + hasPasskey.
-        //
-        // Note what this endpoint does NOT ask for: no PIN, no step-up, nothing but the bearer
-        // token. That is on purpose, because demanding a factor to acquire a factor is how an
-        // account with a broken credential becomes an account with no way in. What stops a
-        // session holder from enrolling a passkey and immediately re-pointing the phone number
-        // with it is on the other side, in PhoneChangeService.enforceStepUp: a credential
-        // registered inside the fresh-2FA hold cannot settle that step-up yet.
         if (authFactorPolicy.passkeyRegistered(userId)) {
             throw new LoginFlowException(HttpStatus.CONFLICT, "passkey_already_registered",
                     "This account already has a passkey.");
         }
 
+        return ResponseEntity.ok(new PasskeyEnrollStartResponse(
+                startFactorEnrollment(userId, LoginSession.EnrollTarget.PASSKEY)));
+    }
+
+    /**
+     * Builds the enrollment session both entry points hand out, and returns the one-time URL
+     * that opens it.
+     *
+     * <p>
+     * What this endpoint asks for is the bearer token, and what the session it creates can do
+     * with that alone is nothing: it starts at {@code ENROLL_STEP_UP}, where the account has to
+     * be confirmed with a user-verifying passkey assertion, the account PIN, or, for an account
+     * that holds neither, its own number and a code sent to that number. Only then does the
+     * session reach the step that stores a factor. A session is the thing an attacker gets hold
+     * of, so a session on its own must not be able to leave a new way in behind it.
+     *
+     * <p>
+     * The step-up runs in a web view rather than in the app because that is the only place a
+     * passkey assertion can be performed on every platform this ships to, and asking for the
+     * strongest proof the account can give was the point.
+     */
+    private String startFactorEnrollment(String userId, LoginSession.EnrollTarget target) {
         // Same localpart source as login (ADM-001 S6). An enrollment session never issues
         // an authorization code, but it must not carry a value login would refuse.
         List<DirectoryEntry> entries = directoryService.findByUserId(userId);
@@ -232,19 +263,20 @@ public class SecurityController {
         LoginSession session = new LoginSession();
         session.setUserId(userId);
         // Mark this as an enrollment (not an OIDC login): there is no authorize request,
-        // so passkey-setup completion redirects back to the app scheme instead of issuing
-        // an authorization code (which would NPE on the absent client id).
+        // so completion redirects back to the app scheme instead of issuing an authorization
+        // code (which would NPE on the absent client id).
         session.setEnroll(true);
+        session.setEnrollTarget(target);
         // Pin the session to the authenticated subject. This forces the LOGIN-ONLY
         // contract in LoginFlowController so the enroll flow can never degrade into an
-        // open signup/login even though the user is dropped straight at passkey setup.
+        // open signup/login even though the user is dropped straight into enrollment.
         session.setReauthUserId(userId);
         session.setDisplayName(displayNameFor(entries, preferredUsername));
         session.setPreferredUsername(preferredUsername);
-        // The app scheme the OIDC client uses; only echoed back if the ceremony reaches
+        // The app scheme the OIDC client uses; only echoed back if enrollment reaches
         // completion, and never reachable as an open login (reauthUserId is set above).
         session.setRedirectUri(loginProperties.getEnroll().getRedirectUri());
-        session.setPhase(Phase.PASSKEY_SETUP);
+        session.setPhase(Phase.ENROLL_STEP_UP);
         session.setCsrfToken(loginSessionService.newToken());
 
         String sessionId = loginSessionService.create(session);
@@ -253,11 +285,10 @@ public class SecurityController {
 
         // Absolute URL on the web origin that serves the sign-in SPA (same origin the
         // login cookie is first-party to), so the web view loads it directly.
-        String enrollUrl = UriComponentsBuilder.fromUriString(oidcProperties.getIssuer())
-                .path("/login/passkey/enroll/{token}")
+        return UriComponentsBuilder.fromUriString(oidcProperties.getIssuer())
+                .path("/login/enroll/{token}")
                 .buildAndExpand(enrollToken)
                 .toUriString();
-        return ResponseEntity.ok(new PasskeyEnrollStartResponse(enrollUrl));
     }
 
     /**

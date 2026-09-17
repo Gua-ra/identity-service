@@ -54,6 +54,29 @@ public class LoginFactorEnrollmentService {
     }
 
     /**
+     * Sets the PIN of an account adding one from settings, after the enrollment session proved
+     * the account at {@code ENROLL_STEP_UP}.
+     *
+     * <p>
+     * Unlike {@link #setUpFirstPin}, a passkey on the account is no obstacle: holding one is
+     * what authorized this, and adding the PIN underneath it is the point. What the lock still
+     * settles is the PIN itself, so two enrollment sessions for the same account cannot both
+     * write one and the second is told the account already has one rather than overwriting it.
+     *
+     * @throws LoginFlowException {@code 409 pin_already_set} when the account gained a PIN in
+     *                            the meantime
+     */
+    @Transactional
+    public void setUpEnrolledPin(String userId, String pin) {
+        IdentityUser user = lockForEnrollment(userId);
+        if (user.hasPin()) {
+            throw new LoginFlowException(HttpStatus.CONFLICT, "pin_already_set",
+                    "This account already has a PIN. Change it from your security settings.");
+        }
+        userSecurityService.setInitialPin(user, pin);
+    }
+
+    /**
      * Stores the passkey from a registration ceremony run in a login session.
      *
      * @return whether it is the account's first factor, which is what lets a session that has not

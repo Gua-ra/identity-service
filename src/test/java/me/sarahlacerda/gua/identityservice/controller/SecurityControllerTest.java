@@ -1,6 +1,5 @@
 package me.sarahlacerda.gua.identityservice.controller;
 
-import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.verify;
 
 import me.sarahlacerda.gua.identityservice.controller.security.SecurityController;
@@ -21,7 +20,6 @@ import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.config.OidcProperties;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeCompleteRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeStartRequest;
-import me.sarahlacerda.gua.identityservice.controller.dto.PinUpdateRequest;
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver;
@@ -85,20 +83,23 @@ class SecurityControllerTest {
                 .build();
     }
 
+    /**
+     * R2: a bearer session on its own never adds a durable factor. The endpoint stores nothing
+     * and names the flow that does the work, so an older client is told where to go instead of
+     * failing on a payload that was never going to be kept.
+     */
     @Test
-    void setPinRequiresAuthentication() throws Exception {
-        PinUpdateRequest request = new PinUpdateRequest();
-        request.setUserId("@user:domain");
-        request.setNewPin("123456");
-
-        doNothing().when(authenticatedUserAccessor).requireUserIdMatches("@user:domain");
-
+    void theBearerFirstPinIsRefusedAndNamesTheEnrollmentFlow() throws Exception {
         mockMvc.perform(MockMvcRequestBuilders.post("/security/pin")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsBytes(request)))
-                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNoContent());
+                .content("{\"userId\":\"@user:domain\",\"newPin\":\"123456\"}"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code")
+                        .value("step_up_required"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("/security/pin/enroll/start")));
 
-        verify(userSecurityService).setInitialPin("@user:domain", "123456");
+        org.mockito.Mockito.verifyNoInteractions(userSecurityService);
     }
 
     @Test
@@ -162,21 +163,66 @@ class SecurityControllerTest {
         verify(userSecurityService).completePinChange("@user:domain", "chal-1", "987654", "654321");
     }
 
+    /** Whatever the body says, including an empty one: the answer is the same and nothing is read. */
     @Test
-    void setPinRejectsCurrentPinPayload() throws Exception {
-        PinUpdateRequest request = new PinUpdateRequest();
-        request.setUserId("@user:domain");
-        request.setNewPin("654321");
-        request.setCurrentPin("123456");
+    void theBearerFirstPinIsRefusedWhateverTheBodySays() throws Exception {
+        for (String body : java.util.List.of("{}", "{\"userId\":\"@user:domain\",\"currentPin\":\"123456\"}")) {
+            mockMvc.perform(MockMvcRequestBuilders.post("/security/pin")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(body))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code")
+                            .value("step_up_required"));
+        }
 
-        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsBytes(request)))
-                .andExpect(
-                        org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().is4xxClientError());
+        org.mockito.Mockito.verifyNoInteractions(userSecurityService);
+    }
 
-        org.mockito.Mockito.verify(userSecurityService, org.mockito.Mockito.never())
-                .setInitialPin(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+    @Test
+    void startPinEnrollmentReturnsAbsoluteEnrollUrlAndParksAtTheStepUp() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
+        org.mockito.Mockito.when(userSecurityService.hasPin("@alice:dev.local")).thenReturn(false);
+        org.mockito.Mockito.when(directoryService.findByUserId("@alice:dev.local"))
+                .thenReturn(java.util.List.of(
+                        DirectoryEntry.builder().userId("@alice:dev.local").displayName("Alice").build()));
+        org.mockito.Mockito.when(loginSessionService.create(org.mockito.ArgumentMatchers.any(LoginSession.class)))
+                .thenReturn("sess-1");
+        org.mockito.Mockito.when(loginSessionService.newToken()).thenReturn("csrf-1");
+        org.mockito.Mockito.when(loginSessionService.createEnrollToken(
+                org.mockito.ArgumentMatchers.eq("sess-1"), org.mockito.ArgumentMatchers.any()))
+                .thenReturn("tok-1");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/enroll/start")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.enrollUrl")
+                        .value("https://auth.example.com/login/enroll/tok-1"));
+
+        org.mockito.ArgumentCaptor<LoginSession> captor = org.mockito.ArgumentCaptor.forClass(LoginSession.class);
+        verify(loginSessionService).create(captor.capture());
+        LoginSession created = captor.getValue();
+        // Nothing can be stored from this session until it has been through the step-up.
+        org.junit.jupiter.api.Assertions.assertEquals(LoginSession.Phase.ENROLL_STEP_UP, created.getPhase());
+        org.junit.jupiter.api.Assertions.assertEquals(LoginSession.EnrollTarget.PIN, created.getEnrollTarget());
+        org.junit.jupiter.api.Assertions.assertNull(created.getEnrollStepUpFactor());
+        org.junit.jupiter.api.Assertions.assertEquals("@alice:dev.local", created.getUserId());
+        org.junit.jupiter.api.Assertions.assertEquals("@alice:dev.local", created.getReauthUserId());
+        org.junit.jupiter.api.Assertions.assertTrue(created.isEnroll());
+    }
+
+    @Test
+    void startPinEnrollmentRefusesAnAccountThatAlreadyHasAPin() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
+        org.mockito.Mockito.when(userSecurityService.hasPin("@alice:dev.local")).thenReturn(true);
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/enroll/start")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isConflict())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code")
+                        .value("pin_already_set"));
+
+        verify(loginSessionService, org.mockito.Mockito.never())
+                .create(org.mockito.ArgumentMatchers.any(LoginSession.class));
     }
 
     @Test
@@ -196,11 +242,11 @@ class SecurityControllerTest {
                 .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.enrollUrl")
-                        .value("https://auth.example.com/login/passkey/enroll/tok-1"));
+                        .value("https://auth.example.com/login/enroll/tok-1"));
     }
 
     @Test
-    void startPasskeyEnrollmentPinsSessionToAuthenticatedUserInPasskeySetup() throws Exception {
+    void startPasskeyEnrollmentPinsSessionToAuthenticatedUserAtTheStepUp() throws Exception {
         org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
         // Empty directory result -> display name falls back to the MXID localpart.
         org.mockito.Mockito.when(directoryService.findByUserId("@alice:dev.local"))
@@ -218,7 +264,8 @@ class SecurityControllerTest {
         org.mockito.ArgumentCaptor<LoginSession> captor = org.mockito.ArgumentCaptor.forClass(LoginSession.class);
         verify(loginSessionService).create(captor.capture());
         LoginSession created = captor.getValue();
-        org.junit.jupiter.api.Assertions.assertEquals(LoginSession.Phase.PASSKEY_SETUP, created.getPhase());
+        org.junit.jupiter.api.Assertions.assertEquals(LoginSession.Phase.ENROLL_STEP_UP, created.getPhase());
+        org.junit.jupiter.api.Assertions.assertEquals(LoginSession.EnrollTarget.PASSKEY, created.getEnrollTarget());
         org.junit.jupiter.api.Assertions.assertEquals("@alice:dev.local", created.getUserId());
         org.junit.jupiter.api.Assertions.assertEquals("@alice:dev.local", created.getReauthUserId());
         org.junit.jupiter.api.Assertions.assertEquals("global.gua:/oidc", created.getRedirectUri());

@@ -73,6 +73,31 @@ class LoginFactorEnrollmentServiceTest {
         verify(repository, never()).findByUserId(USER);
     }
 
+    /**
+     * The PIN added from settings, after the enrollment step-up. A passkey on the account is no
+     * obstacle here, unlike at first-factor setup: producing it is what authorized this, and
+     * adding the PIN underneath it is the point.
+     */
+    @Test
+    void anEnrolledPinIsSetOnAnAccountThatHoldsAPasskey() {
+        when(passkeyService.hasPasskey(USER)).thenReturn(true);
+
+        service.setUpEnrolledPin(USER, "284917");
+
+        assertThat(passwordEncoder.matches("284917", user.getPinHash())).isTrue();
+    }
+
+    @Test
+    void anEnrolledPinIsRefusedWhenTheAccountAlreadyHasOne() {
+        user.setPinHash(passwordEncoder.encode("111213"));
+
+        assertThatThrownBy(() -> service.setUpEnrolledPin(USER, "284917"))
+                .isInstanceOf(LoginFlowException.class)
+                .hasMessageContaining("already has a PIN");
+
+        assertThat(passwordEncoder.matches("111213", user.getPinHash())).isTrue();
+    }
+
     @Test
     void aPinIsNotSetOnAnAccountThatGainedAPasskeyInTheMeantime() {
         when(passkeyService.hasPasskey(USER)).thenReturn(true);

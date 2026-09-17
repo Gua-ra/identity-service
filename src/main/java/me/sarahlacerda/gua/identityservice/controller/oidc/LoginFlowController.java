@@ -42,6 +42,7 @@ import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.domain.Homeserver;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneAlreadyLinkedException;
+import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
 import me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
@@ -63,8 +64,10 @@ import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationCode;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationService;
+import me.sarahlacerda.gua.identityservice.service.security.AccountReauthService;
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryService;
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryState;
+import me.sarahlacerda.gua.identityservice.service.security.AuthFactor;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy;
 import me.sarahlacerda.gua.identityservice.service.security.LoginFactorEnrollmentService;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
@@ -117,8 +120,8 @@ public class LoginFlowController {
      * point where an OTP or an assertion resolved the subject, and the report is additionally
      * conditioned on that subject actually being on the session.
      */
-    private static final Set<Phase> FACTOR_REPORT_PHASES =
-            EnumSet.of(Phase.PIN_REQUIRED, Phase.PASSKEY_REQUIRED, Phase.PIN_SETUP, Phase.PASSKEY_SETUP);
+    private static final Set<Phase> FACTOR_REPORT_PHASES = EnumSet.of(Phase.PIN_REQUIRED, Phase.PASSKEY_REQUIRED,
+            Phase.PIN_SETUP, Phase.PASSKEY_SETUP, Phase.ENROLL_STEP_UP);
 
     /**
      * The steps from which the delayed account recovery may be offered: the two where a returning
@@ -148,6 +151,7 @@ public class LoginFlowController {
     private final AccountCreationService accountCreationService;
     private final LoginFactorEnrollmentService loginFactorEnrollmentService;
     private final AccountRecoveryService accountRecoveryService;
+    private final AccountReauthService accountReauthService;
     private final TokenRevocationService tokenRevocationService;
     private final EndOtherSessionsService endOtherSessionsService;
 
@@ -159,8 +163,8 @@ public class LoginFlowController {
         return ResponseEntity.ok(state(session, null));
     }
 
-    @GetMapping("/passkey/enroll/{token}")
-    @Operation(summary = "Open the in-app passkey enrollment web view", description = "One-time handoff for an already-signed-in user adding a passkey from settings. The enrollment session is created by POST /security/passkey/enroll/start; the cookie set on that API call is not present in this separate web view, so this redeems the one-time token, drops the first-party login cookie, and redirects into the sign-in SPA at the passkey setup step.")
+    @GetMapping({ "/enroll/{token}", "/passkey/enroll/{token}" })
+    @Operation(summary = "Open the in-app factor enrollment web view", description = "One-time handoff for an already-signed-in user adding a passkey or a PIN from settings. The enrollment session is created by POST /security/passkey/enroll/start or POST /security/pin/enroll/start; the cookie set on that API call is not present in this separate web view, so this redeems the one-time token, drops the first-party login cookie, and redirects into the sign-in SPA, which finds the session at the ENROLL_STEP_UP step. The /passkey/ spelling is the path older enroll links carry and is the same handoff.")
     public ResponseEntity<Void> openPasskeyEnrollment(
             @org.springframework.web.bind.annotation.PathVariable("token") String token) {
         String sessionId = loginSessionService.consumeEnrollToken(token)
@@ -473,7 +477,7 @@ public class LoginFlowController {
     }
 
     @PostMapping("/pin-setup")
-    @Operation(summary = "Set the account PIN", description = "The factor for an account that holds none and is not finishing with a passkey: a new account, or an older one that never set a factor. Reached by declining the passkey offer, or directly on a deployment with passkeys switched off. It cannot be skipped: skip:true, a missing PIN and a blank PIN are all 400 pin_required, and nothing completes without a PIN. 409 factor_required when the account gained a factor from another session in the meantime.")
+    @Operation(summary = "Set the account PIN", description = "Two ways in. During a sign-in it is the factor for an account that holds none and is not finishing with a passkey: a new account, or an older one that never set a factor, reached by declining the passkey offer or directly on a deployment with passkeys switched off. In an enrollment session started at POST /security/pin/enroll/start it is the PIN being added from settings, and it is reachable only once that session has been through ENROLL_STEP_UP. Either way it cannot be skipped: skip:true, a missing PIN and a blank PIN are all 400 pin_required. 409 factor_required when a signing-in account gained a factor from another session in the meantime, 409 pin_already_set when an enrolling one gained a PIN.")
     public ResponseEntity<LoginStateResponse> submitPinSetup(
             @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
             @RequestHeader(value = CSRF_HEADER, required = false) String csrf,
@@ -481,12 +485,20 @@ public class LoginFlowController {
         LoginSession session = requireSession(sessionId);
         requireCsrf(session, csrf);
         requirePhase(session, Phase.PIN_SETUP);
+        requireEnrollStepUpDone(session);
 
         // Mandatory. This step is where an account that declined the passkey gets its factor, so
         // leaving it without one would finish a sign-in on the phone OTP alone.
         if (request.skip() || !StringUtils.hasText(request.pin())) {
             throw new LoginFlowException(HttpStatus.BAD_REQUEST, "pin_required",
                     "Choose a PIN to protect your account.");
+        }
+        if (session.isEnroll()) {
+            // Adding a PIN from settings, authorized by the step-up this session went through.
+            // No sign-in is being finished, so no factor is recorded on the session and no
+            // authorization code follows.
+            loginFactorEnrollmentService.setUpEnrolledPin(session.getUserId(), request.pin().trim());
+            return completeEnrollment(sessionId, session);
         }
         // Refused under the row lock when the account already holds a factor, so a second
         // session for the same factorless account cannot add its own PIN to an account the first
@@ -507,6 +519,7 @@ public class LoginFlowController {
         LoginSession session = requireSession(sessionId);
         requireCsrf(session, csrf);
         requirePhase(session, Phase.PASSKEY_SETUP);
+        requireEnrollStepUpDone(session);
 
         return ResponseEntity.ok(new PasskeyOptionsResponse(passkeyService.startRegistration(sessionId, session)));
     }
@@ -520,6 +533,7 @@ public class LoginFlowController {
         LoginSession session = requireSession(sessionId);
         requireCsrf(session, csrf);
         requirePhase(session, Phase.PASSKEY_SETUP);
+        requireEnrollStepUpDone(session);
 
         if (session.isEnroll()) {
             // Bearer-authenticated handoff from settings: no sign-in is being finished here.
@@ -627,6 +641,96 @@ public class LoginFlowController {
         // Intentional OTP bypass: a proven existing user signs in straight through.
         session.setAuthenticatedFactor(SessionFactor.PASSKEY);
         return complete(sessionId, session);
+    }
+
+    // --- In-app factor enrollment: the step-up that comes before anything is stored ---
+
+    @PostMapping("/enroll/stepup/passkey/options")
+    @Operation(summary = "Start the enrollment step-up with a passkey", description = "Begins a user-verifying WebAuthn assertion for an enrollment session at ENROLL_STEP_UP. The preferred proof for an account that holds a passkey, and the only one asked for: an account that produces a passkey is never also asked for its PIN. The ceremony is pinned to the session's account and lives in the step-up namespace, so it can neither complete a sign-in nor be answered by another account's credential.")
+    public ResponseEntity<PasskeyOptionsResponse> startEnrollStepUpPasskey(
+            @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
+            @RequestHeader(value = CSRF_HEADER, required = false) String csrf) {
+        LoginSession session = requireSession(sessionId);
+        requireCsrf(session, csrf);
+        requireEnrollStepUp(session);
+
+        return ResponseEntity.ok(new PasskeyOptionsResponse(
+                passkeyService.startStepUpAssertion(sessionId, session.getUserId())));
+    }
+
+    @PostMapping("/enroll/stepup/passkey/verify")
+    @Operation(summary = "Finish the enrollment step-up with a passkey", description = "Verifies the assertion, which must verify the user and must resolve to this session's account, and moves the session to the setup step for the factor being added.")
+    public ResponseEntity<LoginStateResponse> finishEnrollStepUpPasskey(
+            @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
+            @RequestHeader(value = CSRF_HEADER, required = false) String csrf,
+            @RequestBody @Valid PasskeyCredentialRequest request) {
+        LoginSession session = requireSession(sessionId);
+        requireCsrf(session, csrf);
+        requireEnrollStepUp(session);
+
+        PasskeyService.PasskeyAuthentication auth =
+                passkeyService.finishStepUpAssertion(sessionId, request.credential());
+        // The ceremony was pinned to this account, so a credential from another one cannot have
+        // answered it; checked anyway, because this is the proof a factor is about to be stored on.
+        if (!session.getUserId().equals(auth.userId())) {
+            throw new LoginFlowException(HttpStatus.FORBIDDEN, "passkey_user_mismatch",
+                    "This passkey belongs to a different account.");
+        }
+        return acceptEnrollStepUp(sessionId, session, AuthFactor.PASSKEY);
+    }
+
+    @PostMapping("/enroll/stepup/pin")
+    @Operation(summary = "Finish the enrollment step-up with the account PIN", description = "The proof for an account that holds a PIN and no passkey to produce. Counted and locked out exactly like the PIN step of a sign-in.")
+    public ResponseEntity<LoginStateResponse> submitEnrollStepUpPin(
+            @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
+            @RequestHeader(value = CSRF_HEADER, required = false) String csrf,
+            @RequestBody @Valid PinRequest request) {
+        LoginSession session = requireSession(sessionId);
+        requireCsrf(session, csrf);
+        requireEnrollStepUp(session);
+        if (!authFactorPolicy.pinRegistered(session.getUserId())) {
+            throw new LoginFlowException(HttpStatus.CONFLICT, "pin_not_set",
+                    "This account has no PIN to confirm with.");
+        }
+
+        userSecurityService.validatePinOrThrow(session.getUserId(), request.pin().trim());
+        return acceptEnrollStepUp(sessionId, session, AuthFactor.PIN);
+    }
+
+    @PostMapping("/enroll/stepup/otp/send")
+    @Operation(summary = "Send the enrollment step-up code", description = "Only for an account that holds no factor at all, which has nothing stronger to prove itself with. The caller confirms the number on their own account: it is digested and compared with that account's own directory binding exactly as POST /account/reauth/start does, and only a match sends a code, to that number. 403 reauth_phone_mismatch otherwise, in the same words whoever the number belongs to. An account that holds a passkey or a PIN is refused here (409 step_up_factor_available), because an SMS code must never establish a factor on an account that already has a stronger one.")
+    public ResponseEntity<LoginStateResponse> sendEnrollStepUpOtp(
+            @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
+            @RequestHeader(value = CSRF_HEADER, required = false) String csrf,
+            @RequestBody @Valid PhoneRequest request,
+            HttpServletRequest servletRequest) {
+        LoginSession session = requireSession(sessionId);
+        requireCsrf(session, csrf);
+        requireEnrollStepUp(session);
+        requireNoStrongerFactor(session);
+
+        accountReauthService.startReauth(session.getUserId(), request.phoneNumber(),
+                servletRequest.getRemoteAddr(), request.locale());
+        session.setLocale(request.locale());
+        loginSessionService.save(sessionId, session);
+        return ResponseEntity.ok(state(session, null));
+    }
+
+    @PostMapping("/enroll/stepup/otp/verify")
+    @Operation(summary = "Finish the enrollment step-up with the code", description = "Redeems the code sent to the account's own number, re-checking the number the same way, and moves the session to the setup step. This is the reauthentication an account holding no factor does before its first strong factor: it establishes a LOGIN factor and nothing else.")
+    public ResponseEntity<LoginStateResponse> verifyEnrollStepUpOtp(
+            @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
+            @RequestHeader(value = CSRF_HEADER, required = false) String csrf,
+            @RequestBody @Valid EnrollStepUpOtpRequest request,
+            HttpServletRequest servletRequest) {
+        LoginSession session = requireSession(sessionId);
+        requireCsrf(session, csrf);
+        requireEnrollStepUp(session);
+        requireNoStrongerFactor(session);
+
+        accountReauthService.verifyPhoneOtp(session.getUserId(), request.phoneNumber(), request.code().trim(),
+                Phase.ENROLL_STEP_UP.name(), servletRequest.getRemoteAddr());
+        return acceptEnrollStepUp(sessionId, session, AuthFactor.PHONE_OTP);
     }
 
     @PostMapping("/recovery/start")
@@ -863,6 +967,74 @@ public class LoginFlowController {
     }
 
     /**
+     * The gate on every enrollment step-up endpoint: an enrollment session, sitting at the step
+     * where it has yet to prove anything, with its account resolved.
+     */
+    private void requireEnrollStepUp(LoginSession session) {
+        if (!session.isEnroll()) {
+            throw new LoginFlowException(HttpStatus.CONFLICT, "unexpected_step",
+                    "This step belongs to adding a factor from your account settings.");
+        }
+        requirePhase(session, Phase.ENROLL_STEP_UP);
+        if (!StringUtils.hasText(session.getUserId())) {
+            throw new LoginFlowException(HttpStatus.CONFLICT, "enroll_user_unknown",
+                    "This setup session is not bound to an account.");
+        }
+    }
+
+    /**
+     * Keeps the SMS proof to the one case it was allowed for: an account that holds no factor.
+     *
+     * <p>
+     * An account holding a passkey or a PIN has something stronger to produce, and letting a
+     * code sent to the number stand in for it would make every such account only as strong as
+     * its SIM, which is exactly what requiring a factor was for. Someone who cannot produce
+     * what their account holds has the delayed recovery, which waits, and not this, which does
+     * not.
+     */
+    private void requireNoStrongerFactor(LoginSession session) {
+        if (!authFactorPolicy.loginPolicy(session.getUserId()).factorSetupRequired()) {
+            throw new LoginFlowException(HttpStatus.CONFLICT, "step_up_factor_available",
+                    "Confirm with the passkey or PIN on this account.");
+        }
+    }
+
+    /**
+     * Records the proof on the session and moves it to the setup step for the factor it was
+     * opened to add. The only route from {@code ENROLL_STEP_UP} to a step that stores anything.
+     *
+     * <p>
+     * It sets {@code enrollStepUpFactor}, never {@code authenticatedFactor}: an enrollment
+     * session must not become one that can finish a sign-in, and keeping the two fields apart
+     * is what makes that true by construction rather than by routing.
+     */
+    private ResponseEntity<LoginStateResponse> acceptEnrollStepUp(String sessionId, LoginSession session,
+            AuthFactor provedWith) {
+        session.setEnrollStepUpFactor(provedWith);
+        session.setPhase(session.getEnrollTarget() == LoginSession.EnrollTarget.PIN
+                ? Phase.PIN_SETUP
+                : Phase.PASSKEY_SETUP);
+        loginSessionService.save(sessionId, session);
+        return ResponseEntity.ok(state(session, null));
+    }
+
+    /**
+     * Refuses to store a factor for an enrollment session that has not been through the step-up.
+     *
+     * <p>
+     * The phase already says so, since {@link #acceptEnrollStepUp} is the only way a session
+     * reaches a setup step. This is the second lock on the same door: a bearer token alone must
+     * never add a durable factor, and that is too important to rest on one route being the only
+     * one that sets a phase.
+     */
+    private void requireEnrollStepUpDone(LoginSession session) {
+        if (session.isEnroll() && session.getEnrollStepUpFactor() == null) {
+            throw new StepUpRequiredException(
+                    "Confirm it is you before adding a way to sign in.");
+        }
+    }
+
+    /**
      * Whether this session may be offered the delayed account recovery.
      *
      * <p>
@@ -995,6 +1167,10 @@ public class LoginFlowController {
     }
 
     public record PasskeyCredentialRequest(@NotNull JsonNode credential) {
+    }
+
+    /** The account's own number again, with the code sent to it, at the enrollment step-up. */
+    public record EnrollStepUpOtpRequest(@NotBlank String phoneNumber, @NotBlank String code) {
     }
 
     public record PasskeyOptionsResponse(JsonNode publicKey) {
