@@ -302,9 +302,9 @@ public class SecurityController {
      * Where the enrollment sheet sends the app back when the ceremony completes.
      *
      * <p>
-     * It is the first redirect the caller's own OIDC client has registered, because the app that
-     * opened the sheet is the app that has to receive the handoff and each build registers its
-     * own scheme: the store build answers {@code global.gua}, the QA build
+     * It is the app-scheme redirect the caller's own OIDC client has registered, because the app
+     * that opened the sheet is the app that has to receive the handoff and each build registers
+     * its own scheme: the store build answers {@code global.gua}, the QA build
      * {@code global.gua.dev}, an Android debug build {@code global.gua.debug}. One configured
      * value for the whole deployment meant the sheet on a QA build handed off to a scheme that
      * build does not answer, so it never dismissed itself, and on a phone that also has the
@@ -318,18 +318,32 @@ public class SecurityController {
      * completion wherever the caller says.
      *
      * <p>
-     * Falls back to {@code idp.login.enroll.redirect-uri} when the token names no client of ours
-     * (every homeserver-issued token) or when that client registered no redirect.
+     * Only an app scheme is taken from the registration. What is being chosen is the thing the
+     * web view opening this sheet is listening for, and a client whose redirects are all web
+     * origins, the authentication service among them, is not an app that can be handed back to.
+     * Handing one of those out would swap a scheme the app does not answer for a page it cannot
+     * use.
+     *
+     * <p>
+     * Falls back to {@code idp.login.enroll.redirect-uri} when the token names no client of ours,
+     * which is every homeserver-issued token, and when the client it names registered no app
+     * scheme.
      */
     private String enrollRedirectUri() {
         return authenticatedUserAccessor.currentClientId()
                 .flatMap(clientId -> oidcProperties.getClients().stream()
                         .filter(client -> clientId.equals(client.getClientId()))
                         .findFirst())
-                .map(OidcProperties.ClientRegistration::getRedirectUris)
-                .filter(uris -> !uris.isEmpty())
-                .map(List::getFirst)
+                .flatMap(client -> client.getRedirectUris().stream()
+                        .filter(SecurityController::isAppScheme)
+                        .findFirst())
                 .orElseGet(() -> loginProperties.getEnroll().getRedirectUri());
+    }
+
+    /** A redirect an app answers, rather than a browser: anything that is not an http(s) URL. */
+    private static boolean isAppScheme(String redirectUri) {
+        String lower = redirectUri.toLowerCase(java.util.Locale.ROOT);
+        return !lower.startsWith("http://") && !lower.startsWith("https://");
     }
 
     /**

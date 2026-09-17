@@ -234,19 +234,25 @@ class SecurityControllerTest {
     }
 
     /**
-     * A homeserver-issued token names no client of ours, and a registered client may have no
-     * redirect at all. Both fall back to the configured value rather than to nothing.
+     * A homeserver-issued token names no client of ours; a registered client may have no redirect
+     * at all; and a client whose redirects are all web origins, the authentication service among
+     * them, is not an app that can be handed back to. All three fall back to the configured app
+     * scheme rather than to a value the web view is not listening for.
      */
     @Test
     void theEnrollmentRedirectFallsBackToTheConfiguredValue() throws Exception {
         OidcProperties.ClientRegistration noRedirects = new OidcProperties.ClientRegistration();
         noRedirects.setClientId("gua-ios");
         noRedirects.setRedirectUris(java.util.List.of());
-        oidcProperties.setClients(java.util.List.of(noRedirects));
+        OidcProperties.ClientRegistration webOnly = new OidcProperties.ClientRegistration();
+        webOnly.setClientId("mas");
+        webOnly.setRedirectUris(java.util.List.of("https://auth.example.com/upstream/callback"));
+        oidcProperties.setClients(java.util.List.of(noRedirects, webOnly));
         loginProperties.getEnroll().setRedirectUri("global.gua:/oidc");
 
         for (java.util.Optional<String> client : java.util.List.of(
-                java.util.Optional.<String>empty(), java.util.Optional.of("gua-ios"))) {
+                java.util.Optional.<String>empty(), java.util.Optional.of("gua-ios"),
+                java.util.Optional.of("mas"))) {
             org.mockito.Mockito.reset(loginSessionService);
             org.mockito.Mockito.when(authenticatedUserAccessor.currentClientId()).thenReturn(client);
             stubEnrollmentSessionFor("@alice:dev.local");
