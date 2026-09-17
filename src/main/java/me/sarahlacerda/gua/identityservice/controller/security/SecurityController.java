@@ -58,7 +58,7 @@ import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 @RequestMapping("/security")
 @Validated
 @RequiredArgsConstructor
-@Tag(name = "Security", description = "PIN management, passkey enrollment and account recovery cancel")
+@Tag(name = "Security", description = "PIN management, factor enrollment and account recovery cancel")
 public class SecurityController {
 
     private final UserSecurityService userSecurityService;
@@ -242,8 +242,8 @@ public class SecurityController {
      * that opens it.
      *
      * <p>
-     * What this endpoint asks for is the bearer token, and what the session it creates can do
-     * with that alone is nothing: it starts at {@code ENROLL_STEP_UP}, where the account has to
+     * What the two enrollment endpoints ask for is the bearer token, and what the session they
+     * create can do with that alone is nothing: it starts at {@code ENROLL_STEP_UP}, where the account has to
      * be confirmed with a user-verifying passkey assertion, the account PIN, or, for an account
      * that holds neither, its own number and a code sent to that number. Only then does the
      * session reach the step that stores a factor. A session is the thing an attacker gets hold

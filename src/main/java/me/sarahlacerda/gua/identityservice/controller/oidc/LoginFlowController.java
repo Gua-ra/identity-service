@@ -717,8 +717,8 @@ public class LoginFlowController {
 
         accountReauthService.startReauth(session.getUserId(), request.phoneNumber(),
                 servletRequest.getRemoteAddr(), request.locale());
-        session.setLocale(request.locale());
-        loginSessionService.save(sessionId, session);
+        // Nothing is recorded: the number is submitted again with the code, and checked again
+        // the same way, so this step leaves no state behind for the next one to trust.
         return ResponseEntity.ok(state(session, null));
     }
 
