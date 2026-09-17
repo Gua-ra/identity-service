@@ -92,6 +92,12 @@ import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
  * their account holds has the delayed account recovery, reachable from the factor steps.
  *
  * <p>
+ * The same endpoints also serve in-app factor enrollment, which is not a sign-in: a signed-in
+ * user adding a passkey or a PIN from settings is handed a one-time URL into a session that
+ * starts at {@code ENROLL_STEP_UP}, proves the account there, and only then reaches the setup
+ * step. Such a session issues no authorization code and never enters the sign-in ceremony.
+ *
+ * <p>
  * State-changing calls are protected by a double-submit CSRF token issued in
  * {@code GET /login/context} and a {@code SameSite=Lax} session cookie.
  */

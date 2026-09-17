@@ -20,7 +20,9 @@ import lombok.RequiredArgsConstructor;
  * by the status endpoint and by the interactive login state.</li>
  * <li>{@link #loginPolicy(String)}: which factor finishes a sign-in after the phone OTP.
  * Decided here; the interactive login flow and the legacy {@code /otp/verify} path both
- * take their routing from it and keep none of their own.</li>
+ * take their routing from it and keep none of their own. Its
+ * {@code factorSetupRequired} half is also what confines the SMS proof of the enrollment
+ * step-up to accounts that hold nothing stronger.</li>
  * <li>{@link #stepUpFor(ReauthOperation)}: what a privileged operation accepts. Published,
  * not enforced. {@code GET /security/pin/status} hands the list to clients as
  * {@code phoneChangeStepUpFactors}, while {@code PhoneChangeService.enforceStepUp} carries
@@ -72,6 +74,16 @@ import lombok.RequiredArgsConstructor;
  * The PIN stays the fallback underneath a held passkey. An account holding both is asked for
  * the PIN and may present the passkey instead; a held passkey never removes the PIN step's
  * availability, and a PIN never makes the passkey unacceptable.
+ *
+ * <h2>Acquiring a factor</h2>
+ *
+ * <p>
+ * Adding one from settings is not free either: an already-signed-in user goes through the
+ * enrollment step-up, which asks for the strongest thing the account can produce and accepts a
+ * code sent to the account's own number only from an account that holds nothing at all. A bearer
+ * session is what an attacker gets hold of, and a factor created from one outlives it. The
+ * account that can produce nothing it holds is not stranded by that: its way back is the delayed
+ * recovery, which waits, rather than a weaker enrollment, which does not.
  */
 @Service
 @RequiredArgsConstructor
