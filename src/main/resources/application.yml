@@ -183,6 +183,22 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PASSKEY_VERIFY_LIMIT:20}
         refresh-period: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PASSKEY_VERIFY_REFRESH:PT1M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PASSKEY_VERIFY_TIMEOUT:PT0S}
+      # Re-authentication. Both calls check a number against the account's own binding, and
+      # verify checks a code on top, so they are credential checks and need the same shape of
+      # budget as the step-up pair above rather than the throughput default. The per-account
+      # budget of wrong numbers (identity.security.max-reauth-phone-attempts-per-hour) is what
+      # actually bounds the guessing; these bound how fast one caller can arrive at it, and are
+      # keyed by user as well as address because the calls carry a bearer token.
+      - path: /account/reauth/start
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_REAUTH_START_LIMIT:5}
+        refresh-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_REAUTH_START_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_ACCOUNT_REAUTH_START_TIMEOUT:PT0S}
+      - path: /account/reauth/verify
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_REAUTH_VERIFY_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_REAUTH_VERIFY_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_ACCOUNT_REAUTH_VERIFY_TIMEOUT:PT0S}
       - path: /account/phone/change/start
         methods: [POST]
         limit-for-period: ${IDENTITY_RATE_LIMIT_PHONE_CHANGE_START_LIMIT:3}
