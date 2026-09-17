@@ -103,7 +103,8 @@ class AuthFactorPolicyGuardTest {
 
         assertThat(source).contains("verifyScopedOtp");
         // One implementation, so the cap cannot be present on one path and absent on the other.
-        assertThat(source).containsOnlyOnce("private void verify(String codeKey, String attemptsKey, String code)");
+        assertThat(source)
+                .containsOnlyOnce("private void verify(String codeKey, String attemptsKey, String code, OtpVerifyFlow flow)");
         assertThat(source).containsOnlyOnce("countGuess(codeKey, attemptsKey)");
     }
 

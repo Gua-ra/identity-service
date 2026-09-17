@@ -13,7 +13,7 @@ import me.sarahlacerda.gua.identityservice.service.SmsSender;
  * <ul>
  *   <li>{@code gua_identity_signup_total{result="success",country="unknown"}}</li>
  *   <li>{@code gua_identity_login_total{result="success"}}</li>
- *   <li>{@code gua_identity_otp_verify_total{result="valid"|"invalid"|"exhausted"}}</li>
+ *   <li>{@code gua_identity_otp_verify_total{result="valid"|"invalid"|"exhausted",flow=&lt;where the code was spent&gt;}}</li>
  *   <li>{@code gua_identity_sms_send_total{provider=&lt;wired sender&gt;,result="sent"|"failed"}}</li>
  * </ul>
  * Micrometer counters are otherwise created lazily on first increment (see
@@ -45,9 +45,15 @@ public class IdentityMetricsInitializer {
                 .tag("result", "success")
                 .register(metrics);
 
-        Counter.builder("gua.identity.otp.verify").tag("result", "valid").register(metrics);
-        Counter.builder("gua.identity.otp.verify").tag("result", "invalid").register(metrics);
-        Counter.builder("gua.identity.otp.verify").tag("result", "exhausted").register(metrics);
+        // Every verify counter carries the same two tags. Micrometer keys a meter by its name
+        // alone, so a name registered with one tag set refuses a later registration carrying a
+        // different one: the phone-change flow's verify counter, which adds "flow", was dropped
+        // with one warning and then silently, and nothing it recorded ever reached a dashboard.
+        for (String flow : OtpVerifyFlow.tagValues()) {
+            Counter.builder("gua.identity.otp.verify").tag("result", "valid").tag("flow", flow).register(metrics);
+            Counter.builder("gua.identity.otp.verify").tag("result", "invalid").tag("flow", flow).register(metrics);
+            Counter.builder("gua.identity.otp.verify").tag("result", "exhausted").tag("flow", flow).register(metrics);
+        }
 
         // provider matches whichever SmsSender bean is wired (twilio in prod,
         // logging in dev) — the same value OtpService tags its increments with.

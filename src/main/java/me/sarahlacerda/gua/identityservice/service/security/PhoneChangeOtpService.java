@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import io.micrometer.core.instrument.MeterRegistry;
+import me.sarahlacerda.gua.identityservice.metrics.OtpVerifyFlow;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.exception.InvalidOtpException;
 import me.sarahlacerda.gua.identityservice.exception.OtpRateLimitedException;
@@ -93,11 +94,11 @@ public class PhoneChangeOtpService {
         String key = otpKey(challengeId);
         String storedCode = redisTemplate.opsForValue().get(key);
         if (!StringUtils.hasText(storedCode) || !OtpCodes.matches(storedCode, code)) {
-            metrics.counter("gua.identity.otp.verify", "result", "invalid", "flow", "phone-change").increment();
+            metrics.counter("gua.identity.otp.verify", "result", "invalid", "flow", OtpVerifyFlow.PHONE_CHANGE.tagValue()).increment();
             throw new InvalidOtpException("Invalid or expired verification code");
         }
         redisTemplate.delete(key);
-        metrics.counter("gua.identity.otp.verify", "result", "valid", "flow", "phone-change").increment();
+        metrics.counter("gua.identity.otp.verify", "result", "valid", "flow", OtpVerifyFlow.PHONE_CHANGE.tagValue()).increment();
     }
 
     /** Destroys the OTP for a challenge (used when the attempt cap is reached or the challenge is abandoned). */

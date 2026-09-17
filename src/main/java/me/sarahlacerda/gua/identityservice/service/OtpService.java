@@ -12,6 +12,7 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.exception.InvalidOtpException;
 import me.sarahlacerda.gua.identityservice.exception.OtpRateLimitedException;
 import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
+import me.sarahlacerda.gua.identityservice.metrics.OtpVerifyFlow;
 
 @Service
 public class OtpService {
@@ -67,7 +68,7 @@ public class OtpService {
 
     /** Redeems a scoped code under the same per-code guess cap as {@link #verifyOtp}. */
     public void verifyScopedOtp(OtpScope scope, String scopeId, String code) {
-        verify(scopedCodeKey(scope, scopeId), scopedAttemptsKey(scope, scopeId), code);
+        verify(scopedCodeKey(scope, scopeId), scopedAttemptsKey(scope, scopeId), code, scope.verifyFlow());
     }
 
     /**
@@ -111,32 +112,32 @@ public class OtpService {
      * fast one address can guess, this bounds how many guesses a code can absorb at all.
      */
     public void verifyOtp(String e164PhoneNumber, String code) {
-        verify(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), code);
+        verify(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), code, OtpVerifyFlow.PHONE);
     }
 
-    private void verify(String codeKey, String attemptsKey, String code) {
+    private void verify(String codeKey, String attemptsKey, String code, OtpVerifyFlow flow) {
         String storedCode = redisTemplate.opsForValue().get(codeKey);
         if (!StringUtils.hasText(storedCode)) {
             // gua_identity_otp_verify_total{result} — wrong/expired codes (auth friction / abuse signal).
-            metrics.counter("gua.identity.otp.verify", "result", "invalid").increment();
+            metrics.counter("gua.identity.otp.verify", "result", "invalid", "flow", flow.tagValue()).increment();
             throw new InvalidOtpException("Invalid or expired verification code");
         }
         long attempts = countGuess(codeKey, attemptsKey);
         int maxAttempts = properties.getOtp().getMaxVerifyAttempts();
         if (attempts > maxAttempts) {
             // A parallel guess spent the last slot between this one's GET and INCR.
-            throw exhausted(codeKey);
+            throw exhausted(codeKey, flow);
         }
         if (!OtpCodes.matches(storedCode, code)) {
-            metrics.counter("gua.identity.otp.verify", "result", "invalid").increment();
+            metrics.counter("gua.identity.otp.verify", "result", "invalid", "flow", flow.tagValue()).increment();
             if (attempts < maxAttempts) {
                 throw new InvalidOtpException("Invalid or expired verification code");
             }
-            throw exhausted(codeKey);
+            throw exhausted(codeKey, flow);
         }
         redisTemplate.delete(codeKey);
         redisTemplate.delete(attemptsKey);
-        metrics.counter("gua.identity.otp.verify", "result", "valid").increment();
+        metrics.counter("gua.identity.otp.verify", "result", "valid", "flow", flow.tagValue()).increment();
     }
 
     private long countGuess(String codeKey, String attemptsKey) {
@@ -146,12 +147,12 @@ public class OtpService {
         return counted == null ? 1L : counted;
     }
 
-    private InvalidOtpException exhausted(String codeKey) {
+    private InvalidOtpException exhausted(String codeKey, OtpVerifyFlow flow) {
         // Only the code goes. Deleting the counter too would hand a guess that fetched the
         // code before the cap tripped a fresh budget starting at 1.
         redisTemplate.delete(codeKey);
         // gua_identity_otp_verify_total{result="exhausted"}: guesses refused by the cap (brute-force signal).
-        metrics.counter("gua.identity.otp.verify", "result", "exhausted").increment();
+        metrics.counter("gua.identity.otp.verify", "result", "exhausted", "flow", flow.tagValue()).increment();
         return new InvalidOtpException("Too many incorrect verification codes; request a new code");
     }
 

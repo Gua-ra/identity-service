@@ -1,5 +1,7 @@
 package me.sarahlacerda.gua.identityservice.service;
 
+import me.sarahlacerda.gua.identityservice.metrics.OtpVerifyFlow;
+
 /**
  * Namespace of a one-time code that belongs to a specific flow rather than to a
  * phone number.
@@ -22,12 +24,19 @@ public enum OtpScope {
      * The OTP that completes an OTP-protected PIN change, keyed by the change challenge
      * handed out at {@code /security/pin/change/start}.
      */
-    PIN_CHANGE("pin-change");
+    PIN_CHANGE("pin-change", OtpVerifyFlow.PIN_CHANGE);
 
     private final String keySegment;
+    private final OtpVerifyFlow verifyFlow;
 
-    OtpScope(String keySegment) {
+    OtpScope(String keySegment, OtpVerifyFlow verifyFlow) {
         this.keySegment = keySegment;
+        this.verifyFlow = verifyFlow;
+    }
+
+    /** The flow tag a code spent under this scope is counted with. */
+    public OtpVerifyFlow verifyFlow() {
+        return verifyFlow;
     }
 
     /** The {@code {scope}} segment of the Redis key. */
