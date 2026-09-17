@@ -474,29 +474,61 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * The app the enrollment sheet returns to is decided by the token, never by the caller.
+     * A caller-named enrollment redirect reaches a session through the allowlist and no other
+     * way, and nothing else the caller sends can change where the sheet returns to.
      *
      * <p>
-     * Each build of the apps answers its own scheme, so the redirect has to vary per client, and
-     * the tempting way to do that is to let the caller say which one. That would turn a
-     * bearer-authenticated endpoint into one that hands a session's completion wherever the
-     * caller asks. It is read off the client the token was accepted on instead, which is a value
-     * this service verified before the request reached the controller.
+     * Each build of the apps answers its own scheme and an app's bearer is a homeserver token,
+     * which names no OIDC client of ours, so the build is the only party that can say which
+     * build is asking. The value therefore has to be able to come from the caller. What must not
+     * follow is a bearer endpoint that honours any redirect it is handed, which would hand a
+     * session's completion wherever the caller asked. The bound is an operator-written
+     * allowlist: the caller chooses among the deployment's own entries, and the entry, not the
+     * submitted string, is what gets stamped.
+     *
+     * <p>
+     * The behaviour is pinned by {@code SecurityControllerTest} (allowlisted, refused, absent,
+     * and the client-registration path). This test is the structural half: that there is one
+     * resolver, one place that stamps the session, and one door a submitted value can come
+     * through.
      */
     @Test
-    void theEnrollmentRedirectIsReadFromTheTokenAndNeverFromTheCaller() throws IOException {
+    void aCallerNamedEnrollmentRedirectReachesASessionOnlyThroughTheAllowlist() throws IOException {
         String source = read(MAIN.resolve("controller/security/SecurityController.java"));
 
+        // The resolution order, in one method: a named value goes to the allowlist, and an
+        // absent one never touches it.
         String resolver = methodBody(source, "private String enrollRedirectUri(");
-        assertThat(resolver).contains("authenticatedUserAccessor.currentClientId()");
+        assertThat(resolver).contains("allowlisted(requestedRedirectUri)");
+        assertThat(resolver).contains("clientRegisteredAppScheme()");
         assertThat(resolver).contains("loginProperties.getEnroll().getRedirectUri()");
-        // Nothing submitted reaches it: no servlet request, no body, no query or path value.
-        assertThat(resolver).doesNotContain("request");
-        assertThat(resolver).doesNotContain("Request");
 
-        // And the endpoints that open a session take no body to put one in.
-        assertThat(source).contains("public ResponseEntity<PinEnrollStartResponse> startPinEnrollment() {");
-        assertThat(source).contains("public ResponseEntity<PasskeyEnrollStartResponse> startPasskeyEnrollment() {");
+        // The allowlist is the deployment's, the match is exact, and what comes back is the
+        // configured entry rather than the string that arrived.
+        String allowlisted = methodBody(source, "private String allowlisted(");
+        assertThat(allowlisted).contains("loginProperties.getEnroll().allowedRedirectUris()");
+        assertThat(allowlisted).contains("invalid_redirect_uri");
+        assertThat(allowlisted).contains("requested::equals");
+        assertThat(allowlisted).doesNotContain("return requested");
+        // A refused value is not echoed back: the message is a constant, with nothing
+        // concatenated onto it.
+        assertThat(allowlisted).doesNotContain("+ requested");
+        assertThat(allowlisted).doesNotContain("requested +");
+        assertThat(allowlisted).doesNotContain("requestedRedirectUri +");
+
+        // One place stamps a session, and it is fed by the resolver and by nothing else.
+        String builder = methodBody(source, "private String startFactorEnrollment(");
+        assertThat(builder).contains("String redirectUri = enrollRedirectUri(requestedRedirectUri);");
+        assertThat(builder).contains("session.setRedirectUri(redirectUri);");
+        assertThat(source.split("setRedirectUri\\(", -1)).hasSize(2);
+
+        // And the redirect is the only thing either endpoint reads off the request: the body is
+        // one optional field, and nothing else submitted is looked at.
+        assertThat(methodBody(source, "private static String requestedRedirectUri("))
+                .contains("request.getRedirectUri()");
+        String body = read(MAIN.resolve("controller/dto/FactorEnrollStartRequest.java"));
+        assertThat(body.split("\\n    private ", -1)).hasSize(2);
+        assertThat(body).contains("private String redirectUri;");
     }
 
     /**

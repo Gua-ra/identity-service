@@ -312,14 +312,23 @@ idp:
     cookie-secure: ${IDP_LOGIN_COOKIE_SECURE:true}
     # In-app passkey enrollment handoff (already-signed-in user adds a passkey from settings).
     enroll:
-      # Fallback app scheme, echoed back only if the ceremony completes; the session is pinned
-      # to the authenticated user so this is never reachable as an open login. The redirect
-      # normally comes from the app scheme registered by the caller's own OIDC client, because
-      # each build answers its own scheme (global.gua, global.gua.dev, global.gua.debug) and a
-      # single value for the deployment sends the QA sheet back to a scheme QA does not answer.
-      # This value is used only when the bearer token names no client of ours, which is every
-      # homeserver-issued token, or when that client registered no app scheme.
+      # Default app scheme, echoed back only if the ceremony completes; the session is pinned
+      # to the authenticated user so this is never reachable as an open login. Used when the
+      # caller names no redirect and the bearer token names no OIDC client of ours, which is
+      # every homeserver-issued token.
       redirect-uri: ${IDP_LOGIN_ENROLL_REDIRECT_URI:global.gua:/oidc}
+      # Every redirect a caller may name on POST /security/{pin,passkey}/enroll/start, comma
+      # separated. Each build of the apps answers its own scheme (global.gua for the store
+      # build, global.gua.dev for QA, global.gua.debug for the Android debug build) and only
+      # the build knows which one it is, so the value has to be able to come from the caller;
+      # this list is what keeps that from being a redirect the caller simply chooses. A named
+      # value is matched against these entries exactly, and anything else is refused with
+      # 400 invalid_redirect_uri and never stamped on a session.
+      # Unset means the allowlist is exactly redirect-uri above, so a deployment behaves as it
+      # did before the list existed until its own configuration changes. A deployment that
+      # serves QA builds lists their schemes here, e.g.
+      #   IDP_LOGIN_ENROLL_REDIRECT_URIS=global.gua:/oidc,global.gua.dev:/oidc,global.gua.debug:/oidc
+      redirect-uris: ${IDP_LOGIN_ENROLL_REDIRECT_URIS:}
       token-ttl: ${IDP_LOGIN_ENROLL_TOKEN_TTL:PT2M}
     # Passkey / WebAuthn (browser login + in-app enrollment).
     # PROD MUST set rp-id to the registrable Gua auth domain (gua.global) and origins to the

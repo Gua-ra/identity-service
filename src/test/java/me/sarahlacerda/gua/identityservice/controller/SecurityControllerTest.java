@@ -284,6 +284,170 @@ class SecurityControllerTest {
         return captor.getValue();
     }
 
+    /**
+     * The case the whole allowlist exists for. An app's bearer is a homeserver token, so it
+     * names no OIDC client of ours and the client-registration path above can never fire for
+     * one: the build has to be able to say which scheme it answers, or the QA sheet has no way
+     * back to the build that opened it.
+     */
+    @Test
+    void theCallerMayNameARedirectTheDeploymentAllows() throws Exception {
+        loginProperties.getEnroll().setRedirectUri("global.gua:/oidc");
+        loginProperties.getEnroll().setRedirectUris(java.util.List.of(
+                "global.gua:/oidc", "global.gua.dev:/oidc", "global.gua.debug:/oidc"));
+
+        for (String path : java.util.List.of("/security/pin/enroll/start", "/security/passkey/enroll/start")) {
+            org.mockito.Mockito.reset(loginSessionService);
+            stubEnrollmentSessionFor("@alice:dev.local");
+
+            mockMvc.perform(MockMvcRequestBuilders.post(path)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"redirectUri\":\"global.gua.debug:/oidc\"}"))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+
+            org.junit.jupiter.api.Assertions.assertEquals("global.gua.debug:/oidc",
+                    createdSession().getRedirectUri(), path);
+        }
+    }
+
+    /**
+     * A redirect the deployment has not allowlisted is refused, and the refusal is the whole
+     * answer: no session is created, so nothing carries the value, and the message does not
+     * repeat it back, so the endpoint cannot be used to reflect a string of the caller's
+     * choosing. Clients treat this as the signal to retry once with no redirect.
+     */
+    @Test
+    void aRedirectOutsideTheAllowlistIsRefusedAndNoSessionIsCreated() throws Exception {
+        loginProperties.getEnroll().setRedirectUri("global.gua:/oidc");
+        loginProperties.getEnroll().setRedirectUris(java.util.List.of("global.gua:/oidc", "global.gua.dev:/oidc"));
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
+
+        for (String path : java.util.List.of("/security/pin/enroll/start", "/security/passkey/enroll/start")) {
+            mockMvc.perform(MockMvcRequestBuilders.post(path)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"redirectUri\":\"https://attacker.example/steal\"}"))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status()
+                            .isBadRequest())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code")
+                            .value("invalid_redirect_uri"))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.message")
+                            .value(org.hamcrest.Matchers.not(
+                                    org.hamcrest.Matchers.containsString("attacker.example"))));
+        }
+
+        verify(loginSessionService, org.mockito.Mockito.never())
+                .create(org.mockito.ArgumentMatchers.any(LoginSession.class));
+    }
+
+    /**
+     * A near miss is still a miss. The match is exact on purpose: an allowlist that normalized
+     * or prefix-matched would be deciding on the caller's behalf what counts as the same app,
+     * which is the one judgement the list exists to take away from the caller.
+     */
+    @Test
+    void aRedirectThatOnlyLooksLikeAnAllowedOneIsRefused() throws Exception {
+        loginProperties.getEnroll().setRedirectUris(java.util.List.of("global.gua.dev:/oidc"));
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
+
+        for (String named : java.util.List.of("global.gua.dev:/oidc/../evil", "global.gua.dev.evil:/oidc",
+                "global.gua.dev:/oidcx")) {
+            mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/enroll/start")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(java.util.Map.of("redirectUri", named))))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status()
+                            .isBadRequest())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code")
+                            .value("invalid_redirect_uri"));
+        }
+
+        verify(loginSessionService, org.mockito.Mockito.never())
+                .create(org.mockito.ArgumentMatchers.any(LoginSession.class));
+    }
+
+    /**
+     * Until a deployment configures the list, the allowlist is exactly the single value it
+     * already had, so shipping this changes no deployment's behaviour until its configuration
+     * changes. Dev has to add the QA schemes before a QA build can name one.
+     */
+    @Test
+    void theAllowlistIsTheSingleConfiguredRedirectUntilTheDeploymentNamesMore() throws Exception {
+        loginProperties.getEnroll().setRedirectUri("global.gua:/oidc");
+        org.junit.jupiter.api.Assertions.assertEquals(java.util.List.of("global.gua:/oidc"),
+                loginProperties.getEnroll().allowedRedirectUris());
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/enroll/start")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"redirectUri\":\"global.gua.dev:/oidc\"}"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code")
+                        .value("invalid_redirect_uri"));
+
+        stubEnrollmentSessionFor("@alice:dev.local");
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/enroll/start")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"redirectUri\":\"global.gua:/oidc\"}"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+
+        org.junit.jupiter.api.Assertions.assertEquals("global.gua:/oidc", createdSession().getRedirectUri());
+    }
+
+    /**
+     * Resolution order: a caller that names an allowed redirect is answering the question the
+     * client registration only guesses at, so it wins. The registration stays as the step for a
+     * token this service minted itself.
+     */
+    @Test
+    void anAllowedNameBeatsTheClientRegistration() throws Exception {
+        OidcProperties.ClientRegistration storeBuild = new OidcProperties.ClientRegistration();
+        storeBuild.setClientId("gua-ios");
+        storeBuild.setRedirectUris(java.util.List.of("global.gua:/oidc"));
+        oidcProperties.setClients(java.util.List.of(storeBuild));
+        loginProperties.getEnroll().setRedirectUris(java.util.List.of("global.gua:/oidc", "global.gua.dev:/oidc"));
+        stubEnrollmentSessionFor("@alice:dev.local");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/enroll/start")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"redirectUri\":\"global.gua.dev:/oidc\"}"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+
+        org.junit.jupiter.api.Assertions.assertEquals("global.gua.dev:/oidc", createdSession().getRedirectUri());
+        // The client was never consulted, so a token that names one cannot override what the
+        // build said about itself.
+        org.mockito.Mockito.verify(authenticatedUserAccessor, org.mockito.Mockito.never()).currentClientId();
+    }
+
+    /**
+     * An absent field, an absent body and a blank value are the same request: the client named
+     * nothing, so the deployment's own resolution runs. A blank value is what an app computes
+     * when its build configuration is missing a scheme, and dead-ending that would cost the
+     * enrollment rather than just the redirect.
+     */
+    @Test
+    void anAbsentOrBlankRedirectLeavesTheDeploymentsOwnResolutionAlone() throws Exception {
+        loginProperties.getEnroll().setRedirectUri("global.gua:/oidc");
+        loginProperties.getEnroll().setRedirectUris(java.util.List.of("global.gua.dev:/oidc"));
+
+        for (String body : java.util.Arrays.asList(null, "{}", "{\"redirectUri\":null}",
+                "{\"redirectUri\":\"   \"}")) {
+            org.mockito.Mockito.reset(loginSessionService);
+            stubEnrollmentSessionFor("@alice:dev.local");
+
+            org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder post = MockMvcRequestBuilders
+                    .post("/security/pin/enroll/start")
+                    .contentType(MediaType.APPLICATION_JSON);
+            if (body != null) {
+                post = post.content(body);
+            }
+            mockMvc.perform(post)
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+
+            // The configured default, not the one entry the allowlist happens to hold.
+            org.junit.jupiter.api.Assertions.assertEquals("global.gua:/oidc", createdSession().getRedirectUri(),
+                    String.valueOf(body));
+        }
+    }
+
     @Test
     void startPinEnrollmentRefusesAnAccountThatAlreadyHasAPin() throws Exception {
         org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");

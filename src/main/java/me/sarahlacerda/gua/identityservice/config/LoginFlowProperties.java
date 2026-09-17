@@ -60,14 +60,12 @@ public class LoginFlowProperties {
     @Setter
     public static class Enroll {
         /**
-         * Fallback app redirect URI the enrollment {@link LoginSession} echoes back when the
+         * Default app redirect URI the enrollment {@link LoginSession} echoes back when the
          * ceremony completes (the OIDC app scheme, e.g. {@code global.gua:/oidc}).
          *
          * <p>
-         * The redirect normally comes from the first one registered by the caller's own OIDC
-         * client, because each build of the apps answers its own scheme. This value is used only
-         * when the bearer token names no client of ours, which is every homeserver-issued token,
-         * or when that client registered no redirect.
+         * It is what the sheet returns to when the caller names nothing and the bearer token
+         * names no OIDC client of ours, which is every homeserver-issued token.
          *
          * <p>
          * It is never reached as an open login because the session is pinned to the
@@ -77,11 +75,48 @@ public class LoginFlowProperties {
         private String redirectUri = "global.gua:/oidc";
 
         /**
+         * Every enrollment redirect this deployment permits a caller to name
+         * ({@code IDP_LOGIN_ENROLL_REDIRECT_URIS}, comma separated).
+         *
+         * <p>
+         * Each build of the apps answers its own scheme, the store build {@code global.gua}, a
+         * QA build {@code global.gua.dev}, an Android debug build {@code global.gua.debug}, and
+         * the only party that knows which build is asking is the build itself: its bearer token
+         * is a homeserver token, so it names no client of ours to read the scheme off. The value
+         * therefore has to be able to come from the caller, and this list is what stops that
+         * from turning a bearer endpoint into one that hands a session's completion wherever the
+         * caller asks. A named value is compared against these entries exactly; anything else is
+         * refused with {@code invalid_redirect_uri} and never stamped on a session.
+         *
+         * <p>
+         * Unset means the allowlist is exactly {@link #redirectUri}, so no deployment changes
+         * behaviour until its own configuration does.
+         */
+        private List<String> redirectUris = new ArrayList<>();
+
+        /**
          * How long a one-time enroll token (mapping to the login session) stays
          * redeemable. Kept short: it is consumed immediately when the web view opens.
          */
         @NotNull
         private Duration tokenTtl = Duration.ofMinutes(2);
+
+        /**
+         * The redirects a caller is allowed to name: {@link #redirectUris} where the deployment
+         * configured one, and the single {@link #redirectUri} where it has not.
+         *
+         * <p>
+         * Blank entries are dropped rather than accepted, so an empty environment variable is
+         * the same thing as an absent one and cannot widen the list with a value nothing can
+         * match anyway.
+         */
+        public List<String> allowedRedirectUris() {
+            List<String> configured = redirectUris.stream()
+                    .map(String::trim)
+                    .filter(entry -> !entry.isEmpty())
+                    .toList();
+            return configured.isEmpty() ? List.of(redirectUri) : configured;
+        }
     }
 
     /**

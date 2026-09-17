@@ -1,6 +1,7 @@
 package me.sarahlacerda.gua.identityservice.controller.security;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -8,6 +9,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -25,6 +27,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
+import me.sarahlacerda.gua.identityservice.controller.dto.FactorEnrollStartRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PasskeyEnrollStartResponse;
 import me.sarahlacerda.gua.identityservice.controller.dto.PasskeyStepUpStartResponse;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeCompleteRequest;
@@ -121,13 +124,15 @@ public class SecurityController {
     }
 
     @PostMapping("/pin/enroll/start")
-    @Operation(summary = "Start in-app PIN enrollment", description = "Lets an already-signed-in user add a PIN from settings. Mirrors POST /security/passkey/enroll/start: it builds a login session pinned to the authenticated user and returns a one-time enroll URL the client opens in an authenticated web view. The session starts at ENROLL_STEP_UP and stores nothing until the account is confirmed there.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @Operation(summary = "Start in-app PIN enrollment", description = "Lets an already-signed-in user add a PIN from settings. Mirrors POST /security/passkey/enroll/start: it builds a login session pinned to the authenticated user and returns a one-time enroll URL the client opens in an authenticated web view. The session starts at ENROLL_STEP_UP and stores nothing until the account is confirmed there. The body is optional and carries at most the app-scheme redirect this build answers, which must be one the deployment allows.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Enrollment session created; open the returned enrollUrl in a web view"),
+            @ApiResponse(responseCode = "400", description = "invalid_redirect_uri: the named redirect is not one this deployment allows. Retry once with no redirectUri to take the deployment's default.", content = @Content),
             @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content),
             @ApiResponse(responseCode = "409", description = "pin_already_set: the account already has a PIN, or step_up_unavailable: the only factor this account holds is one this deployment cannot run", content = @Content)
     })
-    public ResponseEntity<PinEnrollStartResponse> startPinEnrollment() {
+    public ResponseEntity<PinEnrollStartResponse> startPinEnrollment(
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Optional. The app-scheme redirect this build answers.", required = false, content = @Content(schema = @Schema(implementation = FactorEnrollStartRequest.class))) @RequestBody(required = false) FactorEnrollStartRequest request) {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
         // Same shape as the passkey guard below: an account that already has one is told so,
         // rather than being walked into a setup step that would refuse under the row lock.
@@ -136,7 +141,7 @@ public class SecurityController {
                     "This account already has a PIN.");
         }
         return ResponseEntity.ok(new PinEnrollStartResponse(
-                startFactorEnrollment(userId, LoginSession.EnrollTarget.PIN)));
+                startFactorEnrollment(userId, LoginSession.EnrollTarget.PIN, requestedRedirectUri(request))));
     }
 
     @PostMapping("/pin/change/start")
@@ -214,13 +219,15 @@ public class SecurityController {
     }
 
     @PostMapping("/passkey/enroll/start")
-    @Operation(summary = "Start in-app passkey enrollment", description = "Lets an already-signed-in user add a passkey from settings. Builds a login session pinned to the authenticated user and returns a one-time enroll URL the client opens in an authenticated web view. The session starts at ENROLL_STEP_UP and runs the passkey setup step only once the account has been confirmed there.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @Operation(summary = "Start in-app passkey enrollment", description = "Lets an already-signed-in user add a passkey from settings. Builds a login session pinned to the authenticated user and returns a one-time enroll URL the client opens in an authenticated web view. The session starts at ENROLL_STEP_UP and runs the passkey setup step only once the account has been confirmed there. The body is optional and carries at most the app-scheme redirect this build answers, which must be one the deployment allows.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Enrollment session created; open the returned enrollUrl in a web view"),
+            @ApiResponse(responseCode = "400", description = "invalid_redirect_uri: the named redirect is not one this deployment allows. Retry once with no redirectUri to take the deployment's default.", content = @Content),
             @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content),
             @ApiResponse(responseCode = "409", description = "passkey_already_registered: the account already has a passkey, or step_up_unavailable: the only factor this account holds is one this deployment cannot run", content = @Content)
     })
-    public ResponseEntity<PasskeyEnrollStartResponse> startPasskeyEnrollment() {
+    public ResponseEntity<PasskeyEnrollStartResponse> startPasskeyEnrollment(
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Optional. The app-scheme redirect this build answers.", required = false, content = @Content(schema = @Schema(implementation = FactorEnrollStartRequest.class))) @RequestBody(required = false) FactorEnrollStartRequest request) {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
 
         // Enrolling a second passkey for an account that already has one cannot succeed.
@@ -239,7 +246,16 @@ public class SecurityController {
         }
 
         return ResponseEntity.ok(new PasskeyEnrollStartResponse(
-                startFactorEnrollment(userId, LoginSession.EnrollTarget.PASSKEY)));
+                startFactorEnrollment(userId, LoginSession.EnrollTarget.PASSKEY, requestedRedirectUri(request))));
+    }
+
+    /**
+     * The one thing an enrollment body may carry, and the only value either endpoint reads off
+     * the request. The body itself is optional, so a client that sends none, which is every
+     * client built before this existed, is indistinguishable from one that names nothing.
+     */
+    private static String requestedRedirectUri(FactorEnrollStartRequest request) {
+        return request == null ? null : request.getRedirectUri();
     }
 
     /**
@@ -259,7 +275,13 @@ public class SecurityController {
      * passkey assertion can be performed on every platform this ships to, and asking for the
      * strongest proof the account can give was the point.
      */
-    private String startFactorEnrollment(String userId, LoginSession.EnrollTarget target) {
+    private String startFactorEnrollment(String userId, LoginSession.EnrollTarget target,
+            String requestedRedirectUri) {
+        // Resolved first, before any account state is read: whether a redirect is one this
+        // deployment allows is a fact about the request alone, so a refused one stops here
+        // rather than being carried on an object that is about to be filled in.
+        String redirectUri = enrollRedirectUri(requestedRedirectUri);
+
         requireAProofThisDeploymentCanRun(userId);
 
         // Same localpart source as login (ADM-001 S6). An enrollment session never issues
@@ -280,9 +302,9 @@ public class SecurityController {
         session.setReauthUserId(userId);
         session.setDisplayName(displayNameFor(entries, preferredUsername));
         session.setPreferredUsername(preferredUsername);
-        // The app scheme the OIDC client uses; only echoed back if enrollment reaches
+        // An app scheme this deployment allows; only echoed back if enrollment reaches
         // completion, and never reachable as an open login (reauthUserId is set above).
-        session.setRedirectUri(enrollRedirectUri());
+        session.setRedirectUri(redirectUri);
         session.setPhase(Phase.ENROLL_STEP_UP);
         session.setCsrfToken(loginSessionService.newToken());
 
@@ -302,42 +324,87 @@ public class SecurityController {
      * Where the enrollment sheet sends the app back when the ceremony completes.
      *
      * <p>
-     * It is the app-scheme redirect the caller's own OIDC client has registered, because the app
-     * that opened the sheet is the app that has to receive the handoff and each build registers
-     * its own scheme: the store build answers {@code global.gua}, the QA build
+     * The app that opened the sheet is the app that has to receive the handoff, and each build
+     * registers its own scheme: the store build answers {@code global.gua}, a QA build
      * {@code global.gua.dev}, an Android debug build {@code global.gua.debug}. One configured
      * value for the whole deployment meant the sheet on a QA build handed off to a scheme that
      * build does not answer, so it never dismissed itself, and on a phone that also has the
      * store build installed the completion went to the wrong app.
      *
      * <p>
-     * The client is the one the bearer token was issued to, read off the audience this service
-     * verified before accepting the token. A caller cannot name it and cannot supply a redirect:
-     * this is still a bearer-authenticated endpoint that hands back a URL on our own origin, and
-     * accepting a redirect from the caller would turn it into one that hands a session's
-     * completion wherever the caller says.
+     * Three steps, in this order:
+     *
+     * <ol>
+     * <li>the redirect the caller named, when the deployment's allowlist has it. The build is
+     * the only party that knows which build it is, because an app's bearer is a homeserver token
+     * validated through whoami and so names no OIDC client of ours to read the scheme off;</li>
+     * <li>the app scheme registered by the OIDC client the token was issued to, for a token this
+     * service minted itself;</li>
+     * <li>the configured default.</li>
+     * </ol>
      *
      * <p>
-     * Only an app scheme is taken from the registration. What is being chosen is the thing the
-     * web view opening this sheet is listening for, and a client whose redirects are all web
+     * Letting the caller name it is the part that needs the bound. This is a bearer endpoint
+     * that hands back a URL on our own origin, and one that honoured any redirect a caller sent
+     * would hand a session's completion wherever the caller asked. So a named value reaches a
+     * session through {@link #allowlisted(String)} and no other way: the operator says which
+     * schemes exist, the caller only says which of them is asking.
+     *
+     * <p>
+     * Only an app scheme is taken from a client registration. What is being chosen is the thing
+     * the web view opening this sheet is listening for, and a client whose redirects are all web
      * origins, the authentication service among them, is not an app that can be handed back to.
-     * Handing one of those out would swap a scheme the app does not answer for a page it cannot
-     * use.
+     */
+    private String enrollRedirectUri(String requestedRedirectUri) {
+        if (StringUtils.hasText(requestedRedirectUri)) {
+            return allowlisted(requestedRedirectUri);
+        }
+        return clientRegisteredAppScheme().orElseGet(() -> loginProperties.getEnroll().getRedirectUri());
+    }
+
+    /**
+     * Matches a caller-named redirect against the deployment's allowlist and hands back the
+     * configured entry, not the string that arrived, so what is stamped on a session is always a
+     * value an operator wrote down.
      *
      * <p>
-     * Falls back to {@code idp.login.enroll.redirect-uri} when the token names no client of ours,
-     * which is every homeserver-issued token, and when the client it names registered no app
-     * scheme.
+     * The match is exact. An allowlist that normalized, prefix-matched or ignored case would be
+     * deciding on the caller's behalf what counts as the same app, which is the one judgement
+     * this list exists to take away from the caller.
+     *
+     * <p>
+     * A value that is not on the list is refused, and the refusal carries no part of it: not in
+     * the message, not in a log line. It arrived from the caller, so echoing it back would make
+     * this a reflector, and an operator learns which scheme to add from the builds being shipped
+     * rather than from a request the server already refused. Clients treat the refusal as a
+     * signal to retry once with no redirect, which lands on the default, so a deployment that
+     * has not been told about a build yet costs QA a redirect, never the enrollment.
      */
-    private String enrollRedirectUri() {
+    private String allowlisted(String requestedRedirectUri) {
+        String requested = requestedRedirectUri.trim();
+        return loginProperties.getEnroll().allowedRedirectUris().stream()
+                .filter(requested::equals)
+                .findFirst()
+                .orElseThrow(() -> new LoginFlowException(HttpStatus.BAD_REQUEST, "invalid_redirect_uri",
+                        "That is not a redirect this deployment allows for enrollment."));
+    }
+
+    /**
+     * The app scheme registered by the OIDC client the bearer token was issued to, read off the
+     * audience this service verified before accepting the token.
+     *
+     * <p>
+     * Empty when the token names no client of ours, which is every homeserver-issued token, and
+     * when the client it names registered no app scheme.
+     */
+    private Optional<String> clientRegisteredAppScheme() {
         return authenticatedUserAccessor.currentClientId()
                 .flatMap(clientId -> oidcProperties.getClients().stream()
                         .filter(client -> clientId.equals(client.getClientId()))
                         .findFirst())
                 .flatMap(client -> client.getRedirectUris().stream()
                         .filter(SecurityController::isAppScheme)
-                        .findFirst())
-                .orElseGet(() -> loginProperties.getEnroll().getRedirectUri());
+                        .findFirst());
     }
 
     /** A redirect an app answers, rather than a browser: anything that is not an http(s) URL. */
