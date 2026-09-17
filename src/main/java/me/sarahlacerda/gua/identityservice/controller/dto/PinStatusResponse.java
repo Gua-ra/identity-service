@@ -43,5 +43,15 @@ public record PinStatusResponse(
                 + "is live.", example = "1760000000", nullable = true) Long accountRecoveryCompletableAtEpochSeconds,
 
         @Schema(description = "When the live recovery stops being finishable, as epoch seconds. Null when no "
-                + "recovery is live.", example = "1760604800", nullable = true) Long accountRecoveryExpiresAtEpochSeconds) {
+                + "recovery is live.", example = "1760604800", nullable = true) Long accountRecoveryExpiresAtEpochSeconds,
+
+        @Schema(description = "How long the account must go unused before a recovery may be started, in "
+                + "seconds. Configuration rather than episode state, so it is reported whether or not a "
+                + "recovery is live. Clients that predate the field state the default themselves, which "
+                + "reads wrong on a deployment configured with anything else.",
+                example = "604800") long accountRecoveryDormancySeconds,
+
+        @Schema(description = "How long a started recovery waits before it can be finished, in seconds. "
+                + "Reported on the same terms as the field above.",
+                example = "604800") long accountRecoveryWaitSeconds) {
 }

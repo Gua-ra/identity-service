@@ -539,7 +539,8 @@ class SecurityControllerTest {
     void pinStatusReportsALiveRecoverySoEverySignedInAppCanShowTheBanner() throws Exception {
         org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
         org.mockito.Mockito.when(accountRecoveryService.pendingFor("@user:domain")).thenReturn(java.util.Optional.of(
-                new AccountRecoveryState(AccountRecoveryState.Status.PENDING, null, 1_760_000_000L, 1_760_604_800L)));
+                new AccountRecoveryState(AccountRecoveryState.Status.PENDING, null, 1_760_000_000L, 1_760_604_800L,
+                        604_800L, 604_800L)));
 
         mockMvc.perform(MockMvcRequestBuilders.get("/security/pin/status"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
@@ -549,6 +550,27 @@ class SecurityControllerTest {
                         .jsonPath("$.accountRecoveryCompletableAtEpochSeconds").value(1_760_000_000L))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .jsonPath("$.accountRecoveryExpiresAtEpochSeconds").value(1_760_604_800L));
+    }
+
+    /**
+     * The two waits are configuration, not episode state, so they are reported whether or not a
+     * recovery is live. A client that states them itself is right only on a deployment left at
+     * the defaults, which the dev target is not.
+     */
+    @Test
+    void pinStatusReportsTheConfiguredRecoveryWaitsWithNoLiveEpisode() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
+        properties.getSecurity().setAccountRecoveryDormancy(java.time.Duration.ofMinutes(2));
+        properties.getSecurity().setAccountRecoveryWait(java.time.Duration.ofMinutes(3));
+
+        mockMvc.perform(MockMvcRequestBuilders.get("/security/pin/status"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.accountRecoveryPending").value(false))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.accountRecoveryDormancySeconds").value(120))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.accountRecoveryWaitSeconds").value(180));
     }
 
     @Test

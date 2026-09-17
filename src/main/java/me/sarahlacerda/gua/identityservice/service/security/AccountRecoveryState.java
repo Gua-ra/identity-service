@@ -23,13 +23,23 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *                                  is over
  * @param expiresAtEpochSeconds     {@link Status#PENDING} and {@link Status#READY}: when the
  *                                  episode stops being live and must be requested again
+ * @param dormancySeconds           how long the account must go unused before a recovery may be
+ *                                  started, and
+ * @param waitSeconds               how long a started recovery waits before it can be finished.
+ *                                  Both are configuration rather than episode state, so both are
+ *                                  present at every status: the screen that explains the two
+ *                                  waits has to say what this deployment actually enforces, and
+ *                                  hardcoding them left the dev target, where they are minutes,
+ *                                  claiming seven days
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record AccountRecoveryState(
         Status status,
         Long availableAtEpochSeconds,
         Long completableAtEpochSeconds,
-        Long expiresAtEpochSeconds) {
+        Long expiresAtEpochSeconds,
+        long dormancySeconds,
+        long waitSeconds) {
 
     public enum Status {
         /** No live episode and the account has been dormant long enough: recovery may be started. */
@@ -42,15 +52,18 @@ public record AccountRecoveryState(
         READY
     }
 
-    static AccountRecoveryState available() {
-        return new AccountRecoveryState(Status.AVAILABLE, null, null, null);
+    static AccountRecoveryState available(long dormancySeconds, long waitSeconds) {
+        return new AccountRecoveryState(Status.AVAILABLE, null, null, null, dormancySeconds, waitSeconds);
     }
 
-    static AccountRecoveryState tooSoon(long availableAtEpochSeconds) {
-        return new AccountRecoveryState(Status.TOO_SOON, availableAtEpochSeconds, null, null);
+    static AccountRecoveryState tooSoon(long availableAtEpochSeconds, long dormancySeconds, long waitSeconds) {
+        return new AccountRecoveryState(Status.TOO_SOON, availableAtEpochSeconds, null, null,
+                dormancySeconds, waitSeconds);
     }
 
-    static AccountRecoveryState live(Status status, long completableAtEpochSeconds, long expiresAtEpochSeconds) {
-        return new AccountRecoveryState(status, null, completableAtEpochSeconds, expiresAtEpochSeconds);
+    static AccountRecoveryState live(Status status, long completableAtEpochSeconds, long expiresAtEpochSeconds,
+            long dormancySeconds, long waitSeconds) {
+        return new AccountRecoveryState(status, null, completableAtEpochSeconds, expiresAtEpochSeconds,
+                dormancySeconds, waitSeconds);
     }
 }

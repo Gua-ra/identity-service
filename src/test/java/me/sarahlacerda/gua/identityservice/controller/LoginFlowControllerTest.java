@@ -2275,7 +2275,7 @@ class LoginFlowControllerTest {
     }
 
     private static final AccountRecoveryState PENDING = new AccountRecoveryState(
-            AccountRecoveryState.Status.PENDING, null, 1_760_000_000L, 1_760_604_800L);
+            AccountRecoveryState.Status.PENDING, null, 1_760_000_000L, 1_760_604_800L, 604_800L, 604_800L);
 
     @Test
     void theFactorStepsPublishTheRecoveryStateAfterAnOtp() throws Exception {
@@ -2397,7 +2397,7 @@ class LoginFlowControllerTest {
     void completingARecoveryThatIsNotReadyReturnsTheFreshStateAndIssuesNothing() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(pinRequiredSessionAfterOtp()));
         org.mockito.Mockito.doThrow(new AccountRecoveryNotReadyException("Account recovery is not ready to complete",
-                new AccountRecoveryState(AccountRecoveryState.Status.AVAILABLE, null, null, null)))
+                new AccountRecoveryState(AccountRecoveryState.Status.AVAILABLE, null, null, null, 604_800L, 604_800L)))
                 .when(accountRecoveryService).complete("@alice:dev.local", "284917");
 
         postJson("/login/recovery/complete", "{\"newPin\":\"284917\"}")
@@ -2673,6 +2673,75 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.recovery").doesNotExist());
 
         org.mockito.Mockito.verifyNoInteractions(accountRecoveryService);
+    }
+
+    /**
+     * The step-up says whether the account holds a PIN as well, so the web offers "Use my PIN
+     * instead" beside the passkey only to an account that has one. Without it a passkey-only
+     * holder was offered the switch, typed a PIN and was refused with pin_not_set.
+     */
+    @Test
+    void theStepUpStateSaysWhetherTheAccountHoldsAPin() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(enrollSession()));
+        when(passkeyService.isEnabled()).thenReturn(true);
+        when(passkeyService.hasPasskey("@alice:gua.local")).thenReturn(true);
+        when(userSecurityService.hasPin("@alice:gua.local")).thenReturn(false);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("ENROLL_STEP_UP"))
+                .andExpect(jsonPath("$.passkeyRegistered").value(true))
+                // The account the finding was about: a passkey and no PIN, where preferredFactor
+                // alone says PASSKEY and cannot tell the web whether a PIN sits behind it.
+                .andExpect(jsonPath("$.pinRegistered").value(false));
+
+        when(userSecurityService.hasPin("@alice:gua.local")).thenReturn(true);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.pinRegistered").value(true));
+    }
+
+    /**
+     * And nowhere else. An enrollment session was minted from the caller's own bearer token, so
+     * it repeats an answer GET /security/pin/status already gives that caller. A sign-in session
+     * has proved a phone number and nothing more, and preferredFactor deliberately answers
+     * PASSKEY there without saying whether a PIN sits behind it.
+     */
+    @Test
+    void theSignInStepsStillSayNothingAboutAPinBehindAPasskey() throws Exception {
+        LoginSession session = session(Phase.PASSKEY_REQUIRED);
+        session.setUserId("@alice:dev.local");
+        session.setOtpVerified(true);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.isEnabled()).thenReturn(true);
+        when(passkeyService.hasPasskey("@alice:dev.local")).thenReturn(true);
+        when(userSecurityService.hasPin("@alice:dev.local")).thenReturn(true);
+        when(accountRecoveryService.stateFor("@alice:dev.local")).thenReturn(PENDING);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PASSKEY_REQUIRED"))
+                .andExpect(jsonPath("$.passkeyRegistered").value(true))
+                .andExpect(jsonPath("$.preferredFactor").value("PASSKEY"))
+                .andExpect(jsonPath("$.pinRegistered").doesNotExist());
+    }
+
+    /**
+     * The two waits travel with the recovery state, because the screen that explains them has to
+     * say what this deployment enforces. The dev target runs them in minutes and the web used to
+     * assert seven days there.
+     */
+    @Test
+    void theRecoveryStateCarriesTheConfiguredWaits() throws Exception {
+        LoginSession session = pinRequiredSessionAfterOtp();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(accountRecoveryService.stateFor("@alice:dev.local")).thenReturn(PENDING);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.recovery.dormancySeconds").value(604_800))
+                .andExpect(jsonPath("$.recovery.waitSeconds").value(604_800));
     }
 
     @Test

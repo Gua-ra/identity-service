@@ -75,7 +75,7 @@ public class SecurityController {
     private final AccountRecoveryService accountRecoveryService;
 
     @GetMapping("/pin/status")
-    @Operation(summary = "Check the authenticated user's two-step verification state", description = "Returns hasPin=true once the user has configured a security PIN (drives the 'set up two-step verification' nudge), and how long the fresh-2FA hold on the account's PIN still has to run before that PIN can change the phone number. Read it when about to offer the PIN, not as 'can I change my number now': it is silent about the separate 24h phone-change cooldown, and it does not describe the passkey path, which carries its own hold on the age of the asserted credential and is refused the same way. It also reports which factors the account has REGISTERED, which one to offer first, and which ones a phone change accepts in precedence order, so a client offers the right factor instead of hardcoding the rule. Registration is server truth; whether a registered passkey is usable on this device is not reported and is never accepted as an input. Finally it reports whether a delayed account recovery is live on the account (accountRecoveryPending), with when it can be finished and when it expires, so every signed-in app can show a banner and offer POST /security/recovery/cancel.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @Operation(summary = "Check the authenticated user's two-step verification state", description = "Returns hasPin=true once the user has configured a security PIN (drives the 'set up two-step verification' nudge), and how long the fresh-2FA hold on the account's PIN still has to run before that PIN can change the phone number. Read it when about to offer the PIN, not as 'can I change my number now': it is silent about the separate 24h phone-change cooldown, and it does not describe the passkey path, which carries its own hold on the age of the asserted credential and is refused the same way. It also reports which factors the account has REGISTERED, which one to offer first, and which ones a phone change accepts in precedence order, so a client offers the right factor instead of hardcoding the rule. Registration is server truth; whether a registered passkey is usable on this device is not reported and is never accepted as an input. Finally it reports whether a delayed account recovery is live on the account (accountRecoveryPending), with when it can be finished and when it expires, so every signed-in app can show a banner and offer POST /security/recovery/cancel, and the two configured waits (accountRecoveryDormancySeconds, accountRecoveryWaitSeconds), which are reported whether or not a recovery is live because they are configuration rather than episode state: a client that states them itself is right only on a deployment left at the defaults.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "PIN status"),
             @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content)
@@ -99,7 +99,12 @@ public class SecurityController {
                         .toList(),
                 recovery != null,
                 recovery == null ? null : recovery.completableAtEpochSeconds(),
-                recovery == null ? null : recovery.expiresAtEpochSeconds()));
+                recovery == null ? null : recovery.expiresAtEpochSeconds(),
+                // The two waits are configuration, not episode state, so they are reported whether
+                // or not one is live. A client that states them itself is right only on a
+                // deployment left at the defaults, which the dev target is not.
+                properties.getSecurity().getAccountRecoveryDormancy().toSeconds(),
+                properties.getSecurity().getAccountRecoveryWait().toSeconds()));
     }
 
     @PostMapping("/pin")

@@ -162,7 +162,7 @@ public class LoginFlowController {
     private final EndOtherSessionsService endOtherSessionsService;
 
     @GetMapping("/context")
-    @Operation(summary = "Fetch the current login state", description = "Returns the current step, the login intent (PHONE or PASSKEY, from the OIDC login_hint), a CSRF token to echo on subsequent calls, the masked phone when known, and whether this is an in-app passkey enrollment. Once the step is one the flow can only reach with the subject resolved, it also reports passkeyRegistered, preferredFactor and passkeysEnabled; all are absent before then, and in particular at the phone step, where the session holds a submitted number and nothing proved. At PIN_REQUIRED and PASSKEY_REQUIRED after an OTP it also reports recovery, the delayed account recovery state, which is absent whenever recovery is not available to this session.")
+    @Operation(summary = "Fetch the current login state", description = "Returns the current step, the login intent (PHONE or PASSKEY, from the OIDC login_hint), a CSRF token to echo on subsequent calls, the masked phone when known, and whether this is an in-app passkey enrollment. Once the step is one the flow can only reach with the subject resolved, it also reports passkeyRegistered, preferredFactor and passkeysEnabled; all are absent before then, and in particular at the phone step, where the session holds a submitted number and nothing proved. At ENROLL_STEP_UP, and only there, it additionally reports pinRegistered, so the step-up offers the PIN beside the passkey only to an account that holds one. At PIN_REQUIRED and PASSKEY_REQUIRED after an OTP it also reports recovery, the delayed account recovery state, which is absent whenever recovery is not available to this session.")
     public ResponseEntity<LoginStateResponse> context(
             @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId) {
         LoginSession session = requireSession(sessionId);
@@ -1091,6 +1091,7 @@ public class LoginFlowController {
                 redirectUrl,
                 session.getGenesisAttachChallenge(),
                 factors == null ? null : factors.passkey(),
+                publishablePin(session, factors),
                 factors == null ? null : factors.preferred().name(),
                 factors == null ? null : authFactorPolicy.passkeysSupported(),
                 session.isEnroll(),
@@ -1122,6 +1123,27 @@ public class LoginFlowController {
             return null;
         }
         return authFactorPolicy.registeredFactors(session.getUserId());
+    }
+
+    /**
+     * Whether the account holds a PIN, published at the enrollment step-up and nowhere else.
+     *
+     * <p>
+     * The step-up needs it because the web has to decide whether to offer "Use my PIN instead"
+     * beside the passkey button. Without it the web cannot tell a passkey-only account from a
+     * passkey-and-PIN one, so it offered the link to both and the passkey-only holder typed a PIN
+     * only to be refused with {@code pin_not_set}.
+     *
+     * <p>
+     * It stays off every other step because it would be a new disclosure there. An enrollment
+     * session was minted from the caller's own bearer token, and
+     * {@code GET /security/pin/status} already tells that same caller {@code hasPin}, so this
+     * says nothing they cannot already read. A sign-in session has proved a phone number and
+     * nothing more, and {@code preferredFactor} deliberately answers {@code PASSKEY} there
+     * without saying whether a PIN sits behind it.
+     */
+    private Boolean publishablePin(LoginSession session, AuthFactorPolicy.RegisteredFactors factors) {
+        return factors == null || session.getPhase() != Phase.ENROLL_STEP_UP ? null : factors.pin();
     }
 
     private static String maskPhone(String phone) {
@@ -1210,6 +1232,15 @@ public class LoginFlowController {
              * somebody typed, and answering there would answer for any number at all.
              */
             Boolean passkeyRegistered,
+            /**
+             * Whether the resolved account holds a PIN, so the enrollment step-up can offer the PIN
+             * beside the passkey only to an account that has one. Published at
+             * {@code ENROLL_STEP_UP} only, where the session was minted from the caller's own
+             * bearer token and the same answer is already theirs to read at
+             * {@code GET /security/pin/status}; null, and omitted from the JSON, everywhere else.
+             * A client that does not see it keeps whatever it did before the field existed.
+             */
+            Boolean pinRegistered,
             /**
              * The strongest factor the resolved account holds, {@code PASSKEY}, {@code PIN} or
              * {@code PHONE_OTP}, and therefore the one to offer first. Null and omitted under exactly the

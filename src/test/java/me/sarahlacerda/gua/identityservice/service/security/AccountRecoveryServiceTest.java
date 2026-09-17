@@ -87,7 +87,33 @@ class AccountRecoveryServiceTest {
 
     @Test
     void anAccountThatNeverSignedInAndHasNoEpisodeIsAvailable() {
-        assertThat(service.stateFor(USER)).isEqualTo(new AccountRecoveryState(Status.AVAILABLE, null, null, null));
+        assertThat(service.stateFor(USER)).isEqualTo(
+                new AccountRecoveryState(Status.AVAILABLE, null, null, null, DORMANCY.toSeconds(), WAIT.toSeconds()));
+    }
+
+    /**
+     * The two waits ride along at every status, because the screen that explains them has to say
+     * what this deployment enforces and not what the defaults happen to be. They are read through
+     * the getters, so a deployment that configures neither reports the pin-reset-cooldown
+     * fallback rather than nothing.
+     */
+    @Test
+    void everyStatusCarriesTheConfiguredWaits() {
+        user.setLastLoginAt(T0.minus(DORMANCY).plusSeconds(60));
+        assertThat(service.stateFor(USER).status()).isEqualTo(Status.TOO_SOON);
+        assertThat(service.stateFor(USER).dormancySeconds()).isEqualTo(DORMANCY.toSeconds());
+        assertThat(service.stateFor(USER).waitSeconds()).isEqualTo(WAIT.toSeconds());
+
+        user.setPinResetRequestedAt(T0);
+        assertThat(service.stateFor(USER).status()).isEqualTo(Status.PENDING);
+        assertThat(service.stateFor(USER).dormancySeconds()).isEqualTo(DORMANCY.toSeconds());
+        assertThat(service.stateFor(USER).waitSeconds()).isEqualTo(WAIT.toSeconds());
+
+        properties.getSecurity().setAccountRecoveryDormancy(null);
+        properties.getSecurity().setAccountRecoveryWait(null);
+        long fallback = properties.getSecurity().getPinResetCooldown().toSeconds();
+        assertThat(service.stateFor(USER).dormancySeconds()).isEqualTo(fallback);
+        assertThat(service.stateFor(USER).waitSeconds()).isEqualTo(fallback);
     }
 
     @Test

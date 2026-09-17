@@ -170,21 +170,27 @@ public class AccountRecoveryService {
      */
     AccountRecoveryState evaluate(IdentityUser user, Instant now) {
         IdentityServiceProperties.SecurityProperties security = properties.getSecurity();
+        // Published at every status: the screen that explains the two waits has to state the ones
+        // this deployment enforces, and the dev target runs them in minutes.
+        long dormancy = security.getAccountRecoveryDormancy().toSeconds();
+        long wait = security.getAccountRecoveryWait().toSeconds();
         if (user != null && isLive(user, now)) {
             Instant stamp = user.getPinResetRequestedAt();
             Instant completableAt = stamp.plus(security.getAccountRecoveryWait());
             Instant expiresAt = stamp.plus(security.getAccountRecoveryEpisodeLife());
             Status status = now.isBefore(completableAt) ? Status.PENDING : Status.READY;
-            return AccountRecoveryState.live(status, ceilSeconds(completableAt), ceilSeconds(expiresAt));
+            return AccountRecoveryState.live(status, ceilSeconds(completableAt), ceilSeconds(expiresAt),
+                    dormancy, wait);
         }
         Instant lastLogin = user == null ? null : user.getLastLoginAt();
         if (lastLogin != null) {
             Instant availableAt = lastLogin.plus(security.getAccountRecoveryDormancy());
             if (now.isBefore(availableAt)) {
-                return AccountRecoveryState.tooSoon(publishedAvailableAt(availableAt).getEpochSecond());
+                return AccountRecoveryState.tooSoon(publishedAvailableAt(availableAt).getEpochSecond(),
+                        dormancy, wait);
             }
         }
-        return AccountRecoveryState.available();
+        return AccountRecoveryState.available(dormancy, wait);
     }
 
     private boolean isLive(IdentityUser user, Instant now) {
