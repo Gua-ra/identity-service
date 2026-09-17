@@ -212,6 +212,14 @@ public class AccountRecoveryService {
      * from this value, so the two always agree.
      *
      * <p>
+     * The testing branch buys nothing on the screen itself, and is kept anyway. Every client
+     * renders this value as a date with no clock time whichever rounding produced it, so a
+     * two-minute wait still reads as a date on a short-duration deployment. What the minute
+     * rounding buys is a value that moves at all while QA watches it: rounded to the day, a
+     * dormancy of minutes would publish the same instant all day and a run through the flow would
+     * look stuck. QA reads the real remaining wait off the refusal's {@code retryAfterSeconds}.
+     *
+     * <p>
      * Rounding up rather than down, as everywhere else here: the account is never told a moment
      * earlier than the server will agree to.
      */

@@ -18,7 +18,10 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *                                  deployment with
  *                                  {@code account-recovery-allow-short-for-testing} on, where it
  *                                  stays rounded up to the next whole minute, because a day would
- *                                  dwarf the durations dev QA runs with
+ *                                  dwarf the durations dev QA runs with. The clients render it as
+ *                                  a date whatever the rounding, so on such a deployment a
+ *                                  two-minute wait still reads as a date, which is the price of
+ *                                  having a value that moves at all while QA watches it
  * @param completableAtEpochSeconds {@link Status#PENDING} and {@link Status#READY}: when the wait
  *                                  is over
  * @param expiresAtEpochSeconds     {@link Status#PENDING} and {@link Status#READY}: when the
