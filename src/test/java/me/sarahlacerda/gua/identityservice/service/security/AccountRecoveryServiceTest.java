@@ -108,31 +108,36 @@ class AccountRecoveryServiceTest {
         assertThat(service.stateFor(USER).status()).isEqualTo(Status.AVAILABLE);
     }
 
-    /** The published time is rounded up to a whole UTC hour so it does not give away the sign-in time. */
+    /**
+     * The published time is rounded up to the start of the next UTC day: the clients say "try
+     * again after Sep 14" and never a clock time, so nothing about the account's last sign-in is
+     * readable from it.
+     */
     @Test
-    void tooSoonPublishesTheNextWholeHourAfterTheDormancyEnds() {
+    void tooSoonPublishesTheStartOfTheNextDayAfterTheDormancyEnds() {
         user.setLastLoginAt(Instant.parse("2026-09-01T10:15:30Z"));
 
         AccountRecoveryState state = service.stateFor(USER);
 
         assertThat(state.status()).isEqualTo(Status.TOO_SOON);
         assertThat(state.availableAtEpochSeconds())
-                .isEqualTo(Instant.parse("2026-09-08T11:00:00Z").getEpochSecond());
+                .isEqualTo(Instant.parse("2026-09-09T00:00:00Z").getEpochSecond());
+        assertThat(state.availableAtEpochSeconds() % 86400).isZero();
         assertThat(state.completableAtEpochSeconds()).isNull();
         assertThat(state.expiresAtEpochSeconds()).isNull();
     }
 
     @Test
-    void aDormancyEndingExactlyOnTheHourIsNotPushedAnotherHour() {
-        user.setLastLoginAt(Instant.parse("2026-09-01T10:00:00Z"));
+    void aDormancyEndingExactlyAtMidnightIsNotPushedAnotherDay() {
+        user.setLastLoginAt(Instant.parse("2026-09-01T00:00:00Z"));
 
         assertThat(service.stateFor(USER).availableAtEpochSeconds())
-                .isEqualTo(Instant.parse("2026-09-08T10:00:00Z").getEpochSecond());
+                .isEqualTo(Instant.parse("2026-09-08T00:00:00Z").getEpochSecond());
     }
 
     /**
-     * With short testing durations a whole hour would dwarf a dormancy of minutes, so the published
-     * time is rounded up to the next whole minute instead.
+     * With short testing durations a whole day would dwarf a dormancy of minutes, leaving dev QA
+     * with nothing to watch, so the published time is rounded up to the next whole minute instead.
      */
     @Test
     void underShortTestingDurationsTooSoonPublishesTheNextWholeMinute() {
@@ -265,7 +270,7 @@ class AccountRecoveryServiceTest {
     void startingOnARecentlyUsedAccountIsRefusedWithTheRoundedWaitAndWritesNothing() {
         user.setLastLoginAt(Instant.parse("2026-08-30T09:20:00Z"));
         long published = service.stateFor(USER).availableAtEpochSeconds();
-        assertThat(published).isEqualTo(Instant.parse("2026-09-06T10:00:00Z").getEpochSecond());
+        assertThat(published).isEqualTo(Instant.parse("2026-09-07T00:00:00Z").getEpochSecond());
 
         assertThatThrownBy(() -> service.start(USER, "••••4567", "203.0.113.9"))
                 .isInstanceOf(AccountRecoveryCooldownException.class)

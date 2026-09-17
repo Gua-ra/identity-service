@@ -199,14 +199,20 @@ public class AccountRecoveryService {
 
     /**
      * The time a too-soon account is told it can start recovery, rounded up so it does not give
-     * away the exact time of the last sign-in. A whole UTC hour normally; a whole minute when short
-     * durations are allowed for testing, where an hour would dwarf a dormancy of a few minutes.
-     * The cooldown's retry-after is derived from this value, so the two always agree.
+     * away the time of the last sign-in. The start of the next UTC day normally, which is what
+     * lets the clients say "try again after Sep 14" and never a time down to the minute; a whole
+     * minute when short durations are allowed for testing, where a day would dwarf a dormancy of
+     * a few minutes and leave dev QA with nothing to watch. The cooldown's retry-after is derived
+     * from this value, so the two always agree.
+     *
+     * <p>
+     * Rounding up rather than down, as everywhere else here: the account is never told a moment
+     * earlier than the server will agree to.
      */
     private Instant publishedAvailableAt(Instant availableAt) {
         ChronoUnit unit = properties.getSecurity().isAccountRecoveryAllowShortForTesting()
                 ? ChronoUnit.MINUTES
-                : ChronoUnit.HOURS;
+                : ChronoUnit.DAYS;
         return ceilTo(availableAt, unit);
     }
 

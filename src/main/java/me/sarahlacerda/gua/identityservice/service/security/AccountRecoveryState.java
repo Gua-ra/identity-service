@@ -12,8 +12,13 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *
  * @param status                    see {@link Status}
  * @param availableAtEpochSeconds   {@link Status#TOO_SOON} only: when recovery may be requested.
- *                                  Rounded up to the next whole UTC hour so it does not give
- *                                  away the exact time of the account's last sign-in
+ *                                  Rounded up to the start of the next UTC day, so it does not
+ *                                  give away the time of the account's last sign-in and the
+ *                                  clients can show a date with no clock time. The exception is a
+ *                                  deployment with
+ *                                  {@code account-recovery-allow-short-for-testing} on, where it
+ *                                  stays rounded up to the next whole minute, because a day would
+ *                                  dwarf the durations dev QA runs with
  * @param completableAtEpochSeconds {@link Status#PENDING} and {@link Status#READY}: when the wait
  *                                  is over
  * @param expiresAtEpochSeconds     {@link Status#PENDING} and {@link Status#READY}: when the
