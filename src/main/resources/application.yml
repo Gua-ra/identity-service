@@ -31,6 +31,10 @@ identity:
     phone-change-cooldown: ${IDENTITY_SECURITY_PHONE_CHANGE_COOLDOWN:PT24H}
     phone-change-challenge-ttl: ${IDENTITY_SECURITY_PHONE_CHANGE_CHALLENGE_TTL:PT10M}
     max-phone-change-otp-attempts: ${IDENTITY_SECURITY_MAX_PHONE_CHANGE_OTP_ATTEMPTS:5}
+    # Per-account cap on wrong numbers submitted to a reauthentication step in one hour. The
+    # account's own number is what is being guessed there, so a stolen session gets a budget
+    # rather than an unlimited walk through a numbering plan.
+    max-reauth-phone-attempts-per-hour: ${IDENTITY_SECURITY_MAX_REAUTH_PHONE_ATTEMPTS_PER_HOUR:5}
     # Delayed account recovery. Both default to pin-reset-cooldown when unset. Startup refuses
     # either below PT24H unless allow-short-for-testing is true, which only dev may set.
     account-recovery-dormancy: ${IDENTITY_SECURITY_ACCOUNT_RECOVERY_DORMANCY:}

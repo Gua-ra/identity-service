@@ -41,6 +41,7 @@ import me.sarahlacerda.gua.identityservice.exception.PinChangeChallengeNotFoundE
 import me.sarahlacerda.gua.identityservice.exception.PinChangeCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinLockedException;
 import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
+import me.sarahlacerda.gua.identityservice.exception.ReauthPhoneMismatchException;
 import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
 import me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.UnknownUserException;
@@ -227,6 +228,17 @@ public class RestExceptionHandler {
         public ResponseEntity<ErrorResponse> handleEndpointRetired(EndpointRetiredException ex) {
                 return ResponseEntity.status(HttpStatus.GONE)
                                 .body(new ErrorResponse("endpoint_retired", ex.getMessage()));
+        }
+
+        /**
+         * The number typed at a reauthentication step is not the one on the caller's account.
+         * One status, one code and one message for every way of being wrong, so the answer
+         * cannot be read as "this number belongs to somebody else".
+         */
+        @ExceptionHandler(ReauthPhoneMismatchException.class)
+        public ResponseEntity<ErrorResponse> handleReauthPhoneMismatch(ReauthPhoneMismatchException ex) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                                .body(new ErrorResponse("reauth_phone_mismatch", ex.getMessage()));
         }
 
         @ExceptionHandler(StepUpRequiredException.class)

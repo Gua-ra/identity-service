@@ -252,6 +252,19 @@ public class IdentityServiceProperties {
         private int maxPhoneChangeOtpAttempts = 5;
 
         /**
+         * How many times an hour one account may submit a number that is not its own at a
+         * reauthentication step, before further attempts are refused with {@code 429}.
+         *
+         * <p>
+         * The account's own number is the secret being guessed here, and the caller already
+         * holds a session, so nothing else bounds the guessing: a stolen session could
+         * otherwise walk a country's numbering plan until one submission came back accepted.
+         * Counted per user, not per address, because the address is the attacker's to change.
+         */
+        @Min(1)
+        private int maxReauthPhoneAttemptsPerHour = 5;
+
+        /**
          * How long an account must have gone without a completed sign-in before a delayed
          * account recovery may be requested. Unset falls back to {@link #pinResetCooldown}.
          */

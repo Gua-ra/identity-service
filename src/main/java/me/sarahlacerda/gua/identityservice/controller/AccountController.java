@@ -25,6 +25,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import me.sarahlacerda.gua.identityservice.client.matrix.MatrixAdminClient;
 import me.sarahlacerda.gua.identityservice.controller.dto.AccountDeactivateRequest;
+import me.sarahlacerda.gua.identityservice.controller.dto.AccountReauthStartRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.AccountReauthTokenResponse;
 import me.sarahlacerda.gua.identityservice.controller.dto.AccountReauthVerifyRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.IdentityResetCredentialsRequest;
@@ -66,30 +67,38 @@ public class AccountController {
         private final PhoneChangeService phoneChangeService;
 
         @PostMapping("/reauth/start")
-        @Operation(summary = "Send a fresh OTP for account reauthentication", description = "Sends an OTP via SMS to the phone linked to the authenticated user.")
+        @Operation(summary = "Send a fresh OTP for account reauthentication", description = "The signed-in user confirms the number on their own account. It is normalized, digested with the directory's peppered HMAC and compared with that account's own directory binding; only a match sends an OTP, and the OTP goes to that number. Nothing is stored. A number that is not this account's is refused with 403 reauth_phone_mismatch, in the same words whether it is unknown or belongs to somebody else, so this can never be used to ask who owns a number.", security = @SecurityRequirement(name = "oidcAccessToken"))
         @ApiResponses({
-                        @ApiResponse(responseCode = "204", description = "OTP dispatched"),
+                        @ApiResponse(responseCode = "202", description = "OTP dispatched to the account's number"),
+                        @ApiResponse(responseCode = "400", description = "invalid_phone_number: the submitted number could not be parsed", content = @Content),
                         @ApiResponse(responseCode = "401", description = "Caller not authenticated", content = @Content),
-                        @ApiResponse(responseCode = "429", description = "OTP rate limit hit", content = @Content)
+                        @ApiResponse(responseCode = "403", description = "reauth_phone_mismatch: this is not the number on the account", content = @Content),
+                        @ApiResponse(responseCode = "429", description = "OTP rate limit hit, or too many wrong numbers submitted for this account", content = @Content)
         })
         public ResponseEntity<Void> startReauth(
+                        @RequestBody @Valid AccountReauthStartRequest request,
                         @RequestHeader(value = "Accept-Language", required = false) String acceptLanguage,
                         @Parameter(hidden = true) HttpServletRequest servletRequest) {
                 String userId = authenticatedUserAccessor.requireCurrentUserId();
-                reauthService.startReauth(userId, servletRequest.getRemoteAddr(), acceptLanguage);
-                return ResponseEntity.noContent().build();
+                reauthService.startReauth(userId, request.getPhone(), servletRequest.getRemoteAddr(), acceptLanguage);
+                return ResponseEntity.accepted().build();
         }
 
         @PostMapping("/reauth/verify")
-        @Operation(summary = "Exchange OTP code for a single-use reauth token")
+        @Operation(summary = "Exchange OTP code for a single-use reauth token", description = "Takes the account's current number again together with the code sent to it. The number is re-checked exactly as at /account/reauth/start rather than remembered, because nothing is persisted between the two calls.", security = @SecurityRequirement(name = "oidcAccessToken"))
         @ApiResponses({
                         @ApiResponse(responseCode = "200", description = "Reauth token issued", content = @Content(schema = @Schema(implementation = AccountReauthTokenResponse.class))),
-                        @ApiResponse(responseCode = "401", description = "Invalid or expired OTP", content = @Content)
+                        @ApiResponse(responseCode = "400", description = "Invalid OTP, or invalid_phone_number", content = @Content),
+                        @ApiResponse(responseCode = "401", description = "Caller not authenticated", content = @Content),
+                        @ApiResponse(responseCode = "403", description = "reauth_phone_mismatch: this is not the number on the account", content = @Content),
+                        @ApiResponse(responseCode = "429", description = "Too many wrong numbers submitted for this account", content = @Content)
         })
         public ResponseEntity<AccountReauthTokenResponse> verifyReauth(
-                        @RequestBody @Valid AccountReauthVerifyRequest request) {
+                        @RequestBody @Valid AccountReauthVerifyRequest request,
+                        @Parameter(hidden = true) HttpServletRequest servletRequest) {
                 String userId = authenticatedUserAccessor.requireCurrentUserId();
-                String token = reauthService.verifyReauth(userId, request.getCode(), request.getOperation());
+                String token = reauthService.verifyReauth(userId, request.getPhone(), request.getCode(),
+                                request.getOperation(), servletRequest.getRemoteAddr());
                 return ResponseEntity.ok(new AccountReauthTokenResponse(token, REAUTH_TOKEN_TTL_SECONDS));
         }
 

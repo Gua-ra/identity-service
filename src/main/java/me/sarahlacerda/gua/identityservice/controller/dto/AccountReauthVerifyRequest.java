@@ -13,8 +13,17 @@ import me.sarahlacerda.gua.identityservice.service.security.ReauthOperation;
 @Schema(description = "Payload to verify the reauth OTP and exchange it for a reauth token")
 public class AccountReauthVerifyRequest {
 
+    /**
+     * The account's current number again. Checked the same way as at
+     * {@code /account/reauth/start}: nothing was stored between the two calls, so the token can
+     * only be minted by someone who can produce both the number and the code sent to it.
+     */
     @NotBlank
-    @Schema(description = "6-digit OTP delivered via SMS to the linked phone number", example = "123456")
+    @Schema(description = "The account's current phone number, E.164 or a national number", example = "+14155550123")
+    private String phone;
+
+    @NotBlank
+    @Schema(description = "6-digit OTP delivered via SMS to the account's number", example = "123456")
     private String code;
 
     /**
