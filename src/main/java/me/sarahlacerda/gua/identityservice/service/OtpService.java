@@ -188,13 +188,25 @@ public class OtpService {
         }
     }
 
+    /**
+     * Picks the SMS template for the language the caller asked for, keyed by BCP-47 tag.
+     *
+     * <p>
+     * The underscore is folded to a hyphen first because the platform locale APIs the apps reach
+     * for hand out the ICU identifier, {@code pt_BR}, rather than the language tag, {@code pt-BR}.
+     * Without the fold that value matches no key and carries no hyphen either, so the
+     * primary-tag fallback below never runs and a Brazilian caller is texted in English. The
+     * clients send a proper tag now, but the cost of accepting the other spelling is one
+     * replacement and what it buys is that no app can silently drop a user back to English by
+     * reaching for the wrong locale property.
+     */
     private String resolveTemplate(String requestedLanguage) {
         String defaultTemplate = properties.getOtp().getSmsTemplate();
         if (!StringUtils.hasText(requestedLanguage)) {
             return defaultTemplate;
         }
 
-        String normalized = requestedLanguage.trim().toLowerCase(Locale.ROOT);
+        String normalized = requestedLanguage.trim().toLowerCase(Locale.ROOT).replace('_', '-');
         String template = properties.getOtp().getLocalizedSmsTemplates().get(normalized);
         if (template == null && normalized.contains("-")) {
             String primaryTag = normalized.substring(0, normalized.indexOf('-'));

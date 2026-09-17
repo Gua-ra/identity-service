@@ -286,6 +286,29 @@ class OtpServiceTest {
         verify(smsSender).send("+5511888888888", "Código Gua: 333333");
     }
 
+    @Test
+    void sendOtpAcceptsTheIcuSpellingOfALanguageTag() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("444444");
+        properties.getOtp().getLocalizedSmsTemplates().put("pt-br", "Seu código Gua é %s");
+
+        // Locale.current.identifier on iOS, and anything else built from an ICU locale.
+        otpService.sendOtp("+5511777777777", "203.0.113.5", "pt_BR");
+
+        verify(smsSender).send("+5511777777777", "Seu código Gua é 444444");
+    }
+
+    @Test
+    void anIcuTagWithNoExactTemplateStillFallsBackToItsPrimaryLanguage() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("555555");
+        properties.getOtp().getLocalizedSmsTemplates().put("pt", "Código Gua: %s");
+
+        otpService.sendOtp("+5511666666666", "203.0.113.6", "pt_BR");
+
+        verify(smsSender).send("+5511666666666", "Código Gua: 555555");
+    }
+
     // -------------------- scoped codes --------------------
 
     @Test
