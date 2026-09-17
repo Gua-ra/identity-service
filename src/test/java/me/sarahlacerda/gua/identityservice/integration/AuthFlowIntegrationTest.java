@@ -12,6 +12,7 @@ import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -164,6 +165,15 @@ class AuthFlowIntegrationTest {
                 .willReturn(notFound()));
         wireMock.stubFor(get(urlPathMatching("/_synapse/admin/v2/users/.*"))
                 .willReturn(notFound()));
+
+        // Every test method here calls the API from localhost, so they all share one
+        // requester-address OTP budget (10/hour) that production spreads over real
+        // callers. Clear only that counter between methods; each test still uses its
+        // own phone number, so the per-phone budget stays exercised as shipped.
+        Set<String> requesterBudgets = redisTemplate.keys("otp:rate:ip:*");
+        if (requesterBudgets != null && !requesterBudgets.isEmpty()) {
+            redisTemplate.delete(requesterBudgets);
+        }
     }
 
     @Test
