@@ -4,6 +4,7 @@ import java.time.Duration;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -129,25 +130,27 @@ public class AccountReauthService {
      * own, refusing with {@link ReauthPhoneMismatchException} when it is not.
      *
      * <p>
-     * The attempt budget is checked before the comparison and spent only on a mismatch, so an
-     * account holder retyping their own number is never locked out of their own settings by
-     * having got it wrong five times.
+     * An attempt is reserved from the hour's budget before the comparison and given back when
+     * the number turns out to be the account's own, so the budget is spent by mismatches alone
+     * and an account holder retyping their own number is never locked out of their own settings
+     * by having got it wrong five times.
      *
      * <p>
      * A number that does not parse is refused earlier, by the normalizer, with
      * {@code 400 invalid_phone_number}. That answer is a function of the submitted string
      * alone: it is the same for every caller and for every account, so it says nothing about
-     * who owns what and cannot be used to probe ownership. Everything that does depend on the
+     * who owns what and cannot be used to probe ownership. It also costs no attempt, because it
+     * is settled before the account is consulted at all. Everything that does depend on the
      * account gets the single 403 below.
      */
     private String requireOwnPhone(String userId, String submittedPhone, String operation, String requesterIp) {
-        assertWithinAttemptCap(userId);
         String phone = phoneNumberNormalizer.toE164(submittedPhone);
+        reserveAttempt(userId);
         if (!boundToAccount(userId, phone)) {
-            countMismatch(userId);
             auditLogger.reauthFailed(userId, operation, requesterIp);
             throw new ReauthPhoneMismatchException(MISMATCH_MESSAGE);
         }
+        releaseAttempt(userId);
         return phone;
     }
 
@@ -182,34 +185,68 @@ public class AccountReauthService {
     }
 
     /**
-     * Refuses once the account has spent its hour's budget of wrong numbers. Read rather than
-     * incremented, so the budget is spent by mismatches alone.
+     * Takes one attempt out of the account's hour budget, refusing once the budget is spent.
+     *
+     * <p>
+     * INCR first and compare what it returns, which is the pattern
+     * {@link me.sarahlacerda.gua.identityservice.service.RateLimiter#checkRate} uses and for the
+     * same reason: a read followed by a later increment bounds a sequential attacker only, since
+     * a burst of parallel requests all read the same value, all pass the gate and all get their
+     * number compared. The reservation is taken before the comparison for that reason too, so
+     * what the cap bounds is the number of comparisons a burst can perform, and with them the
+     * homeserver lookups the fallback makes for a caller-chosen number.
+     *
+     * <p>
+     * A counter that cannot be updated refuses the attempt rather than waving it through: this is
+     * the only bound on guessing the account's own number.
      *
      * <p>
      * The message is written here: the generic limiter's own message names its Redis key, which
      * carries the user id, and error messages are returned to callers.
      */
-    private void assertWithinAttemptCap(String userId) {
-        String spent = redisTemplate.opsForValue().get(mismatchKey(userId));
-        if (spent != null && parseCount(spent) >= properties.getSecurity().getMaxReauthPhoneAttemptsPerHour()) {
+    private void reserveAttempt(String userId) {
+        String key = mismatchKey(userId);
+        Long counted;
+        try {
+            counted = redisTemplate.opsForValue().increment(key);
+        } catch (DataAccessException ex) {
+            throw new RateLimiterException("Could not check the attempt budget; try again later", ex);
+        }
+        long spent = counted == null ? 1L : counted;
+        armWindow(key, spent);
+        if (spent > properties.getSecurity().getMaxReauthPhoneAttemptsPerHour()) {
             throw new RateLimiterException("Too many attempts to confirm your number; try again later");
         }
     }
 
-    /** INCR with the window set on the first miss, so the budget refills an hour after it opened. */
-    private void countMismatch(String userId) {
-        String key = mismatchKey(userId);
-        Long counted = redisTemplate.opsForValue().increment(key);
-        if (counted != null && counted == 1L) {
+    /**
+     * Opens the hour window on the counter, so the budget refills an hour after it opened.
+     *
+     * <p>
+     * Re-armed on every attempt still inside the budget rather than on the first one alone: a key
+     * that ended up without a window, because the {@code expire} after the first increment failed,
+     * would otherwise never get one and would refuse the account for good. Not re-armed once the
+     * budget is spent, because a flood of refused attempts would then push the window out for as
+     * long as the flood lasted and hold the account holder out with it.
+     */
+    private void armWindow(String key, long spent) {
+        if (spent <= properties.getSecurity().getMaxReauthPhoneAttemptsPerHour()) {
             redisTemplate.expire(key, MISMATCH_WINDOW);
         }
     }
 
-    private static long parseCount(String value) {
+    /**
+     * Gives the reservation back, once the number has turned out to be the account's own. What
+     * keeps the budget one of wrong numbers rather than one of attempts.
+     */
+    private void releaseAttempt(String userId) {
         try {
-            return Long.parseLong(value.trim());
-        } catch (NumberFormatException ex) {
-            return 0L;
+            redisTemplate.opsForValue().decrement(mismatchKey(userId));
+        } catch (DataAccessException ex) {
+            // Leaving the attempt spent is the smaller harm: the caller has just proved the
+            // number, and refusing them over the bookkeeping would be the lockout the budget is
+            // shaped to avoid.
+            log.warn("Could not release the reauth attempt for {}: {}", userId, ex.getMessage());
         }
     }
 

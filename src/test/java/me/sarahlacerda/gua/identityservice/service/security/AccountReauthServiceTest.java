@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -17,8 +18,10 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
@@ -98,6 +101,26 @@ class AccountReauthServiceTest {
         verify(otpService).sendOtp(PHONE, "1.2.3.4", "en-US");
         // Nothing was written: no pending-phone record, no raw number.
         verify(valueOperations, never()).set(any(), any());
+        // And the attempt reserved for the comparison was given back, so confirming your own
+        // number costs nothing out of the hour's budget of wrong ones.
+        verify(valueOperations).decrement(MISMATCH_KEY);
+    }
+
+    /**
+     * The reservation is taken before the number is compared, not after. A read-then-increment
+     * cap bounds a sequential attacker only: parallel requests would all read the same value,
+     * all pass the gate, and all get a number of the attacker's choosing compared against the
+     * account, which is the whole of what the budget exists to stop.
+     */
+    @Test
+    void theAttemptIsReservedBeforeTheNumberIsCompared() {
+        directoryHolds(DIGEST);
+
+        service.startReauth(USER, PHONE, "1.2.3.4", null);
+
+        InOrder inOrder = inOrder(valueOperations, directoryService);
+        inOrder.verify(valueOperations).increment(MISMATCH_KEY);
+        inOrder.verify(directoryService).findByUserId(USER);
     }
 
     /**
@@ -184,24 +207,39 @@ class AccountReauthServiceTest {
     /** A stolen session gets a budget of guesses at the account's own number, not a walk. */
     @Test
     void theAttemptCapRefusesFurtherGuesses() {
-        when(valueOperations.get(MISMATCH_KEY))
-                .thenReturn(String.valueOf(properties.getSecurity().getMaxReauthPhoneAttemptsPerHour()));
+        when(valueOperations.increment(MISMATCH_KEY))
+                .thenReturn((long) properties.getSecurity().getMaxReauthPhoneAttemptsPerHour() + 1);
 
         assertThatThrownBy(() -> service.startReauth(USER, OTHER_PHONE, "1.2.3.4", null))
                 .isInstanceOf(RateLimiterException.class)
                 .hasMessageNotContaining(USER);
 
         verifyNoInteractions(otpService);
+        // Refused without the comparison being made, which is what caps the guessing.
         verifyNoInteractions(directoryService);
+        verifyNoInteractions(matrixAdminClient);
     }
 
     /** The cap refuses the right number too once it is spent: it is a cap on the account. */
     @Test
     void theAttemptCapAlsoRefusesTheCorrectNumber() {
-        when(valueOperations.get(MISMATCH_KEY)).thenReturn("5");
+        when(valueOperations.increment(MISMATCH_KEY)).thenReturn(6L);
 
         assertThatThrownBy(() -> service.startReauth(USER, PHONE, "1.2.3.4", null))
                 .isInstanceOf(RateLimiterException.class);
+        verifyNoInteractions(otpService);
+    }
+
+    /** A counter that cannot be updated refuses the attempt: it is the only bound there is. */
+    @Test
+    void anUnreachableCounterRefusesTheAttempt() {
+        when(valueOperations.increment(MISMATCH_KEY))
+                .thenThrow(new QueryTimeoutException("redis unavailable"));
+
+        assertThatThrownBy(() -> service.startReauth(USER, PHONE, "1.2.3.4", null))
+                .isInstanceOf(RateLimiterException.class)
+                .hasMessageNotContaining(USER);
+        verifyNoInteractions(directoryService);
         verifyNoInteractions(otpService);
     }
 
@@ -217,6 +255,37 @@ class AccountReauthServiceTest {
         verify(redisTemplate).expire(MISMATCH_KEY, Duration.ofHours(1));
     }
 
+    /**
+     * The window is re-armed on every attempt still inside the budget, so a counter left without
+     * one, because the expire after the first increment failed, picks one up instead of refusing
+     * the account for good.
+     */
+    @Test
+    void aLaterAttemptInsideTheBudgetArmsTheWindowToo() {
+        directoryHolds(DIGEST);
+        when(matrixAdminClient.findUserIdByPhone(OTHER_PHONE)).thenReturn(Optional.empty());
+        when(valueOperations.increment(MISMATCH_KEY)).thenReturn(3L);
+
+        assertThatThrownBy(() -> service.startReauth(USER, OTHER_PHONE, "1.2.3.4", null))
+                .isInstanceOf(ReauthPhoneMismatchException.class);
+
+        verify(redisTemplate).expire(MISMATCH_KEY, Duration.ofHours(1));
+    }
+
+    /**
+     * And not re-armed once the budget is spent: a flood of refused attempts would otherwise
+     * push the window out for as long as it lasted and hold the account holder out with it.
+     */
+    @Test
+    void aRefusedAttemptDoesNotPushTheWindowOut() {
+        when(valueOperations.increment(MISMATCH_KEY)).thenReturn(9L);
+
+        assertThatThrownBy(() -> service.startReauth(USER, OTHER_PHONE, "1.2.3.4", null))
+                .isInstanceOf(RateLimiterException.class);
+
+        verify(redisTemplate, never()).expire(any(), any(Duration.class));
+    }
+
     @Test
     void verifyIssuesTheOperationScopedTokenAfterTheOtp() {
         directoryHolds(DIGEST);
@@ -226,6 +295,7 @@ class AccountReauthServiceTest {
 
         verify(otpService).verifyOtp(PHONE, "123456");
         assertThat(token).isEqualTo("opaque-token");
+        verify(valueOperations).decrement(MISMATCH_KEY);
     }
 
     @Test
