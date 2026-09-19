@@ -34,6 +34,7 @@ public class IdentityServiceProperties {
     private final RateLimitProperties rateLimits = new RateLimitProperties();
     private final GenesisProperties genesis = new GenesisProperties();
     private final PlacementProperties placement = new PlacementProperties();
+    private final AuthorityProperties authority = new AuthorityProperties();
 
     @Getter
     @Setter
@@ -532,5 +533,91 @@ public class IdentityServiceProperties {
             @Min(1)
             private int batchSize = 500;
         }
+    }
+
+    /**
+     * The account authority chain, adoption and the device lifecycle (ADM-009). Every flag defaults to
+     * off or empty, so a deployment that sets none of them behaves exactly as it did before this feature
+     * existed: every authority endpoint answers 503, no row is written to any authority table, and no
+     * existing login, recovery, factor or genesis path changes.
+     *
+     * <p>Turning {@code enabled} on is refused at startup while no out-of-band notification channel is
+     * wired, which is ADM-009 gate 2. Every window in that record is theatre without a channel that
+     * survives both a SIM swap and the session revocation a recovery performs, because the account holder
+     * is never told the window is running.
+     */
+    @Getter
+    @Setter
+    public static class AuthorityProperties {
+
+        /**
+         * Master switch. While it is false the whole feature is inert: the endpoints answer 503
+         * {@code authority_disabled}, no challenge is minted and no chain row exists.
+         */
+        private boolean enabled = false;
+
+        /**
+         * Whether adoption may run outside dev.
+         *
+         * <p>Off by default, which ADM-009 gate 3 requires: production adoption stays refused until
+         * ADM-002 Q6 answers the independence question, because under framework 0x01 the recovery
+         * authority key shares the device store with the key it would veto. Dev may adopt behind this
+         * flag and treats those accounts as disposable.
+         */
+        private boolean productionAdoption = false;
+
+        /**
+         * The opposition window of ADM-009 decision 4, which is also the quarantine of decision 5.
+         *
+         * <p>The window is the whole security of an adoption (ADM-001 O9), so startup refuses anything
+         * under 24 hours without {@link #allowShortWindowsForTesting}. It runs on service time until
+         * witnesses exist (ADM-002 R8).
+         */
+        @NotNull
+        private Duration oppositionWindow = Duration.ofHours(72);
+
+        /**
+         * The wait an {@code AuthorityRecovery} signed by the committed recovery authority key runs,
+         * which is ADM-002 D1's delta-r for framework 0x01 and deliberately not the adoption window.
+         */
+        @NotNull
+        private Duration recoveryWindow = Duration.ofDays(7);
+
+        /**
+         * How long a minted challenge, and therefore the step-up that minted it, stays spendable. At or
+         * under 15 minutes by ADM-009 decision 4 step 4; a larger value is clamped at startup.
+         */
+        @NotNull
+        private Duration challengeTtl = Duration.ofMinutes(15);
+
+        /** How long a browser-started approval stays signable (ADM-009 decision 6). */
+        @NotNull
+        private Duration approvalTtl = Duration.ofMinutes(10);
+
+        /** How many approvals one account may hold at once (ADM-009 decision 6). */
+        @Min(1)
+        private int maxLiveApprovals = 3;
+
+        /**
+         * Lifts the 24-hour floor on the windows above, for a dev deployment where a human walks a
+         * transition through. Nothing else may set it.
+         */
+        private boolean allowShortWindowsForTesting = false;
+
+        /**
+         * The registered OIDC client ids whose access tokens count as a native session.
+         *
+         * <p>ADM-009 decision 4 step 1: a session still inside the web view cannot start adoption, which
+         * is the ADM-008:143 problem stated as a rule. The value is compared against the client the token
+         * was accepted on, which comes from the verified audience, never from anything the caller sends
+         * alongside it. The forwarded downstream-client marker is deliberately not used: it is
+         * client-asserted, and the existing beta gate says so in as many words.
+         *
+         * <p>Empty by default, so with no configuration every native-only endpoint refuses. That is the
+         * safe direction: a deployment that has not said which client is its app has not earned the right
+         * to have one of them root an account.
+         */
+        @NotNull
+        private List<String> nativeClientIds = new ArrayList<>();
     }
 }

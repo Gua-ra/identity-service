@@ -62,6 +62,32 @@ identity:
       # and resumable, so it is safe to leave on.
       enabled: ${IDENTITY_GENESIS_BOOTSTRAP_BACKFILL_ENABLED:false}
       batch-size: ${IDENTITY_GENESIS_BOOTSTRAP_BACKFILL_BATCH_SIZE:500}
+  # The account authority chain, adoption and the device lifecycle (ADM-009). Every flag is off or
+  # empty by default and the whole feature is inert: every /account/authority endpoint answers 503, no
+  # challenge is minted, no chain row is written, and no existing login, recovery, factor or genesis
+  # path behaves differently. Turning enabled on is refused at startup while no out-of-band
+  # notification channel is wired (ADM-009 gate 2), because every window here is theatre if the account
+  # holder is never told it is running.
+  authority:
+    enabled: ${IDENTITY_AUTHORITY_ENABLED:false}
+    # Adoption outside dev waits on ADM-002 Q6 (ADM-009 gate 3): under framework 0x01 the recovery
+    # authority key shares the device store with the key it would veto. Dev sets this true and treats
+    # the accounts it roots as disposable.
+    production-adoption: ${IDENTITY_AUTHORITY_PRODUCTION_ADOPTION:false}
+    # The opposition window, which is also the quarantine a granted device serves. Startup refuses
+    # anything under PT24H without allow-short-windows-for-testing.
+    opposition-window: ${IDENTITY_AUTHORITY_OPPOSITION_WINDOW:PT72H}
+    # ADM-002 D1's delta-r for framework 0x01, and deliberately not the adoption window.
+    recovery-window: ${IDENTITY_AUTHORITY_RECOVERY_WINDOW:P7D}
+    # At or under PT15M by ADM-009 decision 4 step 4. A larger value is clamped at startup.
+    challenge-ttl: ${IDENTITY_AUTHORITY_CHALLENGE_TTL:PT15M}
+    approval-ttl: ${IDENTITY_AUTHORITY_APPROVAL_TTL:PT10M}
+    max-live-approvals: ${IDENTITY_AUTHORITY_MAX_LIVE_APPROVALS:3}
+    allow-short-windows-for-testing: ${IDENTITY_AUTHORITY_ALLOW_SHORT_WINDOWS_FOR_TESTING:false}
+    # Registered client ids whose tokens count as a native session (ADM-009 decision 4 step 1). Read
+    # from the token's verified audience, never from the client-asserted downstream marker. Empty means
+    # no client may root an account, which is the safe direction.
+    native-client-ids: ${IDENTITY_AUTHORITY_NATIVE_CLIENT_IDS:}
   # Generation-1 placement records and the shadow comparison (ADM-008 Phase 4). Every flag is off by
   # default and the feature is inert until one is turned on: no scheduler is started, no record is
   # signed, no MAS is read and no new metric series appears. There is deliberately no flag that serves
@@ -121,6 +147,15 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_GENESIS_LIMIT:10}
         refresh-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_GENESIS_REFRESH:PT1M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_ACCOUNT_GENESIS_TIMEOUT:PT0S}
+      # Bearer-gated, and each call either mints a server challenge or takes the head row lock, so
+      # they are bounded per caller the way the credential checks are. The whole family is one rule:
+      # an unlisted authority path would fall under default-config, which is far too loose for a
+      # transition that moves an account's authority.
+      - path: /account/authority/**
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_AUTHORITY_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_AUTHORITY_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_ACCOUNT_AUTHORITY_TIMEOUT:PT0S}
       - path: /signup/complete
         methods: [POST]
         limit-for-period: ${IDENTITY_RATE_LIMIT_SIGNUP_COMPLETE_LIMIT:10}
