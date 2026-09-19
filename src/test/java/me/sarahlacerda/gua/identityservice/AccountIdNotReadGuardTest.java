@@ -46,7 +46,15 @@ class AccountIdNotReadGuardTest {
             // list below, which is the half of this guard that matters: a placement record must never be
             // read by anything that decides where an account lives or what MAS is told about it.
             "PlacementRecord.java", "PlacementRecordCodec.java", "PlacementRecordSigner.java",
-            "ResolverPlacementClient.java", "PlacementShadowReconciler.java", "PlacementAccountScanner.java");
+            "ResolverPlacementClient.java", "PlacementShadowReconciler.java", "PlacementAccountScanner.java",
+            // ADM-009 decision 12's implementation note, added deliberately and as exactly one file. The
+            // account authority chain has to compare the accountId a submitted record carries against the one
+            // the server resolved from its own session state (decision 3 rule 2), and the account holder has
+            // to be able to read their own, because the client signs over its 34 raw bytes. Both happen here
+            // and nowhere else: every other file in the feature speaks of an opaque "account reference", and
+            // this file is deliberately NOT added to the routing-and-login list below, which is the half of
+            // this guard that matters.
+            "AuthorityAccounts.java");
 
     /**
      * Files on the paths that must never learn an accountId: everything that decides where an account
