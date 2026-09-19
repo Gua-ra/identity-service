@@ -29,6 +29,7 @@ import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryService;
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryState;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy;
+import me.sarahlacerda.gua.identityservice.service.security.PasskeyRemovalService;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.PinChangeService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
@@ -58,6 +59,9 @@ class SecurityControllerTest {
     @Mock
     private AccountRecoveryService accountRecoveryService;
 
+    @Mock
+    private PasskeyRemovalService passkeyRemovalService;
+
     private MockMvc mockMvc;
     private ObjectMapper objectMapper;
     private IdentityServiceProperties properties;
@@ -76,7 +80,8 @@ class SecurityControllerTest {
                 // Real policy over the mocked services, so the factor report and the enrollment
                 // guard are the ones the application computes.
                 new AuthFactorPolicy(userSecurityService, passkeyService),
-                new AccountLocalpartResolver(directoryService), pinChangeService, accountRecoveryService);
+                new AccountLocalpartResolver(directoryService), pinChangeService, accountRecoveryService,
+                passkeyRemovalService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new RestExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter())
