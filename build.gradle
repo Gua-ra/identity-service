@@ -63,4 +63,9 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform()
+    // CI only has the console: print the assertion message and stack of a failing test there.
+    testLogging {
+        events 'failed'
+        exceptionFormat 'full'
+    }
 }

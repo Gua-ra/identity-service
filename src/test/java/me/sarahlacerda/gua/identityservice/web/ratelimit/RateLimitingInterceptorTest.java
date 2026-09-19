@@ -17,6 +17,9 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 
@@ -75,7 +78,9 @@ class RateLimitingInterceptorTest {
         verify(response).setStatus(429);
         verify(response).setHeader("Retry-After", "30");
         writer.flush();
-        assertThat(body.toString()).contains("Rate limit exceeded");
+        JsonNode json = new ObjectMapper().readTree(body.toString());
+        assertThat(json.path("code").asText()).isEqualTo("rate_limited");
+        assertThat(json.path("message").asText()).isEqualTo("Rate limit exceeded");
     }
 
     @Test

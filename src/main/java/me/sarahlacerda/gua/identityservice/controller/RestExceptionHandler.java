@@ -3,6 +3,8 @@ package me.sarahlacerda.gua.identityservice.controller;
 import java.time.Instant;
 import java.util.List;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessResourceFailureException;
@@ -17,6 +19,9 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import me.sarahlacerda.gua.identityservice.account.genesis.InvalidGenesisException;
+import me.sarahlacerda.gua.identityservice.exception.AccountRecoveryCooldownException;
+import me.sarahlacerda.gua.identityservice.exception.AccountRecoveryNotReadyException;
+import me.sarahlacerda.gua.identityservice.exception.EndpointRetiredException;
 import me.sarahlacerda.gua.identityservice.exception.GenesisRegistrationException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidOtpException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinChallengeException;
@@ -35,13 +40,14 @@ import me.sarahlacerda.gua.identityservice.exception.PhoneChangeCooldownExceptio
 import me.sarahlacerda.gua.identityservice.exception.PinChangeChallengeNotFoundException;
 import me.sarahlacerda.gua.identityservice.exception.PinChangeCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinLockedException;
-import me.sarahlacerda.gua.identityservice.exception.PinResetCooldownException;
-import me.sarahlacerda.gua.identityservice.exception.PinResetNotRequestedException;
 import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
+import me.sarahlacerda.gua.identityservice.exception.ReauthPhoneMismatchException;
 import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
+import me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.UnknownUserException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
 import me.sarahlacerda.gua.identityservice.exception.WeakPinException;
+import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryState;
 
 @RestControllerAdvice
 public class RestExceptionHandler {
@@ -145,15 +151,6 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("pin_locked", message));
         }
 
-        @ExceptionHandler(PinResetCooldownException.class)
-        public ResponseEntity<ErrorResponse> handlePinResetCooldown(PinResetCooldownException ex) {
-                String message = ex.getRemainingSeconds() > 0
-                                ? ex.getMessage() + " (retry in " + ex.getRemainingSeconds() + "s)"
-                                : ex.getMessage();
-                return ResponseEntity.status(HttpStatus.TOO_EARLY)
-                                .body(new ErrorResponse("pin_reset_cooldown", message));
-        }
-
         @ExceptionHandler(PinChangeCooldownException.class)
         public ResponseEntity<ErrorResponse> handlePinChangeCooldown(PinChangeCooldownException ex) {
                 String message = ex.getRemainingSeconds() > 0
@@ -186,10 +183,62 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("phone_change_cooldown", message));
         }
 
-        @ExceptionHandler(PinResetNotRequestedException.class)
-        public ResponseEntity<ErrorResponse> handlePinResetNotRequested(PinResetNotRequestedException ex) {
+        /**
+         * The fresh-2FA hold: the account PIN is too new to be spent as the phone-change
+         * step-up factor. Answered as 400 with {@code twofa_cooldown_active} and the
+         * remaining seconds in the body, which is the shape both clients already parse;
+         * {@code Retry-After} carries the same number for anything that reads headers.
+         * Deliberately not the 425 the per-account phone-change cooldown uses: that is a
+         * different refusal, and conflating them would tell a client to wait out the wrong
+         * one.
+         */
+        @ExceptionHandler(TwoFactorCooldownException.class)
+        public ResponseEntity<ErrorResponse> handleTwoFactorCooldown(TwoFactorCooldownException ex) {
+                long remaining = Math.max(ex.getRemainingSeconds(), 0);
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                                .body(new ErrorResponse("pin_reset_not_requested", ex.getMessage()));
+                                .header("Retry-After", String.valueOf(Math.max(remaining, 1)))
+                                .body(new ErrorResponse("twofa_cooldown_active", ex.getMessage(), remaining));
+        }
+
+        /**
+         * A delayed account recovery requested for an account used inside the dormancy period.
+         * Same shape as {@code twofa_cooldown_active}: 400, the wait in {@code retryAfterSeconds}
+         * and mirrored in {@code Retry-After}.
+         */
+        @ExceptionHandler(AccountRecoveryCooldownException.class)
+        public ResponseEntity<ErrorResponse> handleAccountRecoveryCooldown(AccountRecoveryCooldownException ex) {
+                long remaining = Math.max(ex.getRemainingSeconds(), 1);
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .header("Retry-After", String.valueOf(remaining))
+                                .body(new ErrorResponse("recovery_cooldown_active", ex.getMessage(), remaining));
+        }
+
+        /**
+         * Completing a recovery that is not ready under the row lock. The fresh state rides along so
+         * the client re-renders without another request.
+         */
+        @ExceptionHandler(AccountRecoveryNotReadyException.class)
+        public ResponseEntity<RecoveryErrorResponse> handleAccountRecoveryNotReady(AccountRecoveryNotReadyException ex) {
+                return ResponseEntity.status(HttpStatus.CONFLICT)
+                                .body(new RecoveryErrorResponse("recovery_not_ready", ex.getMessage(), Instant.now(),
+                                                ex.getState()));
+        }
+
+        @ExceptionHandler(EndpointRetiredException.class)
+        public ResponseEntity<ErrorResponse> handleEndpointRetired(EndpointRetiredException ex) {
+                return ResponseEntity.status(HttpStatus.GONE)
+                                .body(new ErrorResponse("endpoint_retired", ex.getMessage()));
+        }
+
+        /**
+         * The number typed at a reauthentication step is not the one on the caller's account.
+         * One status, one code and one message for every way of being wrong, so the answer
+         * cannot be read as "this number belongs to somebody else".
+         */
+        @ExceptionHandler(ReauthPhoneMismatchException.class)
+        public ResponseEntity<ErrorResponse> handleReauthPhoneMismatch(ReauthPhoneMismatchException ex) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                                .body(new ErrorResponse("reauth_phone_mismatch", ex.getMessage()));
         }
 
         @ExceptionHandler(StepUpRequiredException.class)
@@ -274,9 +323,23 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("server_error", "Unexpected error"));
         }
 
-        public record ErrorResponse(String code, String message, Instant timestamp) {
+        /** An error that carries the account recovery state it was decided on. */
+        public record RecoveryErrorResponse(String code, String message, Instant timestamp,
+                        AccountRecoveryState recovery) {
+        }
+
+        /**
+         * {@code retryAfterSeconds} is omitted from the JSON unless a handler sets it, so
+         * every existing error body is byte-for-byte what it was.
+         */
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        public record ErrorResponse(String code, String message, Instant timestamp, Long retryAfterSeconds) {
                 public ErrorResponse(String code, String message) {
-                        this(code, message, Instant.now());
+                        this(code, message, Instant.now(), null);
+                }
+
+                public ErrorResponse(String code, String message, long retryAfterSeconds) {
+                        this(code, message, Instant.now(), retryAfterSeconds);
                 }
         }
 }

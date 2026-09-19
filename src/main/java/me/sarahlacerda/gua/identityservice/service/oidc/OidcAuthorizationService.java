@@ -62,7 +62,9 @@ public class OidcAuthorizationService {
                     stored.preferredUsername(),
                     Set.copyOf(stored.scope()),
                     stored.clientId(),
-                    stored.nonce());
+                    stored.nonce(),
+                    // Absent from a code stored before the field existed, which is never a recovery.
+                    Boolean.TRUE.equals(stored.endOtherSessions()));
             return Optional.of(new OidcAuthorizationCode(code, authorization, stored.redirectUri(),
                     Optional.ofNullable(stored.codeChallenge())));
         } catch (JsonProcessingException ex) {
@@ -80,7 +82,8 @@ public class OidcAuthorizationService {
                 authorization.clientId(),
                 authorization.nonce(),
                 redirectUri,
-                codeChallenge);
+                codeChallenge,
+                authorization.endOtherSessions());
         try {
             redisTemplate.opsForValue().set(
                     keyFor(code),
@@ -110,6 +113,7 @@ public class OidcAuthorizationService {
             String clientId,
             String nonce,
             String redirectUri,
-            String codeChallenge) {
+            String codeChallenge,
+            Boolean endOtherSessions) {
     }
 }

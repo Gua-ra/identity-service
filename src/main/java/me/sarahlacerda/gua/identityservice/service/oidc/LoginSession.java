@@ -5,6 +5,8 @@ import java.util.List;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
+import me.sarahlacerda.gua.identityservice.service.security.AuthFactor;
+
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -33,14 +35,62 @@ public class LoginSession {
         OTP_SENT,
         /** Returning user with two-step verification; awaiting the PIN. */
         PIN_REQUIRED,
+        /**
+         * Returning user whose only factor is a passkey; awaiting the assertion. The PIN step is
+         * refused here, and the delayed account recovery is the way back for a user who cannot
+         * present the passkey.
+         */
+        PASSKEY_REQUIRED,
         /** New user; awaiting username + display name. */
         PROFILE_REQUIRED,
-        /** New user; offered to set an account PIN (two-step verification). */
+        /**
+         * An already-signed-in user adding a factor from settings, before anything is stored:
+         * the session must first prove the account with the strongest thing it can produce (a
+         * user-verifying passkey assertion, else the account PIN, else the account's own number
+         * and an OTP sent to it). Only the enrollment sessions created by
+         * {@code POST /security/passkey/enroll/start} and {@code POST /security/pin/enroll/start}
+         * ever reach it, and it never issues an authorization code.
+         */
+        ENROLL_STEP_UP,
+        /** An account holding no factor, after declining the passkey offer; must set a PIN. */
         PIN_SETUP,
-        /** Phone verification and any PIN step are complete; optional passkey setup. */
+        /**
+         * Passkey offer: the first factor of an account holding none, or an optional extra after a
+         * PIN sign-in.
+         */
         PASSKEY_SETUP,
         /** Authenticated; an authorization code has been issued. */
         COMPLETED
+    }
+
+    /**
+     * Which factor this session actually authenticated with. Deliberately separate from the wire
+     * enum {@code AuthFactor}: these are outcomes of this login, not factors an account holds, and
+     * two of them ({@link #ENROLLED}, {@link #RECOVERY}) are not factors at all.
+     *
+     * <p>
+     * A login is never completed without one. A session persisted before this field existed reads
+     * back without it and is refused at completion with {@code factor_required}; the user starts
+     * the login again.
+     */
+    public enum SessionFactor {
+        /** A passkey assertion resolved to this session's account. */
+        PASSKEY,
+        /** The account PIN was validated. */
+        PIN,
+        /**
+         * This session created the account's first factor: at the moment of enrollment, under the
+         * account's row lock, it held no other.
+         */
+        ENROLLED,
+        /** A delayed account recovery was completed in this session. */
+        RECOVERY
+    }
+
+    /** Which factor an enrollment session was opened to add. */
+    public enum EnrollTarget {
+        PASSKEY,
+        PIN
     }
 
     /**
@@ -73,6 +123,14 @@ public class LoginSession {
     /** See {@link Intent}. Absent from sessions persisted before it existed. */
     private Intent intent = Intent.PHONE;
     private String phoneNumber;
+    /**
+     * Set only by a successful {@code POST /login/otp}. A passkey sign-in never sets it, and the
+     * delayed account recovery is only offered to a session that has it, so recovery always starts
+     * from a proved phone number.
+     */
+    private boolean otpVerified;
+    /** See {@link SessionFactor}. Null until this session has authenticated with a factor. */
+    private SessionFactor authenticatedFactor;
     /**
      * Phone (E.164) pre-filled from the OIDC login_hint, shown on the phone step.
      */
@@ -119,6 +177,25 @@ public class LoginSession {
      * still a real OIDC authorize with a client, whereas an enrollment is not.
      */
     private boolean enroll;
+
+    /**
+     * Which factor this enrollment session is adding, so the step it moves to after the step-up
+     * is the setup step for that factor. Null for every session that is not an enrollment.
+     */
+    private EnrollTarget enrollTarget;
+
+    /**
+     * What an enrollment session proved at {@link Phase#ENROLL_STEP_UP}: a passkey assertion,
+     * the account PIN, or the account's number and an OTP sent to it. Null until it has proved
+     * one, which is what keeps a bearer session on its own from adding a durable factor.
+     *
+     * <p>
+     * Deliberately not {@link #authenticatedFactor}. That field is what lets a session finish a
+     * sign-in, and an enrollment session must never finish one: keeping the two apart means
+     * that even a route which wrongly sent an enrollment session to completion would still be
+     * refused there for having authenticated with nothing.
+     */
+    private AuthFactor enrollStepUpFactor;
 
     /**
      * Single-use attach handle taken from a {@code gua:} login hint, naming an {@code AccountGenesis}

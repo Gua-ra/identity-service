@@ -25,7 +25,9 @@ import me.sarahlacerda.gua.identityservice.client.matrix.MatrixAdminClient;
 import me.sarahlacerda.gua.identityservice.controller.dto.PhoneChangeCompleteRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PhoneChangeStartRequest;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPhoneChangeChallengeException;
+import me.sarahlacerda.gua.identityservice.exception.InvalidPhoneNumberException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneChangeCooldownException;
+import me.sarahlacerda.gua.identityservice.exception.ReauthPhoneMismatchException;
 import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
@@ -169,6 +171,86 @@ class AccountControllerTest {
                 .content(objectMapper.writeValueAsBytes(request)))
                 .andExpect(MockMvcResultMatchers.status().isForbidden())
                 .andExpect(MockMvcResultMatchers.jsonPath("$.code", is("step_up_required")));
+    }
+
+    /**
+     * The signed-in user confirms the number on their own account, and the send is accepted.
+     * Nothing is stored between this call and the verify.
+     */
+    @Test
+    void startReauthPassesTheSubmittedNumberAndAnswers202() throws Exception {
+        when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn(USER);
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/account/reauth/start")
+                .header("Accept-Language", "pt-BR")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phone\":\"+14155550123\"}"))
+                .andExpect(MockMvcResultMatchers.status().isAccepted());
+
+        verify(reauthService).startReauth(eq(USER), eq("+14155550123"), any(), eq("pt-BR"));
+    }
+
+    @Test
+    void startReauthRequiresTheNumber() throws Exception {
+        mockMvc.perform(MockMvcRequestBuilders.post("/account/reauth/start")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(MockMvcResultMatchers.status().isBadRequest());
+
+        org.mockito.Mockito.verify(reauthService, org.mockito.Mockito.never())
+                .startReauth(any(), any(), any(), any());
+    }
+
+    /** One refusal, whoever the number belongs to. */
+    @Test
+    void startReauthMapsAMismatchTo403WithTheNeutralCode() throws Exception {
+        when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn(USER);
+        doThrow(new ReauthPhoneMismatchException("That is not the number on your account."))
+                .when(reauthService).startReauth(eq(USER), eq("+14155550999"), any(), any());
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/account/reauth/start")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phone\":\"+14155550999\"}"))
+                .andExpect(MockMvcResultMatchers.status().isForbidden())
+                .andExpect(MockMvcResultMatchers.jsonPath("$.code", is("reauth_phone_mismatch")))
+                .andExpect(MockMvcResultMatchers.jsonPath("$.message", is("That is not the number on your account.")));
+    }
+
+    @Test
+    void startReauthMapsAMalformedNumberTo400() throws Exception {
+        when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn(USER);
+        doThrow(new InvalidPhoneNumberException("Phone number is not valid"))
+                .when(reauthService).startReauth(eq(USER), any(), any(), any());
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/account/reauth/start")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phone\":\"nope\"}"))
+                .andExpect(MockMvcResultMatchers.status().isBadRequest())
+                .andExpect(MockMvcResultMatchers.jsonPath("$.code", is("invalid_phone_number")));
+    }
+
+    @Test
+    void verifyReauthPassesTheNumberTheCodeAndTheOperation() throws Exception {
+        when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn(USER);
+        when(reauthService.verifyReauth(eq(USER), eq("+14155550123"), eq("123456"),
+                eq(ReauthOperation.PHONE_CHANGE), any())).thenReturn("tok");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/account/reauth/verify")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phone\":\"+14155550123\",\"code\":\"123456\",\"operation\":\"PHONE_CHANGE\"}"))
+                .andExpect(MockMvcResultMatchers.status().isOk())
+                .andExpect(MockMvcResultMatchers.jsonPath("$.reauthToken", is("tok")));
+    }
+
+    @Test
+    void verifyReauthRequiresTheNumber() throws Exception {
+        mockMvc.perform(MockMvcRequestBuilders.post("/account/reauth/verify")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"))
+                .andExpect(MockMvcResultMatchers.status().isBadRequest());
+
+        org.mockito.Mockito.verify(reauthService, org.mockito.Mockito.never())
+                .verifyReauth(any(), any(), any(), any(), any());
     }
 
     @Test

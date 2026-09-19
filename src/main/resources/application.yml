@@ -31,6 +31,15 @@ identity:
     phone-change-cooldown: ${IDENTITY_SECURITY_PHONE_CHANGE_COOLDOWN:PT24H}
     phone-change-challenge-ttl: ${IDENTITY_SECURITY_PHONE_CHANGE_CHALLENGE_TTL:PT10M}
     max-phone-change-otp-attempts: ${IDENTITY_SECURITY_MAX_PHONE_CHANGE_OTP_ATTEMPTS:5}
+    # Per-account cap on wrong numbers submitted to a reauthentication step in one hour. The
+    # account's own number is what is being guessed there, so a stolen session gets a budget
+    # rather than an unlimited walk through a numbering plan.
+    max-reauth-phone-attempts-per-hour: ${IDENTITY_SECURITY_MAX_REAUTH_PHONE_ATTEMPTS_PER_HOUR:5}
+    # Delayed account recovery. Both default to pin-reset-cooldown when unset. Startup refuses
+    # either below PT24H unless allow-short-for-testing is true, which only dev may set.
+    account-recovery-dormancy: ${IDENTITY_SECURITY_ACCOUNT_RECOVERY_DORMANCY:}
+    account-recovery-wait: ${IDENTITY_SECURITY_ACCOUNT_RECOVERY_WAIT:}
+    account-recovery-allow-short-for-testing: ${IDENTITY_SECURITY_ACCOUNT_RECOVERY_ALLOW_SHORT_FOR_TESTING:false}
   # Account genesis and the accountId (ADM-008 Phase 3). Every flag is off by default: a deployment
   # that sets none of them behaves exactly as it did before the feature existed. Nothing here is read
   # for routing or for login in this phase.
@@ -146,6 +155,50 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_LOGIN_PASSKEY_AUTH_VERIFY_LIMIT:20}
         refresh-period: ${IDENTITY_RATE_LIMIT_LOGIN_PASSKEY_AUTH_VERIFY_REFRESH:PT1M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_LOGIN_PASSKEY_AUTH_VERIFY_TIMEOUT:PT0S}
+      # The enrollment step-up: where a signed-in user proves the account before a factor is
+      # added from settings. A PIN check and an OTP check, so the same budgets as their
+      # sign-in counterparts above rather than the throughput default.
+      - path: /login/enroll/stepup/pin
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PIN_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PIN_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PIN_TIMEOUT:PT0S}
+      - path: /login/enroll/stepup/otp/send
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_OTP_SEND_LIMIT:5}
+        refresh-period: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_OTP_SEND_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_OTP_SEND_TIMEOUT:PT0S}
+      - path: /login/enroll/stepup/otp/verify
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_OTP_VERIFY_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_OTP_VERIFY_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_OTP_VERIFY_TIMEOUT:PT0S}
+      - path: /login/enroll/stepup/passkey/options
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PASSKEY_OPTIONS_LIMIT:20}
+        refresh-period: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PASSKEY_OPTIONS_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PASSKEY_OPTIONS_TIMEOUT:PT0S}
+      - path: /login/enroll/stepup/passkey/verify
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PASSKEY_VERIFY_LIMIT:20}
+        refresh-period: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PASSKEY_VERIFY_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PASSKEY_VERIFY_TIMEOUT:PT0S}
+      # Re-authentication. Both calls check a number against the account's own binding, and
+      # verify checks a code on top, so they are credential checks and need the same shape of
+      # budget as the step-up pair above rather than the throughput default. The per-account
+      # budget of wrong numbers (identity.security.max-reauth-phone-attempts-per-hour) is what
+      # actually bounds the guessing; these bound how fast one caller can arrive at it, and are
+      # keyed by user as well as address because the calls carry a bearer token.
+      - path: /account/reauth/start
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_REAUTH_START_LIMIT:5}
+        refresh-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_REAUTH_START_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_ACCOUNT_REAUTH_START_TIMEOUT:PT0S}
+      - path: /account/reauth/verify
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_REAUTH_VERIFY_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_REAUTH_VERIFY_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_ACCOUNT_REAUTH_VERIFY_TIMEOUT:PT0S}
       - path: /account/phone/change/start
         methods: [POST]
         limit-for-period: ${IDENTITY_RATE_LIMIT_PHONE_CHANGE_START_LIMIT:3}
@@ -161,21 +214,38 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_LIMIT:20}
         refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_REFRESH:PT5M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_TIMEOUT:PT0S}
-      - path: /security/pin/reset
+      # Delayed account recovery. These calls carry no bearer token, so they are keyed by client
+      # address. Many people can share one address (carrier-grade NAT, an office), so a low limit
+      # here would throttle strangers recovering at the same time. The per-account defences are
+      # elsewhere: both need a session that already passed an OTP, start cannot be guessed at, and
+      # complete needs the episode to be READY. Cancel is bearer-gated and called by the apps.
+      - path: /login/recovery/start
         methods: [POST]
-        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_LIMIT:3}
-        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_REFRESH:PT1H}
-        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_TIMEOUT:PT0S}
-      - path: /security/pin/reset/complete
+        limit-for-period: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_START_LIMIT:30}
+        refresh-period: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_START_REFRESH:PT1H}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_START_TIMEOUT:PT0S}
+      - path: /login/recovery/complete
         methods: [POST]
-        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_COMPLETE_LIMIT:3}
-        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_COMPLETE_REFRESH:PT1H}
-        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_RESET_COMPLETE_TIMEOUT:PT0S}
+        limit-for-period: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_COMPLETE_LIMIT:30}
+        refresh-period: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_COMPLETE_REFRESH:PT1H}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_LOGIN_RECOVERY_COMPLETE_TIMEOUT:PT0S}
+      - path: /security/recovery/cancel
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_RECOVERY_CANCEL_LIMIT:20}
+        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_RECOVERY_CANCEL_REFRESH:PT5M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_RECOVERY_CANCEL_TIMEOUT:PT0S}
       - path: /security/pin/change/start
         methods: [POST]
         limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_CHANGE_START_LIMIT:5}
         refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_CHANGE_START_REFRESH:PT1H}
         timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_CHANGE_START_TIMEOUT:PT0S}
+      # Mints a WebAuthn challenge scoped to the authenticated account. Unlisted it would
+      # fall under default-config, far too loose for a step-up ceremony.
+      - path: /security/passkey/stepup/options
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PASSKEY_STEPUP_LIMIT:20}
+        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PASSKEY_STEPUP_REFRESH:PT5M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PASSKEY_STEPUP_TIMEOUT:PT0S}
       - path: /security/pin/change/complete
         methods: [POST]
         limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PIN_CHANGE_COMPLETE_LIMIT:5}
@@ -242,9 +312,23 @@ idp:
     cookie-secure: ${IDP_LOGIN_COOKIE_SECURE:true}
     # In-app passkey enrollment handoff (already-signed-in user adds a passkey from settings).
     enroll:
-      # OIDC app scheme echoed back only if the ceremony completes; the session is pinned to
-      # the authenticated user so this is never reachable as an open login.
+      # Default app scheme, echoed back only if the ceremony completes; the session is pinned
+      # to the authenticated user so this is never reachable as an open login. Used when the
+      # caller names no redirect and the bearer token names no OIDC client of ours, which is
+      # every homeserver-issued token.
       redirect-uri: ${IDP_LOGIN_ENROLL_REDIRECT_URI:global.gua:/oidc}
+      # Every redirect a caller may name on POST /security/{pin,passkey}/enroll/start, comma
+      # separated. Each build of the apps answers its own scheme (global.gua for the store
+      # build, global.gua.dev for QA, global.gua.debug for the Android debug build) and only
+      # the build knows which one it is, so the value has to be able to come from the caller;
+      # this list is what keeps that from being a redirect the caller simply chooses. A named
+      # value is matched against these entries exactly, and anything else is refused with
+      # 400 invalid_redirect_uri and never stamped on a session.
+      # Unset means the allowlist is exactly redirect-uri above, so a deployment behaves as it
+      # did before the list existed until its own configuration changes. A deployment that
+      # serves QA builds lists their schemes here, e.g.
+      #   IDP_LOGIN_ENROLL_REDIRECT_URIS=global.gua:/oidc,global.gua.dev:/oidc,global.gua.debug:/oidc
+      redirect-uris: ${IDP_LOGIN_ENROLL_REDIRECT_URIS:}
       token-ttl: ${IDP_LOGIN_ENROLL_TOKEN_TTL:PT2M}
     # Passkey / WebAuthn (browser login + in-app enrollment).
     # PROD MUST set rp-id to the registrable Gua auth domain (gua.global) and origins to the

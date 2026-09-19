@@ -11,6 +11,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -55,7 +57,15 @@ import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationCode;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorizationService;
+import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.SessionFactor;
+import me.sarahlacerda.gua.identityservice.exception.AccountRecoveryCooldownException;
+import me.sarahlacerda.gua.identityservice.exception.AccountRecoveryNotReadyException;
+import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryService;
+import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryState;
+import me.sarahlacerda.gua.identityservice.service.security.LoginFactorEnrollmentService;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
+import me.sarahlacerda.gua.identityservice.service.security.EndOtherSessionsService;
+import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 
@@ -64,6 +74,10 @@ import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 @AutoConfigureObservability   // provide a MeterRegistry in the slice (micrometer-prometheus is on the classpath)
 @org.springframework.context.annotation.Import(LoginFlowControllerTest.GuardConfig.class)
 class LoginFlowControllerTest {
+
+    // Sign-in does not weigh how old the asserted credential is; only the phone-change
+    // step-up does. An established credential keeps that out of the way of these tests.
+    private static final Instant REGISTERED_LONG_AGO = Instant.now().minus(Duration.ofDays(400));
 
     // Use the real RegistrationGuard so the gate behaviour is exercised end-to-end;
     // it is driven through the mocked LoginFlowProperties / PhoneNumberNormalizer /
@@ -82,6 +96,16 @@ class LoginFlowControllerTest {
         @org.springframework.context.annotation.Bean
         AccountLocalpartResolver accountLocalpartResolver(DirectoryService directoryService) {
             return new AccountLocalpartResolver(directoryService);
+        }
+
+        // The real factor policy over the mocked UserSecurityService / PasskeyService, so the
+        // PIN step and the "already has a passkey" question are decided by the component the
+        // application uses. The existing hasPin / hasPasskey stubs below drive it unchanged.
+        @org.springframework.context.annotation.Bean
+        me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy authFactorPolicy(
+                UserSecurityService userSecurityService, PasskeyService passkeyService) {
+            return new me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy(
+                    userSecurityService, passkeyService);
         }
 
         // The real account-creation service, so the directory writes these tests assert on are the ones
@@ -135,6 +159,16 @@ class LoginFlowControllerTest {
     private EndpointRateLimiter endpointRateLimiter;
     @MockitoBean
     private AccountGenesisService accountGenesisService;
+    @MockitoBean
+    private LoginFactorEnrollmentService loginFactorEnrollmentService;
+    @MockitoBean
+    private AccountRecoveryService accountRecoveryService;
+    @MockitoBean
+    private me.sarahlacerda.gua.identityservice.service.security.AccountReauthService accountReauthService;
+    @MockitoBean
+    private TokenRevocationService tokenRevocationService;
+    @MockitoBean
+    private EndOtherSessionsService endOtherSessionsService;
 
     @BeforeEach
     void setUp() {
@@ -291,15 +325,21 @@ class LoginFlowControllerTest {
         DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").username("alice")
                 .displayName("Alice").build();
         when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
-        when(userSecurityService.hasPin("u1")).thenReturn(false);
+        when(userSecurityService.hasPin("u1")).thenReturn(true);
 
+        // A re-authentication goes through the same factor gate as any other sign-in.
         mockMvc.perform(post("/login/otp")
                 .cookie(cookie())
                 .header("X-CSRF-Token", CSRF)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"code\":\"123456\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"));
+                .andExpect(jsonPath("$.phase").value("PIN_REQUIRED"))
+                .andExpect(jsonPath("$.redirectUrl").doesNotExist())
+                // Recovery is never offered to a re-authentication.
+                .andExpect(jsonPath("$.recovery").doesNotExist());
+
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
     @Test
@@ -338,14 +378,19 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.code").value("reauth_user_mismatch"));
     }
 
+    /**
+     * D1/D2 for an older account that holds no factor: the OTP proves the number and nothing
+     * more, so the account is offered the passkey and never completed.
+     */
     @Test
-    void submitOtpForReturningUserWithoutPinRoutesToPasskeySetup() throws Exception {
+    void submitOtpForAReturningAccountHoldingNoFactorOffersThePasskeyInsteadOfCompleting() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
         when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
         DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").username("alice")
                 .displayName("Alice").build();
         when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
         when(userSecurityService.hasPin("u1")).thenReturn(false);
+        when(passkeyService.isEnabled()).thenReturn(true);
 
         mockMvc.perform(post("/login/otp")
                 .cookie(cookie())
@@ -353,9 +398,27 @@ class LoginFlowControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"code\":\"123456\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"));
+                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"))
+                .andExpect(jsonPath("$.redirectUrl").doesNotExist());
 
         verify(otpService).verifyOtp(PHONE, "123456");
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    @Test
+    void aReturningAccountHoldingNoFactorLandsOnPinSetupWhenTheDeploymentHasNoPasskeys() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").username("alice")
+                .displayName("Alice").build();
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
+        when(passkeyService.isEnabled()).thenReturn(false);
+
+        performOtp()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
     @Test
@@ -413,7 +476,8 @@ class LoginFlowControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"code\":\"123456\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"))
+                // Holds no factor, and this deployment has no passkeys: the mandatory PIN step.
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"))
                 .andExpect(jsonPath("$.newUser").value(false));
 
         // Heals the directory row under the current pepper's digest, reusing the MXID.
@@ -446,6 +510,7 @@ class LoginFlowControllerTest {
         session.setUserId("u1");
         session.setDisplayName("Alice");
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.isEnabled()).thenReturn(true);
 
         mockMvc.perform(post("/login/pin")
                 .cookie(cookie())
@@ -456,6 +521,57 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"));
 
         verify(userSecurityService).validatePinOrThrow("u1", "123456");
+        assertEquals(SessionFactor.PIN, session.getAuthenticatedFactor());
+    }
+
+    /** A deployment without passkeys has no ceremony to offer, so a PIN sign-in is simply done. */
+    @Test
+    void submitPinCompletesStraightThroughWhenPasskeysAreOff() throws Exception {
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("u1");
+        session.setDisplayName("Alice");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.isEnabled()).thenReturn(false);
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        mockMvc.perform(post("/login/pin")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pin\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.redirectUrl").value(CALLBACK + "?code=auth-code&state=xyz"));
+
+        assertEquals(SessionFactor.PIN, session.getAuthenticatedFactor());
+        assertEquals(false, issuedAuthorization().endOtherSessions());
+        verify(loginSessionService, org.mockito.Mockito.never()).save(eq(SID), any());
+    }
+
+    /**
+     * D5 survives a recovery whose own login could not be finished: while its sign-out is still
+     * owed, the account's next completed sign-in carries the claim.
+     */
+    @Test
+    void aSignInWhileARecoveryStillOwesItsSignOutCarriesTheClaim() throws Exception {
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("u1");
+        session.setDisplayName("Alice");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(endOtherSessionsService.isOwed("u1")).thenReturn(true);
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        mockMvc.perform(post("/login/pin")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pin\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+
+        assertEquals(true, issuedAuthorization().endOtherSessions());
+        // Settled only when the ID token carrying the claim is issued, not here.
+        verify(endOtherSessionsService, org.mockito.Mockito.never()).settle(any());
     }
 
     @Test
@@ -477,11 +593,17 @@ class LoginFlowControllerTest {
         verify(directoryService).upsertByDigest(any(), any(), eq("@alice:gua.local"), eq("Alice A"));
     }
 
+    /**
+     * The PIN step is now the tail of signup rather than its middle: the passkey was offered
+     * before it, so nothing follows it. Routing back to the passkey offer here would be a loop,
+     * since declining that offer is the only way into this step.
+     */
     @Test
-    void submitPinSetupWithPinSetsItAndRoutesToPasskeySetup() throws Exception {
+    void submitPinSetupWithPinSetsItAndCompletesLogin() throws Exception {
         LoginSession session = session(Phase.PIN_SETUP);
         session.setUserId("@alice:gua.local");
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
 
         mockMvc.perform(post("/login/pin-setup")
                 .cookie(cookie())
@@ -489,26 +611,36 @@ class LoginFlowControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"pin\":\"123456\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"));
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.redirectUrl").value(CALLBACK + "?code=auth-code&state=xyz"));
 
-        verify(userSecurityService).setInitialPin("@alice:gua.local", "123456");
+        verify(loginFactorEnrollmentService).setUpFirstPin("@alice:gua.local", "123456");
+        assertEquals(SessionFactor.ENROLLED, session.getAuthenticatedFactor());
+        // Not a recovery, so the tokens never ask for other sessions to end.
+        assertEquals(false, issuedAuthorization().endOtherSessions());
     }
 
+    /** D2: the PIN step is where a factorless account gets its factor, so it cannot be left without one. */
     @Test
-    void submitPinSetupSkipRoutesToPasskeySetupWithoutPin() throws Exception {
+    void pinSetupCannotBeSkippedOrLeftBlankAndNeverCompletes() throws Exception {
         LoginSession session = session(Phase.PIN_SETUP);
         session.setUserId("@alice:gua.local");
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
 
-        mockMvc.perform(post("/login/pin-setup")
-                .cookie(cookie())
-                .header("X-CSRF-Token", CSRF)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"skip\":true}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"));
+        for (String body : new String[] { "{\"skip\":true}", "{}", "{\"pin\":\"   \"}", "{\"pin\":\"\"}",
+                "{\"pin\":\"284917\",\"skip\":true}" }) {
+            mockMvc.perform(post("/login/pin-setup")
+                    .cookie(cookie())
+                    .header("X-CSRF-Token", CSRF)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("pin_required"));
+        }
 
-        verify(userSecurityService, org.mockito.Mockito.never()).setInitialPin(any(), any());
+        verify(loginFactorEnrollmentService, org.mockito.Mockito.never()).setUpFirstPin(any(), any());
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+        verify(userSecurityService, org.mockito.Mockito.never()).recordSuccessfulLogin(any());
     }
 
     @Test
@@ -534,6 +666,7 @@ class LoginFlowControllerTest {
         LoginSession session = session(Phase.PASSKEY_SETUP);
         session.setUserId("@alice:gua.local");
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(loginFactorEnrollmentService.registerPasskey(eq(SID), eq(session), any())).thenReturn(true);
         when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
 
         mockMvc.perform(post("/login/passkey/register/verify")
@@ -545,13 +678,16 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.phase").value("COMPLETED"))
                 .andExpect(jsonPath("$.redirectUrl").value(CALLBACK + "?code=auth-code&state=xyz"));
 
-        verify(passkeyService).finishRegistration(eq(SID), eq(session), any());
+        verify(loginFactorEnrollmentService).registerPasskey(eq(SID), eq(session), any());
+        assertEquals(SessionFactor.ENROLLED, session.getAuthenticatedFactor());
     }
 
+    /** Declining the extra passkey offered after a PIN sign-in finishes the sign-in the PIN earned. */
     @Test
-    void passkeySetupSkipCompletesLogin() throws Exception {
+    void passkeySetupSkipCompletesASessionThatSignedInWithItsPin() throws Exception {
         LoginSession session = session(Phase.PASSKEY_SETUP);
         session.setUserId("@alice:gua.local");
+        session.setAuthenticatedFactor(SessionFactor.PIN);
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
         when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
 
@@ -573,7 +709,7 @@ class LoginFlowControllerTest {
      */
     @Test
     void passkeyEnrollmentVerifyRedirectsToAppSchemeAndIssuesNoCode() throws Exception {
-        LoginSession session = enrollSession();
+        LoginSession session = enrollSessionPastStepUp(LoginSession.EnrollTarget.PASSKEY);
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
 
         mockMvc.perform(post("/login/passkey/register/verify")
@@ -591,7 +727,7 @@ class LoginFlowControllerTest {
 
     @Test
     void passkeyEnrollmentSkipRedirectsToAppSchemeAndIssuesNoCode() throws Exception {
-        LoginSession session = enrollSession();
+        LoginSession session = enrollSessionPastStepUp(LoginSession.EnrollTarget.PASSKEY);
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
 
         mockMvc.perform(post("/login/passkey/setup-skip")
@@ -606,7 +742,7 @@ class LoginFlowControllerTest {
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
-    /** Mirrors SecurityController.startPasskeyEnrollment: an enrollment session has no OIDC client. */
+    /** Mirrors SecurityController.startFactorEnrollment: an enrollment session has no OIDC client. */
     private LoginSession enrollSession() {
         LoginSession session = new LoginSession();
         session.setEnroll(true);
@@ -614,7 +750,18 @@ class LoginFlowControllerTest {
         session.setReauthUserId("@alice:gua.local");
         session.setRedirectUri(ENROLL_APP_SCHEME);
         session.setCsrfToken(CSRF);
-        session.setPhase(Phase.PASSKEY_SETUP);
+        session.setEnrollTarget(LoginSession.EnrollTarget.PASSKEY);
+        session.setPhase(Phase.ENROLL_STEP_UP);
+        return session;
+    }
+
+    /** The same session after the step-up: at the setup step, with what it proved recorded. */
+    private LoginSession enrollSessionPastStepUp(LoginSession.EnrollTarget target) {
+        LoginSession session = enrollSession();
+        session.setEnrollTarget(target);
+        session.setEnrollStepUpFactor(
+                me.sarahlacerda.gua.identityservice.service.security.AuthFactor.PIN);
+        session.setPhase(target == LoginSession.EnrollTarget.PIN ? Phase.PIN_SETUP : Phase.PASSKEY_SETUP);
         return session;
     }
 
@@ -661,7 +808,7 @@ class LoginFlowControllerTest {
     void passkeyAuthVerifyForRegisteredUserSkipsOtpAndCompletes() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
         when(passkeyService.finishAuthentication(eq(SID), any()))
-                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local"));
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local", REGISTERED_LONG_AGO));
         DirectoryEntry entry = DirectoryEntry.builder()
                 .phoneDigest("digest").userId("@alice:dev.local").username("alice").displayName("Alice").build();
         when(directoryService.findByUserId("@alice:dev.local")).thenReturn(List.of(entry));
@@ -687,7 +834,7 @@ class LoginFlowControllerTest {
     void passkeyAuthVerifyRejectsUserNotRegisteredAndCreatesNoAccount() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
         when(passkeyService.finishAuthentication(eq(SID), any()))
-                .thenReturn(new PasskeyService.PasskeyAuthentication("@ghost:dev.local"));
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@ghost:dev.local", REGISTERED_LONG_AGO));
         // The asserted credential resolves to no directory row (no OTP registration / no phone).
         when(directoryService.findByUserId("@ghost:dev.local")).thenReturn(List.of());
 
@@ -710,7 +857,7 @@ class LoginFlowControllerTest {
         session.setReauthUserId("@alice:dev.local");
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
         when(passkeyService.finishAuthentication(eq(SID), any()))
-                .thenReturn(new PasskeyService.PasskeyAuthentication("@bob:dev.local"));
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@bob:dev.local", REGISTERED_LONG_AGO));
         DirectoryEntry entry = DirectoryEntry.builder()
                 .phoneDigest("digest").userId("@bob:dev.local").username("bob").displayName("Bob").build();
         when(directoryService.findByUserId("@bob:dev.local")).thenReturn(List.of(entry));
@@ -730,7 +877,7 @@ class LoginFlowControllerTest {
     void passkeyAuthVerifyWithoutStoredUsernameFallsBackToTheMxidLocalpart() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
         when(passkeyService.finishAuthentication(eq(SID), any()))
-                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local"));
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local", REGISTERED_LONG_AGO));
         when(directoryService.findByUserId("@alice:dev.local")).thenReturn(List.of(
                 DirectoryEntry.builder().phoneDigest("digest").userId("@alice:dev.local").displayName("Alice").build()));
         when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
@@ -750,7 +897,7 @@ class LoginFlowControllerTest {
     void passkeyAuthVerifyRefusesNonMatrixUserIdWithoutStoredUsernameAndIssuesNoCode() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
         when(passkeyService.finishAuthentication(eq(SID), any()))
-                .thenReturn(new PasskeyService.PasskeyAuthentication("ga1abc:x"));
+                .thenReturn(new PasskeyService.PasskeyAuthentication("ga1abc:x", REGISTERED_LONG_AGO));
         when(directoryService.findByUserId("ga1abc:x")).thenReturn(List.of(
                 DirectoryEntry.builder().phoneDigest("digest").userId("ga1abc:x").displayName("Alice").build()));
 
@@ -767,11 +914,20 @@ class LoginFlowControllerTest {
 
     // --- Existing-account localpart (ADM-001 S6) --------------------------
 
-    /** Lets a returning login finish in one call: the account already has a passkey. */
+    /**
+     * The account holds only a passkey, so the OTP routes it to PASSKEY_REQUIRED and the session
+     * saved there carries the localpart its completion will hand to MAS.
+     */
     private void stubAccountAlreadyHasPasskey(String userId) {
         when(passkeyService.isEnabled()).thenReturn(true);
         when(passkeyService.hasPasskey(userId)).thenReturn(true);
-        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+    }
+
+    /** The localpart the routed session will emit as preferred_username when it completes. */
+    private String routedPreferredUsername() {
+        org.mockito.ArgumentCaptor<LoginSession> saved = org.mockito.ArgumentCaptor.forClass(LoginSession.class);
+        verify(loginSessionService).save(eq(SID), saved.capture());
+        return saved.getValue().getPreferredUsername();
     }
 
     /** The authorization the issued code carries, which is what the tokens will say. */
@@ -804,12 +960,13 @@ class LoginFlowControllerTest {
 
         performOtp()
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+                .andExpect(jsonPath("$.phase").value("PASSKEY_REQUIRED"));
 
-        OidcAuthorization authorization = issuedAuthorization();
+        org.mockito.ArgumentCaptor<LoginSession> saved = org.mockito.ArgumentCaptor.forClass(LoginSession.class);
+        verify(loginSessionService).save(eq(SID), saved.capture());
         // sub stays the MXID; the localpart is the stored username, not the MXID's.
-        assertEquals("@alice:dev.local", authorization.userId());
-        assertEquals("alice.s", authorization.preferredUsername());
+        assertEquals("@alice:dev.local", saved.getValue().getUserId());
+        assertEquals("alice.s", saved.getValue().getPreferredUsername());
     }
 
     /** The S6 trap: a re-keyed, colon-bearing user_id must not change what MAS is told. */
@@ -821,9 +978,9 @@ class LoginFlowControllerTest {
 
         performOtp()
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+                .andExpect(jsonPath("$.phase").value("PASSKEY_REQUIRED"));
 
-        assertEquals("alice", issuedAuthorization().preferredUsername());
+        assertEquals("alice", routedPreferredUsername());
     }
 
     @Test
@@ -834,9 +991,9 @@ class LoginFlowControllerTest {
 
         performOtp()
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+                .andExpect(jsonPath("$.phase").value("PASSKEY_REQUIRED"));
 
-        assertEquals("alice", issuedAuthorization().preferredUsername());
+        assertEquals("alice", routedPreferredUsername());
     }
 
     @Test
@@ -881,10 +1038,10 @@ class LoginFlowControllerTest {
 
         performOtp()
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.phase").value("PASSKEY_REQUIRED"))
                 .andExpect(jsonPath("$.newUser").value(false));
 
-        assertEquals("alice", issuedAuthorization().preferredUsername());
+        assertEquals("alice", routedPreferredUsername());
     }
 
     // --- Web registration allowlist guard ---------------------------------
@@ -1025,7 +1182,7 @@ class LoginFlowControllerTest {
         DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").username("alice")
                 .displayName("Alice").build();
         when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
-        when(userSecurityService.hasPin("u1")).thenReturn(false);
+        when(userSecurityService.hasPin("u1")).thenReturn(true);
 
         mockMvc.perform(post("/login/otp")
                 .cookie(cookie())
@@ -1033,7 +1190,7 @@ class LoginFlowControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"code\":\"123456\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"))
+                .andExpect(jsonPath("$.phase").value("PIN_REQUIRED"))
                 .andExpect(jsonPath("$.newUser").value(false));
     }
 
@@ -1432,7 +1589,1167 @@ class LoginFlowControllerTest {
         // backfill picks the account up on its next run.
         submitOtpForRecoveredAccount()
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"))
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"))
                 .andExpect(jsonPath("$.newUser").value(false));
+    }
+
+    // --- Publishing the factor inventory on the login state --------------
+
+    /**
+     * A session that has been asked for its PIN has already had its subject resolved by an OTP,
+     * so it can be told what the account holds. That is the whole point: the step where the
+     * server decides to ask for the weaker factor is the step where the client most needs to
+     * know the stronger one exists.
+     */
+    @Test
+    void loginStateReportsTheAccountFactorsOnceTheSubjectIsResolved() throws Exception {
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("@alice:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.isEnabled()).thenReturn(true);
+        when(passkeyService.hasPasskey("@alice:dev.local")).thenReturn(true);
+        when(userSecurityService.hasPin("@alice:dev.local")).thenReturn(true);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_REQUIRED"))
+                .andExpect(jsonPath("$.passkeyRegistered").value(true))
+                .andExpect(jsonPath("$.preferredFactor").value("PASSKEY"));
+    }
+
+    /**
+     * The enumeration oracle, and the reason the report is allow-listed by phase rather than
+     * merely conditioned on a subject being present. If the phone step could answer "does this
+     * account hold a passkey", it would answer for any number anyone submits, for the price of
+     * one unverified request. The session here is given a subject it has not earned, and the
+     * report must still be absent, and no factor may even be looked up.
+     */
+    @Test
+    void loginStateReportsNothingAtThePhoneStepEvenWhenTheSessionCarriesASubject() throws Exception {
+        LoginSession session = session(Phase.PHONE);
+        session.setUserId("@alice:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        // Enabled, so a report would really consult the repository rather than short-circuit.
+        when(passkeyService.isEnabled()).thenReturn(true);
+        when(passkeyService.hasPasskey("@alice:dev.local")).thenReturn(true);
+        when(userSecurityService.hasPin("@alice:dev.local")).thenReturn(true);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PHONE"))
+                .andExpect(jsonPath("$.passkeyRegistered").doesNotExist())
+                .andExpect(jsonPath("$.preferredFactor").doesNotExist());
+
+        verify(passkeyService, org.mockito.Mockito.never()).hasPasskey(any());
+        verify(userSecurityService, org.mockito.Mockito.never()).hasPin(any());
+    }
+
+    /** Same rule one step later: the OTP has been sent, which proves nothing yet. */
+    @Test
+    void loginStateReportsNothingAtTheOtpStep() throws Exception {
+        LoginSession session = session(Phase.OTP_SENT);
+        session.setUserId("@alice:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.isEnabled()).thenReturn(true);
+        when(passkeyService.hasPasskey("@alice:dev.local")).thenReturn(true);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.passkeyRegistered").doesNotExist())
+                .andExpect(jsonPath("$.preferredFactor").doesNotExist());
+
+        verify(passkeyService, org.mockito.Mockito.never()).hasPasskey(any());
+    }
+
+    /**
+     * The oracle stated as the attack rather than as the state: submitting somebody else's
+     * number must not come back with what that account holds.
+     */
+    @Test
+    void submittingAPhoneNumberNeverReportsWhatThatAccountHolds() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
+        when(passkeyService.isEnabled()).thenReturn(true);
+        when(passkeyService.hasPasskey(any())).thenReturn(true);
+
+        mockMvc.perform(post("/login/phone")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phoneNumber\":\"" + PHONE + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("OTP_SENT"))
+                .andExpect(jsonPath("$.passkeyRegistered").doesNotExist())
+                .andExpect(jsonPath("$.preferredFactor").doesNotExist());
+
+        verify(passkeyService, org.mockito.Mockito.never()).hasPasskey(any());
+    }
+
+    /**
+     * The report arrives on the same response that routes the user to the PIN step, so the UI can
+     * offer the passkey at the moment it is asked for the PIN without a second round trip.
+     */
+    @Test
+    void routingToThePinStepCarriesTheFactorReport() throws Exception {
+        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").username("alice")
+                .displayName("Alice").build();
+        stubReturningDigest(entry);
+        when(userSecurityService.hasPin("u1")).thenReturn(true);
+        when(passkeyService.isEnabled()).thenReturn(true);
+        when(passkeyService.hasPasskey("u1")).thenReturn(true);
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_REQUIRED"))
+                .andExpect(jsonPath("$.passkeyRegistered").value(true))
+                .andExpect(jsonPath("$.preferredFactor").value("PASSKEY"));
+    }
+
+    // --- Reaching the passkey from the PIN step ---------------------------
+
+    @Test
+    void passkeyAuthOptionsAreReachableFromThePinStep() throws Exception {
+        ObjectNode options = JsonNodeFactory.instance.objectNode();
+        options.put("challenge", "abc");
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("@alice:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.startAuthentication(SID)).thenReturn(options);
+
+        mockMvc.perform(post("/login/passkey/auth/options")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.publicKey.challenge").value("abc"));
+    }
+
+    /**
+     * The population this is for: an account with a PIN, which is precisely the one the flow
+     * routes to the PIN step and, until now, the one the conflict shut out. Nothing is weakened
+     * by letting it in, because the same assertion already completes this same login one step
+     * earlier from the phone step.
+     */
+    @Test
+    void passkeyAuthFromThePinStepCompletesWithoutSpendingThePin() throws Exception {
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("@alice:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(userSecurityService.hasPin("@alice:dev.local")).thenReturn(true);
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local", REGISTERED_LONG_AGO));
+        DirectoryEntry entry = DirectoryEntry.builder()
+                .phoneDigest("digest").userId("@alice:dev.local").username("alice").displayName("Alice").build();
+        when(directoryService.findByUserId("@alice:dev.local")).thenReturn(List.of(entry));
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        mockMvc.perform(post("/login/passkey/auth/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.newUser").value(false));
+
+        // The PIN is not consumed, and no failed-guess accounting is charged for using the
+        // stronger factor instead of it.
+        verify(userSecurityService, org.mockito.Mockito.never()).validatePinOrThrow(any(), any());
+    }
+
+    /**
+     * A session at the PIN step already knows whose it is, because an OTP proved it. An
+     * assertion resolving to somebody else is a different login wearing this session's state, so
+     * it is refused before anything is accepted and before the directory is read.
+     */
+    @Test
+    void passkeyAuthFromThePinStepRefusesAnAssertionForAnotherAccount() throws Exception {
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("@alice:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@bob:dev.local", REGISTERED_LONG_AGO));
+
+        mockMvc.perform(post("/login/passkey/auth/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("passkey_user_mismatch"));
+
+        verify(directoryService, org.mockito.Mockito.never()).findByUserId(any());
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    /** The phone-keyed directory row stays required from the newly admitted step too. */
+    @Test
+    void passkeyAuthFromThePinStepStillRequiresAPhoneKeyedDirectoryRow() throws Exception {
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("@alice:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local", REGISTERED_LONG_AGO));
+        DirectoryEntry rowWithoutPhone = DirectoryEntry.builder()
+                .userId("@alice:dev.local").username("alice").displayName("Alice").build();
+        when(directoryService.findByUserId("@alice:dev.local")).thenReturn(List.of(rowWithoutPhone));
+
+        mockMvc.perform(post("/login/passkey/auth/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("passkey_user_not_registered"));
+
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    /**
+     * Widening the phase set must not reach the step that belongs to an account which does not
+     * exist yet, or an assertion would be a route into account creation.
+     */
+    @Test
+    void passkeyAuthIsNotReachableFromTheProfileStep() throws Exception {
+        LoginSession session = session(Phase.PROFILE_REQUIRED);
+        session.setNewUser(true);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(post("/login/passkey/auth/options")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("unexpected_step"));
+
+        mockMvc.perform(post("/login/passkey/auth/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("unexpected_step"));
+
+        verify(passkeyService, org.mockito.Mockito.never()).startAuthentication(any());
+        verify(passkeyService, org.mockito.Mockito.never()).finishAuthentication(any(), any());
+        verify(directoryService, org.mockito.Mockito.never()).upsertByDigest(any(), any(), any(), any());
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    /**
+     * An enrollment session carries no OIDC request, so it has no authorization code to issue and
+     * must never enter the sign-in ceremony. Refused by name rather than by step, so a later
+     * widening of the phase set cannot turn an enrollment into a login.
+     */
+    @Test
+    void passkeyAuthIsNotReachableFromAnEnrollmentSession() throws Exception {
+        LoginSession session = enrollSession();
+        session.setPhase(Phase.PIN_REQUIRED);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(post("/login/passkey/auth/options")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("enroll_session_cannot_sign_in"));
+
+        mockMvc.perform(post("/login/passkey/auth/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("enroll_session_cannot_sign_in"));
+
+        verify(passkeyService, org.mockito.Mockito.never()).finishAuthentication(any(), any());
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    /** The double-submit check still runs first on the newly reachable step. */
+    @Test
+    void passkeyAuthFromThePinStepStillRequiresTheCsrfToken() throws Exception {
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("@alice:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(post("/login/passkey/auth/verify")
+                .cookie(cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("csrf_failed"));
+
+        verify(passkeyService, org.mockito.Mockito.never()).finishAuthentication(any(), any());
+    }
+
+    // --- Signup order: passkey first, PIN as the fallback -----------------
+
+    @Test
+    void submitProfileOffersThePasskeyBeforeAskingForAPin() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PROFILE_REQUIRED)));
+        when(usernamePolicy.normalizeAndValidate("Alice")).thenReturn("alice");
+        when(directoryService.isUsernameTaken("alice")).thenReturn(false);
+        when(matrixProvisioningService.buildUserId(eq("alice"), any())).thenReturn("@alice:gua.local");
+        when(matrixAdminClient.userExists("@alice:gua.local")).thenReturn(false);
+        when(passkeyService.isEnabled()).thenReturn(true);
+
+        mockMvc.perform(post("/login/profile")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"Alice\",\"displayName\":\"Alice A\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"))
+                .andExpect(jsonPath("$.newUser").value(true));
+
+        verify(userSecurityService, org.mockito.Mockito.never()).setInitialPin(any(), any());
+    }
+
+    /**
+     * The one kind of unavailability the server establishes on its own, from configuration
+     * rather than from anything a caller says: this deployment cannot run a passkey ceremony at
+     * all, so the account is asked for the fallback directly instead of being shown an offer
+     * that would only fail.
+     */
+    @Test
+    void submitProfileFallsStraightToPinSetupWhenTheDeploymentHasNoPasskeys() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PROFILE_REQUIRED)));
+        when(usernamePolicy.normalizeAndValidate("Alice")).thenReturn("alice");
+        when(directoryService.isUsernameTaken("alice")).thenReturn(false);
+        when(matrixProvisioningService.buildUserId(eq("alice"), any())).thenReturn("@alice:gua.local");
+        when(matrixAdminClient.userExists("@alice:gua.local")).thenReturn(false);
+        when(passkeyService.isEnabled()).thenReturn(false);
+
+        mockMvc.perform(post("/login/profile")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"Alice\",\"displayName\":\"Alice A\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+    }
+
+    /**
+     * Declined, failed, or impossible on this device all arrive at the same endpoint, and all of
+     * them must land on the PIN step. Completing here instead would finish onboarding with no
+     * second factor at all, which is the outcome the PIN exists to prevent.
+     */
+    @Test
+    void decliningThePasskeyDuringSignupRoutesToPinSetupAndNeverToCompletion() throws Exception {
+        LoginSession session = newAccountAtPasskeySetup();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(post("/login/passkey/setup-skip")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    /**
+     * A ceremony that fails leaves the session where it was, so the same door is still open: the
+     * client retries or gives up, and giving up reaches the PIN step rather than the end.
+     */
+    @Test
+    void aFailedPasskeyCeremonyDuringSignupStillReachesPinSetup() throws Exception {
+        LoginSession session = newAccountAtPasskeySetup();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        org.mockito.Mockito.doThrow(new LoginFlowException(org.springframework.http.HttpStatus.BAD_REQUEST,
+                "passkey_registration_failed", "Passkey setup was not accepted. Please try again."))
+                .when(loginFactorEnrollmentService).registerPasskey(eq(SID), eq(session), any());
+
+        mockMvc.perform(post("/login/passkey/register/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("passkey_registration_failed"));
+
+        mockMvc.perform(post("/login/passkey/setup-skip")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    /**
+     * The product rule in one test: a new account that registers a passkey is finished. It is
+     * never asked for a PIN, because the PIN is the fallback for whoever could not do this.
+     */
+    @Test
+    void registeringThePasskeyDuringSignupCompletesWithNoPinDemanded() throws Exception {
+        LoginSession session = newAccountAtPasskeySetup();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(loginFactorEnrollmentService.registerPasskey(eq(SID), eq(session), any())).thenReturn(true);
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        mockMvc.perform(post("/login/passkey/register/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+
+        verify(userSecurityService, org.mockito.Mockito.never()).setInitialPin(any(), any());
+    }
+
+    /**
+     * A returning account reaches the offer at the end of a PIN sign-in, and is done when it
+     * declines, exactly as before.
+     */
+    @Test
+    void decliningThePasskeyAsAReturningUserStillCompletes() throws Exception {
+        LoginSession session = session(Phase.PASSKEY_SETUP);
+        session.setUserId("@alice:gua.local");
+        session.setNewUser(false);
+        session.setAuthenticatedFactor(SessionFactor.PIN);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        mockMvc.perform(post("/login/passkey/setup-skip")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+    }
+
+    /** The PIN step keeps its own double-submit check, which is the only way into it. */
+    @Test
+    void pinSetupStillRequiresTheCsrfToken() throws Exception {
+        LoginSession session = session(Phase.PIN_SETUP);
+        session.setUserId("@alice:gua.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(post("/login/pin-setup")
+                .cookie(cookie())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pin\":\"123456\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("csrf_failed"));
+
+        verify(loginFactorEnrollmentService, org.mockito.Mockito.never()).setUpFirstPin(any(), any());
+    }
+
+    /** A brand-new account sitting at the passkey offer, which is where signup now goes first. */
+    private LoginSession newAccountAtPasskeySetup() {
+        LoginSession session = session(Phase.PASSKEY_SETUP);
+        session.setUserId("@alice:gua.local");
+        session.setPreferredUsername("alice");
+        session.setNewUser(true);
+        return session;
+    }
+
+    // --- D1: PASSKEY_REQUIRED ---------------------------------------------
+
+    /** An account holding a passkey and no PIN, at the OTP step. */
+    private void passkeyOnlyAccountAtOtpStep(boolean deploymentHasPasskeys) {
+        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("@alice:dev.local")
+                .username("alice").displayName("Alice").build();
+        stubReturningDigest(entry);
+        when(passkeyService.isEnabled()).thenReturn(deploymentHasPasskeys);
+        when(passkeyService.hasPasskey("@alice:dev.local")).thenReturn(true);
+        when(userSecurityService.hasPin("@alice:dev.local")).thenReturn(false);
+    }
+
+    private LoginSession passkeyRequiredSession() {
+        LoginSession session = session(Phase.PASSKEY_REQUIRED);
+        session.setUserId("@alice:dev.local");
+        session.setPreferredUsername("alice");
+        session.setOtpVerified(true);
+        return session;
+    }
+
+    private org.springframework.test.web.servlet.ResultActions postJson(String path, String body) throws Exception {
+        return mockMvc.perform(post(path)
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body));
+    }
+
+    @Test
+    void anSmsCodeRoutesAPasskeyOnlyAccountToPasskeyRequiredAndIssuesNoCode() throws Exception {
+        passkeyOnlyAccountAtOtpStep(true);
+
+        performOtp()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PASSKEY_REQUIRED"))
+                .andExpect(jsonPath("$.passkeyRegistered").value(true))
+                .andExpect(jsonPath("$.preferredFactor").value("PASSKEY"))
+                .andExpect(jsonPath("$.passkeysEnabled").value(true))
+                .andExpect(jsonPath("$.redirectUrl").doesNotExist());
+
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+        verify(userSecurityService, org.mockito.Mockito.never()).recordSuccessfulLogin(any());
+    }
+
+    /**
+     * The stored-credential predicate. With passkeys switched off the account cannot present its
+     * passkey, and it must still not be finished by the SMS code or routed to a PIN it would get
+     * to choose. The UI is told the deployment cannot run the ceremony, so it leads with recovery.
+     */
+    @Test
+    void aStoredPasskeyStillGatesTheSignInWhenTheDeploymentHasPasskeysSwitchedOff() throws Exception {
+        passkeyOnlyAccountAtOtpStep(false);
+
+        performOtp()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PASSKEY_REQUIRED"))
+                .andExpect(jsonPath("$.passkeysEnabled").value(false))
+                .andExpect(jsonPath("$.passkeyRegistered").value(false));
+
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+        verify(loginFactorEnrollmentService, org.mockito.Mockito.never()).setUpFirstPin(any(), any());
+    }
+
+    @Test
+    void thePinStepIsRefusedAtPasskeyRequired() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(passkeyRequiredSession()));
+
+        postJson("/login/pin", "{\"pin\":\"284917\"}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("unexpected_step"));
+        postJson("/login/pin-setup", "{\"pin\":\"284917\"}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("unexpected_step"));
+        postJson("/login/passkey/setup-skip", "{}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("unexpected_step"));
+
+        verify(userSecurityService, org.mockito.Mockito.never()).validatePinOrThrow(any(), any());
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    @Test
+    void thePasskeyAssertionIsReachableFromPasskeyRequiredAndCompletesWithIt() throws Exception {
+        LoginSession session = passkeyRequiredSession();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        ObjectNode options = JsonNodeFactory.instance.objectNode();
+        options.put("challenge", "abc");
+        when(passkeyService.startAuthentication(SID)).thenReturn(options);
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local", REGISTERED_LONG_AGO));
+        when(directoryService.findByUserId("@alice:dev.local")).thenReturn(List.of(DirectoryEntry.builder()
+                .phoneDigest("digest").userId("@alice:dev.local").username("alice").displayName("Alice").build()));
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        postJson("/login/passkey/auth/options", "{}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.publicKey.challenge").value("abc"));
+        postJson("/login/passkey/auth/verify", "{\"credential\":{\"id\":\"cred-1\"}}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+
+        assertEquals(SessionFactor.PASSKEY, session.getAuthenticatedFactor());
+        assertEquals(false, issuedAuthorization().endOtherSessions());
+    }
+
+    @Test
+    void anAssertionForAnotherAccountIsRefusedAtPasskeyRequired() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(passkeyRequiredSession()));
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@bob:dev.local", REGISTERED_LONG_AGO));
+
+        postJson("/login/passkey/auth/verify", "{\"credential\":{\"id\":\"cred-1\"}}")
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("passkey_user_mismatch"));
+
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    // --- complete() guard and the ENROLLED race ----------------------------
+
+    /**
+     * The backstop. Every route sets the factor before completing; this proves the completion
+     * itself refuses when one does not, whatever the route claimed.
+     */
+    @Test
+    void completionIsRefusedForASessionThatHasNotAuthenticatedWithAFactor() throws Exception {
+        LoginSession session = session(Phase.PASSKEY_SETUP);
+        session.setUserId("@alice:gua.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        // A registration that did not create the account's first factor, for a session holding none.
+        when(loginFactorEnrollmentService.registerPasskey(eq(SID), eq(session), any())).thenReturn(false);
+
+        postJson("/login/passkey/register/verify", "{\"credential\":{\"id\":\"cred-1\"}}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("factor_required"));
+
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+        verify(userSecurityService, org.mockito.Mockito.never()).recordSuccessfulLogin(any());
+        verify(loginSessionService, org.mockito.Mockito.never()).delete(any());
+    }
+
+    /** A session persisted before the factor field existed carries none, and gets factor_required. */
+    @Test
+    void aSessionFromBeforeTheRolloutCannotFinishFromPasskeySetup() throws Exception {
+        LoginSession session = session(Phase.PASSKEY_SETUP);
+        session.setUserId("@alice:gua.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        postJson("/login/passkey/setup-skip", "{}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    /**
+     * Two sessions for one factorless account both reach setup. The one that finishes second
+     * finds, under the row lock, a factor it did not authenticate with, and is refused before
+     * storing its own.
+     */
+    @Test
+    void theSecondSessionToSetAFactorOnTheSameAccountIsRefused() throws Exception {
+        LoginSession pinSetup = session(Phase.PIN_SETUP);
+        pinSetup.setUserId("@alice:gua.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(pinSetup));
+        org.mockito.Mockito.doThrow(new LoginFlowException(org.springframework.http.HttpStatus.CONFLICT,
+                "factor_required", "This account is already protected."))
+                .when(loginFactorEnrollmentService).setUpFirstPin("@alice:gua.local", "284917");
+
+        postJson("/login/pin-setup", "{\"pin\":\"284917\"}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("factor_required"));
+
+        LoginSession passkeySetup = session(Phase.PASSKEY_SETUP);
+        passkeySetup.setUserId("@alice:gua.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(passkeySetup));
+        when(loginFactorEnrollmentService.registerPasskey(eq(SID), eq(passkeySetup), any()))
+                .thenThrow(new LoginFlowException(org.springframework.http.HttpStatus.CONFLICT,
+                        "factor_required", "This account is already protected."));
+
+        postJson("/login/passkey/register/verify", "{\"credential\":{\"id\":\"cred-1\"}}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("factor_required"));
+
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+        assertEquals(null, pinSetup.getAuthenticatedFactor());
+        assertEquals(null, passkeySetup.getAuthenticatedFactor());
+    }
+
+    /** A PIN sign-in that registers a passkey afterwards keeps PIN as the factor it earned. */
+    @Test
+    void registeringAPasskeyAfterAPinSignInKeepsThePinAsTheSessionFactor() throws Exception {
+        LoginSession session = session(Phase.PASSKEY_SETUP);
+        session.setUserId("@alice:gua.local");
+        session.setAuthenticatedFactor(SessionFactor.PIN);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(loginFactorEnrollmentService.registerPasskey(eq(SID), eq(session), any())).thenReturn(false);
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        postJson("/login/passkey/register/verify", "{\"credential\":{\"id\":\"cred-1\"}}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+
+        assertEquals(SessionFactor.PIN, session.getAuthenticatedFactor());
+    }
+
+    // --- Delayed account recovery ------------------------------------------
+
+    private LoginSession pinRequiredSessionAfterOtp() {
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("@alice:dev.local");
+        session.setPreferredUsername("alice");
+        session.setOtpVerified(true);
+        return session;
+    }
+
+    private static final AccountRecoveryState PENDING = new AccountRecoveryState(
+            AccountRecoveryState.Status.PENDING, null, 1_760_000_000L, 1_760_604_800L, 604_800L, 604_800L);
+
+    @Test
+    void theFactorStepsPublishTheRecoveryStateAfterAnOtp() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(passkeyRequiredSession()));
+        when(accountRecoveryService.stateFor("@alice:dev.local")).thenReturn(PENDING);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PASSKEY_REQUIRED"))
+                .andExpect(jsonPath("$.enrollment").value(false))
+                .andExpect(jsonPath("$.recovery.status").value("PENDING"))
+                .andExpect(jsonPath("$.recovery.completableAtEpochSeconds").value(1_760_000_000L))
+                .andExpect(jsonPath("$.recovery.expiresAtEpochSeconds").value(1_760_604_800L))
+                .andExpect(jsonPath("$.recovery.availableAtEpochSeconds").doesNotExist());
+
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(pinRequiredSessionAfterOtp()));
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.recovery.status").value("PENDING"));
+    }
+
+    /** Every condition recovery needs, each one taken away in turn. */
+    @Test
+    void recoveryIsUnavailableOutsideAFactorStepReachedByOtp() throws Exception {
+        LoginSession noOtp = passkeyRequiredSession();
+        noOtp.setOtpVerified(false);
+
+        LoginSession reauth = pinRequiredSessionAfterOtp();
+        reauth.setReauthUserId("@alice:dev.local");
+
+        LoginSession enrollment = enrollSession();
+        enrollment.setOtpVerified(true);
+        enrollment.setPhase(Phase.PIN_REQUIRED);
+
+        // A passkey-first sign-in has not proved the number.
+        LoginSession passkeyFirst = session(Phase.PHONE);
+        passkeyFirst.setIntent(LoginSession.Intent.PASSKEY);
+        passkeyFirst.setUserId("@alice:dev.local");
+
+        LoginSession wrongStep = pinRequiredSessionAfterOtp();
+        wrongStep.setPhase(Phase.PIN_SETUP);
+
+        LoginSession noSubject = pinRequiredSessionAfterOtp();
+        noSubject.setUserId(null);
+
+        for (LoginSession session : List.of(noOtp, reauth, enrollment, passkeyFirst, wrongStep, noSubject)) {
+            when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+            // Sent as an explicit null, as the contract states, rather than left out.
+            mockMvc.perform(get("/login/context").cookie(cookie()))
+                    .andExpect(status().isOk())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                            .string(org.hamcrest.Matchers.containsString("\"recovery\":null")));
+            postJson("/login/recovery/start", "{}")
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.code").value("recovery_unavailable"));
+            postJson("/login/recovery/complete", "{\"newPin\":\"284917\"}")
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.code").value("recovery_unavailable"));
+        }
+
+        org.mockito.Mockito.verifyNoInteractions(accountRecoveryService, tokenRevocationService);
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    @Test
+    void startingRecoveryOpensTheEpisodeAndReturnsTheState() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(passkeyRequiredSession()));
+        when(phoneNumberMasker.mask(PHONE)).thenReturn("••••4567");
+        when(accountRecoveryService.stateFor("@alice:dev.local")).thenReturn(PENDING);
+
+        postJson("/login/recovery/start", "{}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PASSKEY_REQUIRED"))
+                .andExpect(jsonPath("$.recovery.status").value("PENDING"));
+
+        verify(accountRecoveryService).start("@alice:dev.local", "••••4567", "127.0.0.1");
+        // Recovery sends no SMS.
+        verify(otpService, org.mockito.Mockito.never()).sendOtp(any(), any(), any());
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    @Test
+    void startingRecoveryOnARecentlyUsedAccountIsACooldownWithRetryAfter() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(pinRequiredSessionAfterOtp()));
+        when(accountRecoveryService.start(eq("@alice:dev.local"), any(), any()))
+                .thenThrow(new AccountRecoveryCooldownException("Account recovery cannot be started yet", 3600L));
+
+        postJson("/login/recovery/start", "{}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("recovery_cooldown_active"))
+                .andExpect(jsonPath("$.retryAfterSeconds").value(3600))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Retry-After", "3600"));
+    }
+
+    /** E1, E2: a completed recovery revokes this service's tokens and marks the ID token. */
+    @Test
+    void completingRecoveryIssuesACodeWhoseTokensEndEveryOtherSession() throws Exception {
+        LoginSession session = passkeyRequiredSession();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        postJson("/login/recovery/complete", "{\"newPin\":\" 284917 \"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.redirectUrl").value(CALLBACK + "?code=auth-code&state=xyz"));
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(accountRecoveryService, tokenRevocationService,
+                authorizationService);
+        order.verify(accountRecoveryService).complete("@alice:dev.local", "284917");
+        order.verify(tokenRevocationService).revokeAllTokens("@alice:dev.local");
+        order.verify(authorizationService).issueCode(any(), eq(CALLBACK), any());
+        assertEquals(SessionFactor.RECOVERY, session.getAuthenticatedFactor());
+        assertEquals(true, issuedAuthorization().endOtherSessions());
+    }
+
+    @Test
+    void completingARecoveryThatIsNotReadyReturnsTheFreshStateAndIssuesNothing() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(pinRequiredSessionAfterOtp()));
+        org.mockito.Mockito.doThrow(new AccountRecoveryNotReadyException("Account recovery is not ready to complete",
+                new AccountRecoveryState(AccountRecoveryState.Status.AVAILABLE, null, null, null, 604_800L, 604_800L)))
+                .when(accountRecoveryService).complete("@alice:dev.local", "284917");
+
+        postJson("/login/recovery/complete", "{\"newPin\":\"284917\"}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("recovery_not_ready"))
+                .andExpect(jsonPath("$.recovery.status").value("AVAILABLE"));
+
+        org.mockito.Mockito.verifyNoInteractions(tokenRevocationService);
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+        verify(userSecurityService, org.mockito.Mockito.never()).recordSuccessfulLogin(any());
+    }
+
+    @Test
+    void theRecoveryEndpointsCheckTheCsrfToken() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(passkeyRequiredSession()));
+
+        for (String path : new String[] { "/login/recovery/start", "/login/recovery/complete" }) {
+            mockMvc.perform(post(path)
+                    .cookie(cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"newPin\":\"284917\"}"))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.code").value("csrf_failed"));
+        }
+
+        org.mockito.Mockito.verifyNoInteractions(accountRecoveryService, tokenRevocationService);
+    }
+
+    // --- R2: adding a factor from settings needs a step-up ------------------------------
+
+    /**
+     * A bearer session alone cannot add a passkey. The session the enroll endpoint hands out
+     * starts before the setup step, and arriving at the setup step without having proved the
+     * account is refused, so neither the ceremony nor the credential storage is reachable.
+     */
+    @Test
+    void aBearerSessionAloneCannotAddAPasskey() throws Exception {
+        LoginSession session = enrollSession();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        // At the step-up, the setup endpoints are not this session's step at all.
+        mockMvc.perform(post("/login/passkey/register/options")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("unexpected_step"));
+
+        // And a session that reached the setup step with nothing proved is refused there too.
+        session.setPhase(Phase.PASSKEY_SETUP);
+        mockMvc.perform(post("/login/passkey/register/verify")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("step_up_required"));
+
+        verify(passkeyService, org.mockito.Mockito.never()).startRegistration(any(), any());
+        verify(passkeyService, org.mockito.Mockito.never()).finishRegistration(any(), any(), any());
+    }
+
+    /** The same for a PIN: nothing is stored by a session that has proved nothing. */
+    @Test
+    void aBearerSessionAloneCannotAddAPin() throws Exception {
+        LoginSession session = enrollSession();
+        session.setEnrollTarget(LoginSession.EnrollTarget.PIN);
+        session.setPhase(Phase.PIN_SETUP);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(post("/login/pin-setup")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"pin\":\"284917\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("step_up_required"));
+
+        verify(loginFactorEnrollmentService, org.mockito.Mockito.never()).setUpEnrolledPin(any(), any());
+        verify(loginFactorEnrollmentService, org.mockito.Mockito.never()).setUpFirstPin(any(), any());
+    }
+
+    /**
+     * An account that holds a passkey adds a PIN by producing the passkey, and is never also
+     * asked for a PIN it does not have. The assertion is the step-up ceremony, which demands
+     * user verification, not the sign-in one.
+     */
+    @Test
+    void anExistingPasskeyAuthorizesAddingAPin() throws Exception {
+        LoginSession session = enrollSession();
+        session.setEnrollTarget(LoginSession.EnrollTarget.PIN);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.hasPasskey("@alice:gua.local")).thenReturn(true);
+        when(passkeyService.finishStepUpAssertion(eq(SID), any())).thenReturn(
+                new PasskeyService.PasskeyAuthentication("@alice:gua.local", REGISTERED_LONG_AGO));
+
+        mockMvc.perform(post("/login/enroll/stepup/passkey/verify")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+
+        // Nothing asked for the PIN on the way, which is the point of producing the stronger factor.
+        verify(userSecurityService, org.mockito.Mockito.never()).validatePinOrThrow(any(), any());
+
+        // And the PIN step now stores the new PIN and ends the enrollment without a code.
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        mockMvc.perform(post("/login/pin-setup")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"pin\":\"284917\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.redirectUrl").value(ENROLL_APP_SCHEME));
+
+        verify(loginFactorEnrollmentService).setUpEnrolledPin("@alice:gua.local", "284917");
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    /** An account that holds a PIN adds a passkey by producing the PIN. */
+    @Test
+    void anExistingPinAuthorizesAddingAPasskey() throws Exception {
+        LoginSession session = enrollSession();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(userSecurityService.hasPin("@alice:gua.local")).thenReturn(true);
+
+        mockMvc.perform(post("/login/enroll/stepup/pin")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"pin\":\"284917\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"));
+
+        verify(userSecurityService).validatePinOrThrow("@alice:gua.local", "284917");
+    }
+
+    /** An account with no PIN is told so, rather than counting a guess against a PIN it lacks. */
+    @Test
+    void thePinStepUpIsRefusedWhenTheAccountHasNoPin() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(enrollSession()));
+
+        mockMvc.perform(post("/login/enroll/stepup/pin")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"pin\":\"284917\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("pin_not_set"));
+
+        verify(userSecurityService, org.mockito.Mockito.never()).validatePinOrThrow(any(), any());
+    }
+
+    /**
+     * An account that holds no factor proves itself with its own number and a code sent to it,
+     * which is the fresh reauthentication the owner asked for before a first strong factor.
+     */
+    @Test
+    void anAccountWithNoFactorReauthenticatesWithItsNumberAndACode() throws Exception {
+        LoginSession session = enrollSession();
+        session.setEnrollTarget(LoginSession.EnrollTarget.PIN);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(post("/login/enroll/stepup/otp/send")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phoneNumber\":\"" + PHONE + "\",\"locale\":\"pt-BR\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("ENROLL_STEP_UP"));
+
+        verify(accountReauthService).startReauth(eq("@alice:gua.local"), eq(PHONE), any(), eq("pt-BR"));
+
+        mockMvc.perform(post("/login/enroll/stepup/otp/verify")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phoneNumber\":\"" + PHONE + "\",\"code\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+
+        verify(accountReauthService).verifyPhoneOtp(eq("@alice:gua.local"), eq(PHONE), eq("123456"),
+                eq("ENROLL_STEP_UP"), any());
+    }
+
+    /**
+     * The SMS proof is only for an account with nothing stronger. An account holding a passkey
+     * or a PIN must produce it, so a code sent to the number can never stand in for the factor
+     * the account already has.
+     */
+    @Test
+    void theOtpStepUpIsRefusedForAnAccountThatHoldsAFactor() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(enrollSession()));
+        when(passkeyService.hasPasskey("@alice:gua.local")).thenReturn(true);
+
+        mockMvc.perform(post("/login/enroll/stepup/otp/send")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phoneNumber\":\"" + PHONE + "\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("step_up_factor_available"));
+
+        mockMvc.perform(post("/login/enroll/stepup/otp/verify")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phoneNumber\":\"" + PHONE + "\",\"code\":\"123456\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("step_up_factor_available"));
+
+        org.mockito.Mockito.verifyNoInteractions(accountReauthService);
+    }
+
+    /** A passkey that answers for another account never authorizes this one's enrollment. */
+    @Test
+    void aPasskeyFromAnotherAccountDoesNotSettleTheStepUp() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(enrollSession()));
+        when(passkeyService.finishStepUpAssertion(eq(SID), any())).thenReturn(
+                new PasskeyService.PasskeyAuthentication("@mallory:gua.local", REGISTERED_LONG_AGO));
+
+        mockMvc.perform(post("/login/enroll/stepup/passkey/verify")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("passkey_user_mismatch"));
+    }
+
+    /** The step-up steps belong to enrollment sessions; a sign-in cannot walk into them. */
+    @Test
+    void theEnrollmentStepUpIsNotReachableFromASignIn() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PIN_REQUIRED)));
+
+        for (String path : new String[] { "/login/enroll/stepup/passkey/options", "/login/enroll/stepup/pin",
+                "/login/enroll/stepup/otp/send", "/login/enroll/stepup/otp/verify" }) {
+            mockMvc.perform(post(path)
+                    .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"pin\":\"284917\",\"phoneNumber\":\"" + PHONE + "\",\"code\":\"123456\"}"))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.code").value("unexpected_step"));
+        }
+    }
+
+    /** Every enrollment step-up step carries the double-submit check. */
+    @Test
+    void theEnrollmentStepUpStepsCheckTheCsrfToken() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(enrollSession()));
+
+        for (String path : new String[] { "/login/enroll/stepup/passkey/options",
+                "/login/enroll/stepup/passkey/verify", "/login/enroll/stepup/pin",
+                "/login/enroll/stepup/otp/send", "/login/enroll/stepup/otp/verify" }) {
+            mockMvc.perform(post(path)
+                    .cookie(cookie())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"pin\":\"284917\",\"phoneNumber\":\"" + PHONE
+                            + "\",\"code\":\"123456\",\"credential\":{\"id\":\"c\"}}"))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.code").value("csrf_failed"));
+        }
+
+        org.mockito.Mockito.verifyNoInteractions(accountReauthService);
+        verify(passkeyService, org.mockito.Mockito.never()).finishStepUpAssertion(any(), any());
+    }
+
+    /**
+     * The enrollment step-up publishes what the account can produce, so the web knows which
+     * proof to offer, and publishes no recovery: recovery belongs to a sign-in that cannot get
+     * in, not to a signed-in user adding a factor.
+     */
+    @Test
+    void theStepUpStatePublishesTheAccountsFactorsAndNoRecovery() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(enrollSession()));
+        when(passkeyService.isEnabled()).thenReturn(true);
+        when(passkeyService.hasPasskey("@alice:gua.local")).thenReturn(true);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("ENROLL_STEP_UP"))
+                .andExpect(jsonPath("$.enrollment").value(true))
+                .andExpect(jsonPath("$.passkeyRegistered").value(true))
+                .andExpect(jsonPath("$.preferredFactor").value("PASSKEY"))
+                .andExpect(jsonPath("$.passkeysEnabled").value(true))
+                .andExpect(jsonPath("$.recovery").doesNotExist());
+
+        org.mockito.Mockito.verifyNoInteractions(accountRecoveryService);
+    }
+
+    /**
+     * The step-up says whether the account holds a PIN as well, so the web offers "Use my PIN
+     * instead" beside the passkey only to an account that has one. Without it a passkey-only
+     * holder was offered the switch, typed a PIN and was refused with pin_not_set.
+     */
+    @Test
+    void theStepUpStateSaysWhetherTheAccountHoldsAPin() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(enrollSession()));
+        when(passkeyService.isEnabled()).thenReturn(true);
+        when(passkeyService.hasPasskey("@alice:gua.local")).thenReturn(true);
+        when(userSecurityService.hasPin("@alice:gua.local")).thenReturn(false);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("ENROLL_STEP_UP"))
+                .andExpect(jsonPath("$.passkeyRegistered").value(true))
+                // The account the finding was about: a passkey and no PIN, where preferredFactor
+                // alone says PASSKEY and cannot tell the web whether a PIN sits behind it.
+                .andExpect(jsonPath("$.pinRegistered").value(false));
+
+        when(userSecurityService.hasPin("@alice:gua.local")).thenReturn(true);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.pinRegistered").value(true));
+    }
+
+    /**
+     * And nowhere else. An enrollment session was minted from the caller's own bearer token, so
+     * it repeats an answer GET /security/pin/status already gives that caller. A sign-in session
+     * has proved a phone number and nothing more, and preferredFactor deliberately answers
+     * PASSKEY there without saying whether a PIN sits behind it.
+     */
+    @Test
+    void theSignInStepsStillSayNothingAboutAPinBehindAPasskey() throws Exception {
+        LoginSession session = session(Phase.PASSKEY_REQUIRED);
+        session.setUserId("@alice:dev.local");
+        session.setOtpVerified(true);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.isEnabled()).thenReturn(true);
+        when(passkeyService.hasPasskey("@alice:dev.local")).thenReturn(true);
+        when(userSecurityService.hasPin("@alice:dev.local")).thenReturn(true);
+        when(accountRecoveryService.stateFor("@alice:dev.local")).thenReturn(PENDING);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PASSKEY_REQUIRED"))
+                .andExpect(jsonPath("$.passkeyRegistered").value(true))
+                .andExpect(jsonPath("$.preferredFactor").value("PASSKEY"))
+                .andExpect(jsonPath("$.pinRegistered").doesNotExist());
+    }
+
+    /**
+     * The two waits travel with the recovery state, because the screen that explains them has to
+     * say what this deployment enforces. The dev target runs them in minutes and the web used to
+     * assert seven days there.
+     */
+    @Test
+    void theRecoveryStateCarriesTheConfiguredWaits() throws Exception {
+        LoginSession session = pinRequiredSessionAfterOtp();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(accountRecoveryService.stateFor("@alice:dev.local")).thenReturn(PENDING);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.recovery.dormancySeconds").value(604_800))
+                .andExpect(jsonPath("$.recovery.waitSeconds").value(604_800));
+    }
+
+    @Test
+    void anEnrollmentSessionSaysSoOnItsState() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(enrollSession()));
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enrollment").value(true));
     }
 }

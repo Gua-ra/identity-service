@@ -53,6 +53,12 @@ class IdentityOrchestrationServiceTest {
         private PhoneNumberHasher phoneNumberHasher;
         @Mock
         private UserSecurityService userSecurityService;
+        /**
+         * The mock answers hasPasskey()=false unless a test says otherwise, so an account holds a
+         * passkey on this path only where a test stubs one.
+         */
+        @Mock
+        private me.sarahlacerda.gua.identityservice.service.security.PasskeyService passkeyService;
         @Mock
         private TrustedDeviceService trustedDeviceService;
         @Mock
@@ -86,13 +92,18 @@ class IdentityOrchestrationServiceTest {
                                 phoneNumberHasher,
                                 new PhoneNumberMasker(),
                                 userSecurityService,
+                                // Real policy over the mocked collaborators, so the existing hasPin
+                                // stubs still drive the PIN step and the delegation is exercised.
+                                new me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy(
+                                                userSecurityService, passkeyService),
                                 trustedDeviceService,
                                 deviceNotificationService,
                                 usernamePolicy,
                                 meterRegistry,
                                 new RegistrationGuard(loginFlowProperties, new PhoneNumberNormalizer(),
                                                 directoryService, phoneNumberHasher, matrixAdminClient),
-                                accountGenesisService);
+                                accountGenesisService,
+                                new me.sarahlacerda.gua.identityservice.service.security.PinPolicy());
         }
 
         @Test
@@ -183,10 +194,10 @@ class IdentityOrchestrationServiceTest {
                                 .thenReturn(session);
                 when(trustedDeviceService.registerDevice(userId, "device-1", metadata)).thenReturn(true);
 
-                MatrixSession result = service.completeSignup("signup-abc", "Alice", "Alice L.", "654321", metadata);
+                MatrixSession result = service.completeSignup("signup-abc", "Alice", "Alice L.", "284917", metadata);
 
                 verify(signupTokenService).consume("signup-abc");
-                verify(userSecurityService).setInitialPin(userId, "654321");
+                verify(userSecurityService).setInitialPin(userId, "284917");
                 verify(directoryService).upsertByDigest(eq(digest), anyString(), eq(userId), eq("Alice L."));
                 verify(userSecurityService).recordSuccessfulLogin(userId);
                 verify(deviceNotificationService).notifyNewDevice(userId, "device-1", metadata);
@@ -287,7 +298,7 @@ class IdentityOrchestrationServiceTest {
                 enableGate("+12025550123");
                 MatrixSession session = stubSuccessfulSignup("+12025550123");
 
-                MatrixSession result = service.completeSignup("token", "alice", "Alice", null, null);
+                MatrixSession result = service.completeSignup("token", "alice", "Alice", "284917", null);
 
                 verify(signupTokenService).consume("token");
                 verify(directoryService).upsertByDigest(eq("digest"), anyString(), eq("@alice:gua.global"), eq("Alice"));
@@ -300,7 +311,7 @@ class IdentityOrchestrationServiceTest {
                 loginFlowProperties.getRegistration().setWebAllowlist(List.of("+12025550199"));
                 MatrixSession session = stubSuccessfulSignup("+12025550123");
 
-                MatrixSession result = service.completeSignup("token", "alice", "Alice", null, null);
+                MatrixSession result = service.completeSignup("token", "alice", "Alice", "284917", null);
 
                 verify(signupTokenService).consume("token");
                 assertThat(result).isEqualTo(session);
@@ -320,12 +331,12 @@ class IdentityOrchestrationServiceTest {
 
                 when(phoneNumberHasher.digest(phone)).thenReturn(digest);
                 when(directoryService.findByDigest(digest)).thenReturn(Optional.of(existingEntry));
-                when(userSecurityService.hasPin(existingEntry.getUserId())).thenReturn(false);
+                when(userSecurityService.hasPin(existingEntry.getUserId())).thenReturn(true);
                 when(matrixProvisioningService.ensureSessionForUser(existingEntry.getUserId(), phone, "Existing User",
                                 true))
                                 .thenReturn(session);
 
-                service.verifyOtpAndSignIn(phone, "123456", null, null);
+                service.verifyOtpAndSignIn(phone, "123456", "284917", null);
 
                 verify(trustedDeviceService, never()).registerDevice(any(), any(), any());
                 verify(deviceNotificationService, never()).notifyNewDevice(any(), any(), any());
@@ -433,7 +444,7 @@ class IdentityOrchestrationServiceTest {
                 // and the directory row is committed. A failure in that separate transaction must not turn
                 // a completed signup into a 500 (ADM-008 decision 6 makes the bootstrap branch not a
                 // failure); the backfill picks the account up instead.
-                MatrixSession result = service.completeSignup("signup-abc", "Alice", "Alice L.", null, null);
+                MatrixSession result = service.completeSignup("signup-abc", "Alice", "Alice L.", "284917", null);
 
                 assertThat(result).isEqualTo(session);
                 verify(directoryService).upsertByDigest(eq(digest), anyString(), eq(userId), eq("Alice L."));
@@ -457,11 +468,119 @@ class IdentityOrchestrationServiceTest {
                                 .thenReturn(session);
                 when(accountGenesisService.isEnabled()).thenReturn(true);
 
-                service.completeSignup("signup-abc", "Alice", "Alice L.", null, null);
+                service.completeSignup("signup-abc", "Alice", "Alice L.", "284917", null);
 
                 // This path has no login session, so there is nowhere to hold the challenge an attach proof
                 // must cover: it always takes the bootstrap branch, never an attach.
                 verify(accountGenesisService).bootstrap(userId);
                 verify(accountGenesisService, never()).attach(any(), any(), any(), any());
+        }
+
+        // --- D1 on the legacy REST sign-in and signup ----------------------------
+
+        private DirectoryEntry returningAccount(String phone, String digest) {
+                DirectoryEntry entry = DirectoryEntry.builder()
+                                .phoneDigest(digest)
+                                .userId("@alice:gua.global")
+                                .displayName("Alice")
+                                .build();
+                when(phoneNumberHasher.digest(phone)).thenReturn(digest);
+                when(directoryService.findByDigest(digest)).thenReturn(Optional.of(entry));
+                return entry;
+        }
+
+        @Test
+        void anSmsCodeDoesNotSignInAnAccountThatHoldsOnlyAPasskey() {
+                DirectoryEntry entry = returningAccount("+12025550150", "pk-digest");
+                when(passkeyService.hasPasskey(entry.getUserId())).thenReturn(true);
+                when(userSecurityService.hasPin(entry.getUserId())).thenReturn(false);
+
+                assertThatThrownBy(() -> service.verifyOtpAndSignIn("+12025550150", "123456", null, null))
+                                .isInstanceOf(LoginFlowException.class)
+                                .hasFieldOrPropertyWithValue("code", "passkey_required");
+
+                verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(),
+                                any(Boolean.class));
+                verify(pinChallengeService, never()).issue(any(), any());
+                verify(userSecurityService, never()).recordSuccessfulLogin(any());
+        }
+
+        @Test
+        void aStoredPasskeyIsRequiredEvenWhenTheDeploymentHasPasskeysSwitchedOff() {
+                DirectoryEntry entry = returningAccount("+12025550151", "pk-off-digest");
+                org.mockito.Mockito.lenient().when(passkeyService.isEnabled()).thenReturn(false);
+                when(passkeyService.hasPasskey(entry.getUserId())).thenReturn(true);
+                when(userSecurityService.hasPin(entry.getUserId())).thenReturn(false);
+
+                assertThatThrownBy(() -> service.verifyOtpAndSignIn("+12025550151", "123456", "284917", null))
+                                .isInstanceOf(LoginFlowException.class)
+                                .hasFieldOrPropertyWithValue("code", "passkey_required");
+
+                verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(),
+                                any(Boolean.class));
+        }
+
+        @Test
+        void anSmsCodeDoesNotSignInAnAccountThatHoldsNoFactor() {
+                DirectoryEntry entry = returningAccount("+12025550152", "none-digest");
+                when(userSecurityService.hasPin(entry.getUserId())).thenReturn(false);
+
+                assertThatThrownBy(() -> service.verifyOtpAndSignIn("+12025550152", "123456", null, null))
+                                .isInstanceOf(LoginFlowException.class)
+                                .hasFieldOrPropertyWithValue("code", "factor_setup_required");
+
+                verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(),
+                                any(Boolean.class));
+                verify(userSecurityService, never()).recordSuccessfulLogin(any());
+        }
+
+        @Test
+        void anAccountHoldingAPinAndAPasskeyKeepsThePinChallenge() {
+                DirectoryEntry entry = returningAccount("+12025550153", "both-digest");
+                org.mockito.Mockito.lenient().when(passkeyService.hasPasskey(entry.getUserId())).thenReturn(true);
+                when(userSecurityService.hasPin(entry.getUserId())).thenReturn(true);
+                when(pinChallengeService.issue(entry.getUserId(), "+12025550153")).thenReturn("chal-both");
+
+                VerifyOtpResult result = service.verifyOtpAndSignIn("+12025550153", "123456", null, null);
+
+                assertThat(result.isPinRequired()).isTrue();
+                assertThat(result.pinChallengeToken()).isEqualTo("chal-both");
+        }
+
+        private void signupPreflightPasses(String phone) {
+                when(signupTokenService.peek("token")).thenReturn(phone);
+                when(phoneNumberHasher.digest(phone)).thenReturn("digest");
+                when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
+                when(matrixProvisioningService.buildUserId("alice")).thenReturn("@alice:gua.global");
+                when(matrixAdminClient.userExists("@alice:gua.global")).thenReturn(false);
+        }
+
+        @Test
+        void completeSignupWithoutAPinIsRefusedBeforeTheTokenIsConsumed() {
+                signupPreflightPasses("+12025550123");
+
+                for (String pin : new String[] { null, "", "   " }) {
+                        assertThatThrownBy(() -> service.completeSignup("token", "alice", "Alice", pin, null))
+                                        .as("pin %s", pin)
+                                        .isInstanceOf(LoginFlowException.class)
+                                        .hasFieldOrPropertyWithValue("code", "pin_required");
+                }
+
+                verify(signupTokenService, never()).consume(any());
+                verify(userSecurityService, never()).setInitialPin(any(), any());
+                verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(),
+                                any(Boolean.class));
+        }
+
+        @Test
+        void completeSignupWithAWeakPinIsRefusedBeforeTheTokenIsConsumed() {
+                signupPreflightPasses("+12025550123");
+
+                assertThatThrownBy(() -> service.completeSignup("token", "alice", "Alice", "123456", null))
+                                .isInstanceOf(me.sarahlacerda.gua.identityservice.exception.WeakPinException.class);
+
+                verify(signupTokenService, never()).consume(any());
+                verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(),
+                                any(Boolean.class));
         }
 }

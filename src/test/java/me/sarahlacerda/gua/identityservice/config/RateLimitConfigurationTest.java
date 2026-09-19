@@ -42,7 +42,21 @@ class RateLimitConfigurationTest {
             "/login/otp, 10, PT1M",
             "/login/pin, 10, PT1M",
             "/login/passkey/auth/options, 20, PT1M",
-            "/login/passkey/auth/verify, 20, PT1M"
+            "/login/passkey/auth/verify, 20, PT1M",
+            // Mints a WebAuthn challenge that can be spent as a step-up factor, so it needs
+            // its own rule for the same reason the credential checks above do.
+            "/security/passkey/stepup/options, 20, PT5M",
+            // The enrollment step-up, which is a credential check in front of storing a factor.
+            "/login/enroll/stepup/pin, 10, PT1M",
+            "/login/enroll/stepup/otp/send, 5, PT1M",
+            "/login/enroll/stepup/otp/verify, 10, PT1M",
+            "/login/enroll/stepup/passkey/options, 20, PT1M",
+            "/login/enroll/stepup/passkey/verify, 20, PT1M",
+            // Re-authentication. Both check the submitted number against the account's own
+            // binding, and verify checks a code on top. Bearer calls, so the limiter key carries
+            // the user as well as the address, but the rule is needed for the same reason.
+            "/account/reauth/start, 5, PT1M",
+            "/account/reauth/verify, 10, PT1M"
     })
     void credentialEndpointsHaveTheirOwnPerAddressRule(String path, int limit, Duration refresh) {
         runner.run(ctx -> {

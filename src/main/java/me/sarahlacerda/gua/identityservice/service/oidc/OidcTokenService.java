@@ -25,6 +25,7 @@ import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 
 import me.sarahlacerda.gua.identityservice.config.OidcProperties;
+import me.sarahlacerda.gua.identityservice.service.security.EndOtherSessionsService;
 import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
 
 @Service
@@ -33,13 +34,25 @@ public class OidcTokenService {
 
     private static final String TOKEN_TYPE = "Bearer";
 
+    /**
+     * ID token claim marking a sign-in that completed a delayed account recovery. The
+     * authentication service ends every other session of the account when it sees it.
+     */
+    static final String END_OTHER_SESSIONS_CLAIM = "gua_end_other_sessions";
+
     private final OidcProperties properties;
     private final RSAKey signingKey;
     private final TokenRevocationService tokenRevocationService;
+    private final EndOtherSessionsService endOtherSessionsService;
 
     public OidcTokenResponse issueTokens(OidcAuthorization authorization) {
         SignedJWT accessToken = buildJwt(authorization, properties.getAccessTokenTtl().toSeconds(), false);
         SignedJWT idToken = buildJwt(authorization, properties.getIdTokenTtl().toSeconds(), true);
+        if (authorization.endOtherSessions()) {
+            // The claim leaves this service in this ID token, so the sign-out a recovery owed the
+            // account has been handed over. Until here a failed or abandoned login keeps it owed.
+            endOtherSessionsService.settle(authorization.userId());
+        }
 
         return new OidcTokenResponse(
                 serialize(accessToken),
@@ -67,7 +80,8 @@ public class OidcTokenService {
             if (!properties.getIssuer().equals(claims.getIssuer())) {
                 return Optional.empty();
             }
-            if (!hasKnownAudience(claims.getAudience())) {
+            String audienceClientId = knownAudience(claims.getAudience()).orElse(null);
+            if (audienceClientId == null) {
                 return Optional.empty();
             }
             Instant issuedAt = claims.getIssueTime() == null ? null : claims.getIssueTime().toInstant();
@@ -85,7 +99,8 @@ public class OidcTokenService {
                     claims.getStringClaim("phone_number"),
                     displayName,
                     claims.getStringClaim("preferred_username"),
-                    scopes));
+                    scopes,
+                    audienceClientId));
         } catch (ParseException | JOSEException ex) {
             return Optional.empty();
         }
@@ -124,16 +139,19 @@ public class OidcTokenService {
      * Per RFC 9068 a resource server must reject access tokens that were not issued
      * for it. Every token we mint carries the requesting client id as its audience,
      * so we accept a token only when its audience includes a currently-registered
-     * client.
+     * client, and the client it matched on is the client behind the caller.
+     *
+     * @return the registered client id the token was accepted on, or empty when its
+     *         audience names none, which is the token being refused
      */
-    private boolean hasKnownAudience(List<String> audience) {
+    private Optional<String> knownAudience(List<String> audience) {
         if (audience == null || audience.isEmpty()) {
-            return false;
+            return Optional.empty();
         }
         Set<String> knownClientIds = properties.getClients().stream()
                 .map(OidcProperties.ClientRegistration::getClientId)
                 .collect(Collectors.toSet());
-        return audience.stream().anyMatch(knownClientIds::contains);
+        return audience.stream().filter(knownClientIds::contains).findFirst();
     }
 
     private SignedJWT buildJwt(OidcAuthorization authorization, long ttlSeconds, boolean includeNonce) {
@@ -163,6 +181,11 @@ public class OidcTokenService {
         // 3.1.3.7). It belongs only in the ID token, never the access token.
         if (includeNonce && authorization.nonce() != null) {
             builder.claim("nonce", authorization.nonce());
+        }
+        // ID token only, which is where the authentication service reads upstream claims, and
+        // only for a recovery. Every other sign-in leaves the claim out entirely.
+        if (includeNonce && authorization.endOtherSessions()) {
+            builder.claim(END_OTHER_SESSIONS_CLAIM, true);
         }
 
         JWTClaimsSet claims = builder.build();

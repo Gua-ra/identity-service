@@ -12,6 +12,7 @@ import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -58,6 +59,7 @@ import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
  * one: {@code GET /oauth2/authorize} parks a login session, then the
  * {@code /login/**} steps (phone, OTP, PIN or PIN setup, profile, passkey skip)
  * are walked until {@code /login/**} hands back the redirect carrying the code.
+ * No step completes a sign-in on the OTP alone.
  * The OTP is read from the Redis key {@code otp:code:<E.164>} written by
  * {@code OtpService}, so no SMS provider is involved.
  */
@@ -71,6 +73,8 @@ class AuthFlowIntegrationTest {
     private static final String LOGIN_COOKIE = "gua_login";
     private static final String CSRF_HEADER = "X-CSRF-Token";
     private static final Pattern LOGIN_COOKIE_VALUE = Pattern.compile(LOGIN_COOKIE + "=([^;]+)");
+    /** Every new account must set a factor; these flows give it this PIN at PIN setup. */
+    private static final String NEW_ACCOUNT_PIN = "739164";
 
     @Container
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>(DockerImageName.parse("postgres:16-alpine"))
@@ -161,6 +165,15 @@ class AuthFlowIntegrationTest {
                 .willReturn(notFound()));
         wireMock.stubFor(get(urlPathMatching("/_synapse/admin/v2/users/.*"))
                 .willReturn(notFound()));
+
+        // Every test method here calls the API from localhost, so they all share one
+        // requester-address OTP budget (10/hour) that production spreads over real
+        // callers. Clear only that counter between methods; each test still uses its
+        // own phone number, so the per-phone budget stays exercised as shipped.
+        Set<String> requesterBudgets = redisTemplate.keys("otp:rate:ip:*");
+        if (requesterBudgets != null && !requesterBudgets.isEmpty()) {
+            redisTemplate.delete(requesterBudgets);
+        }
     }
 
     @Test
@@ -170,8 +183,8 @@ class AuthFlowIntegrationTest {
         String challenge = s256(verifier);
         String state = UUID.randomUUID().toString();
 
-        // 1. Obtain the code through the interactive flow (new user: profile + PIN setup skipped).
-        URI redirect = signInInteractively(phone, challenge, state, null, null);
+        // 1. Obtain the code through the interactive flow (new user: profile, then the PIN).
+        URI redirect = signInInteractively(phone, challenge, state, NEW_ACCOUNT_PIN, null);
         assertThat(redirect.toString()).startsWith(REDIRECT_URI);
         Map<String, String> query = parseQuery(redirect);
         assertThat(query.get("state")).isEqualTo(state);
@@ -218,7 +231,7 @@ class AuthFlowIntegrationTest {
         String verifier = randomVerifier();
         String challenge = s256(verifier);
 
-        String code = parseQuery(signInInteractively(phone, challenge, "state-x", null, null)).get("code");
+        String code = parseQuery(signInInteractively(phone, challenge, "state-x", NEW_ACCOUNT_PIN, null)).get("code");
 
         ResponseEntity<Map> first = exchangeCode(code, verifier);
         assertThat(first.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -235,7 +248,7 @@ class AuthFlowIntegrationTest {
         String wrongVerifier = randomVerifier();
         String challenge = s256(verifier);
 
-        String code = parseQuery(signInInteractively(phone, challenge, "state-y", null, null)).get("code");
+        String code = parseQuery(signInInteractively(phone, challenge, "state-y", NEW_ACCOUNT_PIN, null)).get("code");
 
         ResponseEntity<Map> response = exchangeCode(code, wrongVerifier);
         assertThat(response.getStatusCode()).isEqualTo(BAD_REQUEST);
@@ -314,6 +327,177 @@ class AuthFlowIntegrationTest {
         Map<String, String> query = parseQuery(redirect);
         assertThat(query.get("state")).isEqualTo("state-p2");
         assertThat(subjectOf(exchangeCode(query.get("code"), secondVerifier))).isEqualTo(firstSubject);
+    }
+
+    /**
+     * D2 over real HTTP: a new account cannot leave PIN setup without a PIN, and no code is
+     * issued however the step is left.
+     */
+    @Test
+    void aNewAccountCannotSkipThePinAndNoCodeIsIssued() throws Exception {
+        String phone = "+16042250006";
+        LoginClient login = startAuthorize(s256(randomVerifier()), "state-skip");
+        login.post("/login/phone", Map.of("phoneNumber", phone));
+        Map<?, ?> state = login.post("/login/otp", Map.of("code", readOtpFromRedis(phone)));
+        assertThat(state.get("phase")).isEqualTo("PROFILE_REQUIRED");
+        state = login.post("/login/profile", Map.of("username",
+                "it" + UUID.randomUUID().toString().replace("-", "").substring(0, 10), "displayName", "Skip"));
+        if ("PASSKEY_SETUP".equals(state.get("phase"))) {
+            state = login.post("/login/passkey/setup-skip", Map.of());
+        }
+        assertThat(state.get("phase")).isEqualTo("PIN_SETUP");
+        long codesBefore = authorizationCodeCount();
+
+        for (Map<String, ?> body : List.<Map<String, ?>>of(Map.of("skip", true), Map.of(), Map.of("pin", "  "))) {
+            ResponseEntity<Map> refused = login.postRaw("/login/pin-setup", body);
+            assertThat(refused.getStatusCode()).isEqualTo(BAD_REQUEST);
+            assertThat(refused.getBody()).containsEntry("code", "pin_required");
+        }
+
+        assertThat(login.get("/login/context").get("phase")).isEqualTo("PIN_SETUP");
+        assertThat(authorizationCodeCount()).isEqualTo(codesBefore);
+    }
+
+    /**
+     * A PIN account that has just signed in reaches the PIN step again with recovery TOO_SOON,
+     * and starting one is a cooldown that sends no SMS.
+     */
+    @Test
+    void recoveryIsTooSoonRightAfterASignIn() throws Exception {
+        String phone = "+16042250007";
+        signInInteractively(phone, s256(randomVerifier()), "state-r1", NEW_ACCOUNT_PIN, null);
+
+        LoginClient login = startAuthorize(s256(randomVerifier()), "state-r2");
+        login.post("/login/phone", Map.of("phoneNumber", phone));
+        Map<?, ?> state = login.post("/login/otp", Map.of("code", readOtpFromRedis(phone)));
+        assertThat(state.get("phase")).isEqualTo("PIN_REQUIRED");
+        Map<?, ?> recovery = (Map<?, ?>) state.get("recovery");
+        assertThat(recovery).isNotNull();
+        assertThat(recovery.get("status")).isEqualTo("TOO_SOON");
+        // A JSON number, which is what the web and both apps decode, on a whole UTC day so the
+        // clients can show a date with no clock time.
+        assertThat(recovery.get("availableAtEpochSeconds")).isInstanceOf(Number.class);
+        assertThat(((Number) recovery.get("availableAtEpochSeconds")).longValue() % 86400).isZero();
+
+        String otpKey = "otp:code:" + phone;
+        String codeBefore = redisTemplate.opsForValue().get(otpKey);
+        ResponseEntity<Map> refused = login.postRaw("/login/recovery/start", Map.of());
+        assertThat(refused.getStatusCode()).isEqualTo(BAD_REQUEST);
+        assertThat(refused.getBody()).containsEntry("code", "recovery_cooldown_active");
+        assertThat(refused.getHeaders().getFirst("Retry-After")).isNotBlank();
+        assertThat(redisTemplate.opsForValue().get(otpKey)).isEqualTo(codeBefore);
+    }
+
+    /**
+     * R1 end to end, on an account created the only way accounts are created: through the real
+     * interactive signup. The signed-in user confirms the number on their own account and the
+     * reauthentication proceeds; a number that is not theirs is refused in words that say nothing
+     * about whose it is, and no code is sent to it.
+     *
+     * <p>
+     * This is the case identity-service#44 was about. The old flow asked the homeserver which
+     * phone was linked to the account, and an account created through signup has no such binding,
+     * so phone change, deactivation and identity reset were unreachable for exactly the accounts
+     * a user can actually create.
+     */
+    @Test
+    void anInteractiveSignupCanReauthenticateWithItsOwnNumber() throws Exception {
+        String phone = "+16042250009";
+        String strangersPhone = "+16042250010";
+        String verifier = randomVerifier();
+        URI redirect = signInInteractively(phone, s256(verifier), "state-reauth", NEW_ACCOUNT_PIN, null);
+        String accessToken = (String) exchangeCode(parseQuery(redirect).get("code"), verifier).getBody()
+                .get("access_token");
+        assertThat(accessToken).isNotBlank();
+
+        // A number that is not this account's: one refusal, and no SMS to a number the caller
+        // does not own.
+        ResponseEntity<Map> refused = authenticatedPost(accessToken, "/account/reauth/start",
+                Map.of("phone", strangersPhone));
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(refused.getBody()).containsEntry("code", "reauth_phone_mismatch");
+        assertThat(readOtpFromRedis(strangersPhone)).isNull();
+
+        // The account's own number: accepted, and the code goes to that number.
+        ResponseEntity<Map> started = authenticatedPost(accessToken, "/account/reauth/start",
+                Map.of("phone", phone));
+        assertThat(started.getStatusCode()).as("start: %s", started.getBody()).isEqualTo(HttpStatus.ACCEPTED);
+        String otp = readOtpFromRedis(phone);
+        assertThat(otp).isNotBlank();
+
+        // And the code exchanges for a token scoped to the operation that was asked for.
+        ResponseEntity<Map> verified = authenticatedPost(accessToken, "/account/reauth/verify",
+                Map.of("phone", phone, "code", otp, "operation", "PHONE_CHANGE"));
+        assertThat(verified.getStatusCode()).as("verify: %s", verified.getBody()).isEqualTo(HttpStatus.OK);
+        assertThat((String) verified.getBody().get("reauthToken")).isNotBlank();
+
+        // Verifying re-derives from the submitted number rather than from anything stored, so the
+        // wrong number is refused here too, and the same way.
+        ResponseEntity<Map> refusedVerify = authenticatedPost(accessToken, "/account/reauth/verify",
+                Map.of("phone", strangersPhone, "code", "123456", "operation", "PHONE_CHANGE"));
+        assertThat(refusedVerify.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(refusedVerify.getBody()).containsEntry("code", "reauth_phone_mismatch");
+    }
+
+    /**
+     * R2 through the real security chain: a bearer session on its own cannot set a first PIN, and
+     * the flow it is sent to hands back a one-time URL whose session has proved nothing yet.
+     */
+    @Test
+    void aBearerSessionIsSentToTheEnrollmentFlowToAddAFactor() throws Exception {
+        String phone = "+16042250011";
+        String verifier = randomVerifier();
+        URI redirect = signInInteractively(phone, s256(verifier), "state-enroll", NEW_ACCOUNT_PIN, null);
+        String accessToken = (String) exchangeCode(parseQuery(redirect).get("code"), verifier).getBody()
+                .get("access_token");
+
+        ResponseEntity<Map> refused = authenticatedPost(accessToken, "/security/pin",
+                Map.of("userId", "@whoever:example.com", "newPin", "284917"));
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(refused.getBody()).containsEntry("code", "step_up_required");
+
+        // This account set a PIN during signup, so the PIN enrollment says so rather than
+        // offering a second one.
+        ResponseEntity<Map> already = authenticatedPost(accessToken, "/security/pin/enroll/start", Map.of());
+        assertThat(already.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(already.getBody()).containsEntry("code", "pin_already_set");
+
+        // The passkey enrollment does hand out a link, and the session behind it is parked at the
+        // step-up: opening it establishes the cookie and nothing else.
+        ResponseEntity<Map> enroll = authenticatedPost(accessToken, "/security/passkey/enroll/start", Map.of());
+        assertThat(enroll.getStatusCode()).as("enroll: %s", enroll.getBody()).isEqualTo(HttpStatus.OK);
+        String enrollUrl = (String) enroll.getBody().get("enrollUrl");
+        assertThat(enrollUrl).contains("/login/enroll/");
+
+        ResponseEntity<String> opened = restTemplate.exchange(
+                URI.create(baseUrl + enrollUrl.substring(enrollUrl.indexOf("/login/enroll/"))),
+                HttpMethod.GET, HttpEntity.EMPTY, String.class);
+        assertThat(opened.getStatusCode()).isEqualTo(HttpStatus.FOUND);
+
+        LoginClient enrollSession = new LoginClient(loginCookie(opened.getHeaders()), null);
+        Map<?, ?> context = enrollSession.get("/login/context");
+        assertThat(context.get("phase")).isEqualTo("ENROLL_STEP_UP");
+        assertThat(context.get("enrollment")).isEqualTo(true);
+        assertThat(context.get("recovery")).isNull();
+
+        // And nothing can be stored from it until the account is confirmed there.
+        LoginClient withCsrf = new LoginClient(enrollSession.cookie, (String) context.get("csrfToken"));
+        ResponseEntity<Map> tooEarly = withCsrf.postRaw("/login/passkey/register/options", Map.of());
+        assertThat(tooEarly.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(tooEarly.getBody()).containsEntry("code", "unexpected_step");
+    }
+
+    /** E3 through the real security chain: an unauthenticated call is told the path is gone. */
+    @Test
+    void theRetiredPinResetEndpointsAnswerGoneWithoutABearerToken() {
+        for (String path : List.of("/security/pin/reset", "/security/pin/reset/complete")) {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            ResponseEntity<Map> response = restTemplate.exchange(baseUrl + path, HttpMethod.POST,
+                    new HttpEntity<>(Map.of("userId", "@x:example.com", "phone", "+16042250008"), headers), Map.class);
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.GONE);
+            assertThat(response.getBody()).containsEntry("code", "endpoint_retired");
+        }
     }
 
     /**
@@ -412,7 +596,7 @@ class AuthFlowIntegrationTest {
     /**
      * Walks the whole interactive flow for {@code phone} and returns the redirect
      * (back to the client) carrying the authorization code. {@code pinToSetUp} is
-     * chosen at PIN setup for a new account (null skips); {@code existingPin} is
+     * chosen at PIN setup for an account holding no factor; {@code existingPin} is
      * presented at the PIN step for a returning account.
      */
     private URI signInInteractively(String phone, String challenge, String state, String pinToSetUp,
@@ -491,8 +675,10 @@ class AuthFlowIntegrationTest {
                     case "PROFILE_REQUIRED" -> current = post("/login/profile",
                             Map.of("username", "it" + UUID.randomUUID().toString().replace("-", "").substring(0, 10),
                                     "displayName", "Integration User"));
-                    case "PIN_SETUP" -> current = post("/login/pin-setup",
-                            pinToSetUp == null ? Map.of("skip", true) : Map.of("pin", pinToSetUp, "skip", false));
+                    case "PIN_SETUP" -> {
+                        assertThat(pinToSetUp).as("PIN setup cannot be skipped, so the flow needs a PIN").isNotNull();
+                        current = post("/login/pin-setup", Map.of("pin", pinToSetUp));
+                    }
                     case "PIN_REQUIRED" -> {
                         assertThat(existingPin).as("account requires a PIN but none was supplied").isNotNull();
                         current = post("/login/pin", Map.of("pin", existingPin));
@@ -511,6 +697,10 @@ class AuthFlowIntegrationTest {
 
         private HttpHeaders headers() {
             HttpHeaders headers = new HttpHeaders();
+            // RestTemplate lists XML first when jackson-dataformat-xml is on the classpath (the
+            // Twilio SDK brings it), and the server honours that, which turns every number in the
+            // body into a string. The web and the apps ask for JSON, so this does too.
+            headers.setAccept(List.of(MediaType.APPLICATION_JSON));
             headers.add(HttpHeaders.COOKIE, LOGIN_COOKIE + "=" + cookie);
             if (csrf != null) {
                 headers.add(CSRF_HEADER, csrf);
@@ -546,6 +736,15 @@ class AuthFlowIntegrationTest {
             Void.class
         );
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+    }
+
+    /** A bearer-authenticated JSON POST, the way the apps call the account endpoints. */
+    private ResponseEntity<Map> authenticatedPost(String accessToken, String path, Map<String, ?> body) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(accessToken);
+        return restTemplate.exchange(baseUrl + path, HttpMethod.POST, new HttpEntity<>(body, headers), Map.class);
     }
 
     private String readOtpFromRedis(String phone) {
