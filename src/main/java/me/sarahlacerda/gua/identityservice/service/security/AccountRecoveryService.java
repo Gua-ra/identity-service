@@ -129,6 +129,10 @@ public class AccountRecoveryService {
         // not guaranteed to run: a recovered account must not look dormant enough for another
         // recovery to start straight away.
         userSecurityService.recordAccountActivity(user, now);
+        // Stamped here, in the same transaction and under the same lock, because the account authority
+        // chain refuses a transition while a completed recovery is inside the fresh-factor hold and no
+        // existing column can answer when one completed. Nothing that existed before it reads the stamp.
+        userSecurityService.recordRecoveryCompleted(user, now);
         endOtherSessionsService.markOwed(userId);
         auditLogger.accountRecoveryCompleted(userId, removed);
         return removed;
