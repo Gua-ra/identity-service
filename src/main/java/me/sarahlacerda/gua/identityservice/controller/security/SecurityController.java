@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import io.swagger.v3.oas.annotations.Operation;
@@ -29,6 +30,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 
 import me.sarahlacerda.gua.identityservice.controller.dto.FactorEnrollStartRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PasskeyEnrollStartResponse;
+import me.sarahlacerda.gua.identityservice.controller.dto.PasskeyRemoveRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PasskeyStepUpStartResponse;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeCompleteRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeStartRequest;
@@ -52,6 +54,7 @@ import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryServi
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryState;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactor;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy;
+import me.sarahlacerda.gua.identityservice.service.security.PasskeyRemovalService;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.PinChangeService;
 import me.sarahlacerda.gua.identityservice.service.security.ReauthOperation;
@@ -76,6 +79,7 @@ public class SecurityController {
     private final AccountLocalpartResolver accountLocalparts;
     private final PinChangeService pinChangeService;
     private final AccountRecoveryService accountRecoveryService;
+    private final PasskeyRemovalService passkeyRemovalService;
 
     @GetMapping("/pin/status")
     @Operation(summary = "Check the authenticated user's two-step verification state", description = "Returns hasPin=true once the user has configured a security PIN (drives the 'set up two-step verification' nudge), and how long the fresh-2FA hold on the account's PIN still has to run before that PIN can change the phone number. Read it when about to offer the PIN, not as 'can I change my number now': it is silent about the separate 24h phone-change cooldown, and it does not describe the passkey path, which carries its own hold on the age of the asserted credential and is refused the same way. It also reports which factors the account has REGISTERED, which one to offer first, and which ones a phone change accepts in precedence order, so a client offers the right factor instead of hardcoding the rule. Registration is server truth; whether a registered passkey is usable on this device is not reported and is never accepted as an input. Finally it reports whether a delayed account recovery is live on the account (accountRecoveryPending), with when it can be finished and when it expires, so every signed-in app can show a banner and offer POST /security/recovery/cancel, and the two configured waits (accountRecoveryDormancySeconds, accountRecoveryWaitSeconds), which are reported whether or not a recovery is live because they are configuration rather than episode state: a client that states them itself is right only on a deployment left at the defaults.", security = @SecurityRequirement(name = "oidcAccessToken"))
@@ -176,6 +180,26 @@ public class SecurityController {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
         userSecurityService.completePinChange(userId, request.getChallengeId(), request.getOtpCode(),
                 request.getNewPin());
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/passkey/credentials/{credentialId}/remove")
+    @Operation(summary = "Remove one passkey credential", description = "Removes the named credential after a step-up: a user-verifying passkey assertion, or the account PIN. Until this existed the only way to remove a credential was to remove them all, so an owner locking a thief out of a stolen device had to wipe every credential and register a new one, which put their own remaining factor inside the fresh-2FA hold. The account's last factor is refused (409 factor_required): the way to be rid of every credential is still the delayed recovery, which assumes they are lost. A credential id that is not this account's is answered the same way as one that does not exist, so this cannot be used to ask whose a credential is.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "Removed, or there was nothing with that id"),
+            @ApiResponse(responseCode = "400", description = "invalid_pin or invalid_request", content = @Content),
+            @ApiResponse(responseCode = "401", description = "Caller not authenticated", content = @Content),
+            @ApiResponse(responseCode = "403", description = "step_up_required, or the assertion resolves to another account", content = @Content),
+            @ApiResponse(responseCode = "409", description = "factor_required: that is the account's last factor", content = @Content),
+            @ApiResponse(responseCode = "429", description = "pin_locked", content = @Content)
+    })
+    public ResponseEntity<Void> removePasskeyCredential(@PathVariable String credentialId,
+            @RequestBody(required = false) @Valid PasskeyRemoveRequest request,
+            @Parameter(hidden = true) HttpServletRequest servletRequest) {
+        String userId = authenticatedUserAccessor.requireCurrentUserId();
+        PasskeyRemoveRequest body = request == null ? new PasskeyRemoveRequest() : request;
+        passkeyRemovalService.remove(userId, credentialId, body.getPasskeyStepUpId(), body.getPasskeyCredential(),
+                body.getPin(), servletRequest.getRemoteAddr());
         return ResponseEntity.noContent().build();
     }
 
