@@ -18,8 +18,10 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import me.sarahlacerda.gua.identityservice.account.authority.InvalidAuthorityRecordException;
 import me.sarahlacerda.gua.identityservice.account.genesis.InvalidGenesisException;
 import me.sarahlacerda.gua.identityservice.exception.AccountRecoveryCooldownException;
+import me.sarahlacerda.gua.identityservice.exception.AuthorityTransitionException;
 import me.sarahlacerda.gua.identityservice.exception.AccountRecoveryNotReadyException;
 import me.sarahlacerda.gua.identityservice.exception.EndpointRetiredException;
 import me.sarahlacerda.gua.identityservice.exception.GenesisRegistrationException;
@@ -275,6 +277,33 @@ public class RestExceptionHandler {
         public ResponseEntity<ErrorResponse> handleGenesisRegistration(GenesisRegistrationException ex) {
                 return ResponseEntity.status(ex.getStatus())
                                 .body(new ErrorResponse(ex.getCode(), ex.getMessage()));
+        }
+
+        /**
+         * An authority transition that was refused for a reason other than malformed bytes. Carries the stable
+         * code and, on a backoff or a cooldown, how long to wait.
+         */
+        @ExceptionHandler(AuthorityTransitionException.class)
+        public ResponseEntity<ErrorResponse> handleAuthorityTransition(AuthorityTransitionException ex) {
+                ResponseEntity.BodyBuilder builder = ResponseEntity.status(ex.getStatus());
+                if (ex.getRetryAfterSeconds() != null) {
+                        builder = builder.header("Retry-After", String.valueOf(ex.getRetryAfterSeconds()));
+                }
+                return builder.body(ex.getRetryAfterSeconds() == null
+                                ? new ErrorResponse(ex.getCode(), ex.getMessage())
+                                : new ErrorResponse(ex.getCode(), ex.getMessage(), ex.getRetryAfterSeconds()));
+        }
+
+        /**
+         * A malformed authority record. The decoder's rule name is returned, exactly as for a malformed
+         * genesis, so a client implementing the codec can tell which rule refused it; the bytes are never
+         * echoed back.
+         */
+        @ExceptionHandler(InvalidAuthorityRecordException.class)
+        public ResponseEntity<ErrorResponse> handleInvalidAuthorityRecord(InvalidAuthorityRecordException ex) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .body(new ErrorResponse("invalid_authority_record",
+                                                "Rejected by rule: " + ex.reason()));
         }
 
         /**
