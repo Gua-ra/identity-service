@@ -233,6 +233,61 @@ A handle on its own attaches nothing. Anyone can compose an authorize URL, so th
 
 **Rollback.** Turn the flags off: the endpoint returns `503`, attach is skipped and nothing writes a genesis row. The table stays, because an accountId is permanent and nothing reads it. Drop `account_genesis` (and its `flyway_schema_history` row) only on abandoning the feature.
 
+### Account authority, adoption and the device lifecycle
+
+An account's authority is an append-only chain of signed records, and the chain **is** the authority: there is no ambient "the account's key" outside it. This implements [ADM-009](https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-009-account-authority-adoption-and-device-lifecycle.md), which decides how an account that already exists, and whose id commits no key, gains authority at all, and decides the whole device lifecycle alongside it because a design that roots an account on one device and says nothing about the second device has only moved the failure.
+
+**Everything here ships disabled.** With `identity.authority.enabled` off, every `/account/authority` endpoint answers `503 authority_disabled`, no row is written to any authority table, and no existing login, recovery, factor or genesis path behaves differently. `AuthorityFlagsOffTest` checks that the refusal happens before the account is resolved, before a challenge is minted and before any repository is touched.
+
+**Adoption does not change the accountId.** An accountId is permanent, and its class byte is inside the hashed prefix, so adoption leaves `account_genesis` exactly as it is. The class byte records **how the id was derived**, never whether the account holds authority today: after adoption a class `0x00` account holds authority its id does not commit, and a verifier that needs to know reads the chain. The cost is accepted and real, and it is why new accounts still need a genesis: an adopted account's authority is not self-certifying from its id, and until the reserved log leaf exists it is an assertion by that account's homeserver.
+
+**One envelope, four records.** Fixed layout, big-endian, no delimiters: magic (4, and the signature domain), version, suite, the 34 raw accountId bytes, `prevHash` (32), `seq` (8), then a body fixed per type. `GUAA` AdoptRoot (177 bytes), `GUAD` DeviceGrant (161), `GUAX` DeviceRevoke (145), `GUAR` AuthorityRecovery (209). The decoder refuses an unknown magic, version, suite, framework, reason, authorization or flag, a wrong length, a `seq` below 1, an all-zero key, a key that fails Ed25519 point decoding, a recovery key equal to a device key in the same record, and a label with a non-zero byte after its first zero, each with a stable rule token in the shape `AccountGenesisCodec` established. The all-zero rule is separate from point decoding because the all-zero encoding decodes to a valid low-order point.
+
+`authorizingKey` names the key whose signature authorizes a record, **inside the bytes that are hashed**, so a future log leaf commits who authorized each transition and not only that someone did. `AuthorityRecovery.authorization` is `0x01` for the committed recovery authority key or `0x02` for the account-recovery path; under `0x02`, and only then, `authorizingKey` is all zero, and the decoder enforces that pairing in both directions.
+
+**One preimage rule, for every type.** A record is verified against `magic || the 32 bytes of the server challenge minted for that transition || the canonical bytes`. The magic is the signature domain, so no record can be replayed as another type; the accountId is inside the canonical bytes, so none can be replayed into another account; and the challenge is inside every signature, so no record is precomputable on other hardware, transferable to another party, or resubmittable after it was opposed. Challenges are minted against the account **and** the acting stepped-up session, are single use, and are burned on refusal as well as on acceptance. Only their SHA-256 is stored.
+
+**One head, one order, no races.** Exactly one `account_authority_head` row per account, read `FOR UPDATE` by every writer, and acceptance is a compare-and-set on `prevHash` and `seq`. Two devices acting at once produce one winner and one refusal carrying the current head. A record inside its opposition window has already taken its `seq`, so an immediate transition cannot starve a delayed one; a cancelled record keeps that slot, so the hash chain has no gap and no branch. Competing transitions resolve by ADM-002 D2's rank, not by a freeze: rank 2 is a recovery signed by the committed recovery authority key, rank 1 any record signed by an active device, rank 0 a recovery authorized through account recovery. A higher rank cancels a pending lower one, an equal rank is refused, and each cancelled initiation doubles the backoff of the key set that opened it.
+
+**The device set.** A per-device key, never one key copied to every device: copying makes revocation meaningless, since the revoked device still holds the key the account is defined by. A grant takes effect on acceptance, because it only adds, and its holder is **quarantined** for one window: it may not sign a grant, a revocation or an approval, and it does not count toward the active device a revocation must leave behind. Revoking another device waits out the window; revoking itself is immediate, because a device removing its own authority reduces what an attacker holding it could do. Neither may leave the account with no unquarantined active device.
+
+**The browser holds no authority, ever.** A browser login grants account access and never enters the device set, and this is a rule rather than a default: there is no flag that lets a web session sign an authority record. Authority-sensitive actions reachable from the web create a pending approval carrying the account, the action digest and a challenge; the browser shows a four-character code from an alphabet with no look-alikes, and an active authority device shows the same code and the action in the reader's own words and signs it. A malicious page reaches the approval and not the signature.
+
+**SMS possession authorizes nothing here**, in any combination, at any step, including adoption. The phone's only role is as one notification channel among several. Three source rules hold that, and `AccountAuthorityGuardTest` fails the build on each: no authority file references the OTP services, `AuthFactor.PHONE_OTP` appears in no accepted set, and no transition is accepted on a factor inside the fresh-factor hold or while the account's last completed recovery is inside it. The third rule is the one that carries the weight: account recovery deletes every passkey, sets a caller-chosen PIN and revokes the account's sessions in one transaction, so without it a SIM-swap attacker presents that PIN days later as the possession proof for rooting the account. `identity_users.recovery_completed_at` exists for that rule, because `pin_reset_requested_at` is cleared on completion and `pin_set_at` cannot tell a recovery from an ordinary PIN change.
+
+**Endpoints** (all bearer, all `503` while the flag is off; the four transitions additionally require a native session):
+
+| Endpoint | What it does |
+| --- | --- |
+| `POST /account/authority/challenge` | Accepts the step-up this purpose is scoped to and mints the challenge the record will sign. The step-up and the challenge are minted together, so a step-up can never be older than the challenge it authorizes. |
+| `POST /account/authority/adopt` | Records a pending `AdoptRoot` at `seq 1`. Refused on a non-empty chain, on a class `0x01` account, and without the confirmation that the recovery key was stored. |
+| `POST /account/authority/oppose` | Objects to the pending transition. Free the first time, a step-up on any factor at any age after that. |
+| `POST /account/authority/device/grant` | Activates another device key, effective at once, grantee quarantined. |
+| `POST /account/authority/device/revoke` | Removes a device key: pending for another device, immediate for itself. |
+| `POST /account/authority/recover` | Replaces the device set and the recovery key in one record. |
+| `GET /account/authority` | The chain, the device set, any pending step. **The one endpoint that returns an accountId**, and only ever to its own account holder, because the client signs over its 34 raw bytes. |
+| `POST /account/authority/approval`, `GET /account/authority/approval`, `POST /account/authority/approval/{id}/sign` | The browser-approval trio above. |
+
+Two prerequisites ship with it, because the feature is incoherent without them. `POST /security/passkey/credentials/{credentialId}/remove` removes **one** credential behind the usual step-up: until now the only way was to remove them all, so an owner locking a thief out of a stolen device had to wipe every credential and register a new one, which put their own remaining factor inside the fresh-factor hold. And `GET /account/authority` is how the account holder reads their own accountId, which no endpoint returned before.
+
+**Flags** (all off or empty by default):
+
+| Property | Env | Default | Effect |
+| --- | --- | --- | --- |
+| `identity.authority.enabled` | `IDENTITY_AUTHORITY_ENABLED` | `false` | Master switch. Off: every endpoint answers `503` and no row exists. |
+| `identity.authority.production-adoption` | `IDENTITY_AUTHORITY_PRODUCTION_ADOPTION` | `false` | Allows adoption at all. Off outside dev: under framework `0x01` the recovery key shares the device store with the key it would veto, so this waits on ADM-002 Q6. |
+| `identity.authority.opposition-window` | `IDENTITY_AUTHORITY_OPPOSITION_WINDOW` | `PT72H` | The opposition window, and the quarantine a granted device serves. |
+| `identity.authority.recovery-window` | `IDENTITY_AUTHORITY_RECOVERY_WINDOW` | `P7D` | ADM-002 D1's delay for framework `0x01`, deliberately not the adoption window. |
+| `identity.authority.challenge-ttl` | `IDENTITY_AUTHORITY_CHALLENGE_TTL` | `PT15M` | How long a challenge, and therefore its step-up, stays spendable. |
+| `identity.authority.approval-ttl` | `IDENTITY_AUTHORITY_APPROVAL_TTL` | `PT10M` | How long a browser-started approval stays signable. |
+| `identity.authority.max-live-approvals` | `IDENTITY_AUTHORITY_MAX_LIVE_APPROVALS` | `3` | How many approvals one account may hold at once. |
+| `identity.authority.allow-short-windows-for-testing` | `IDENTITY_AUTHORITY_ALLOW_SHORT_WINDOWS_FOR_TESTING` | `false` | Lifts the 24-hour floor on both windows. Dev only. |
+| `identity.authority.native-client-ids` | `IDENTITY_AUTHORITY_NATIVE_CLIENT_IDS` | empty | Client ids whose tokens count as a native session, read from the token's verified audience. Empty means no client may root an account. |
+
+**Startup refuses `enabled=true`** while no out-of-band notification channel is wired, which is ADM-009 gate 2. Every window here is theatre without a channel that survives both a SIM swap and the session revocation a recovery performs: the shipped `AuthorityNotifier` writes a log line and answers `isOutOfBand() == false`, and a log line is not a channel. Startup also refuses a window under 24 hours without the testing switch, and a challenge TTL over 15 minutes.
+
+**Rollback.** Turn `identity.authority.*` off: every endpoint answers `503` and nothing writes. The tables may then be dropped, but they do not need to be, because nothing else reads them. Keep `identity_users.recovery_completed_at` either way: it is a fact about the account rather than feature state, and dropping it would silently reopen the hold above.
+
 ### Which factor applies where
 
 A passkey is the preferred strong factor and the account PIN is the fallback for everyone who cannot use one. `AuthFactorPolicy` is where the answers live, so the interactive login flow, the legacy REST sign-in, the status endpoint and the phone-change step-up cannot each decide them differently. Two of them it decides, and two it states, which is not the same thing:
