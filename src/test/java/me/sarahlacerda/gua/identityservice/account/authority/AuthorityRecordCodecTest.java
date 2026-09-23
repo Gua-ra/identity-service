@@ -249,6 +249,52 @@ class AuthorityRecordCodecTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    // --- Oppose (GUAO) ------------------------------------------------------
+
+    @Test
+    void anOpposeRoundTripsAndNamesTheRecordItObjectsTo() {
+        byte[] opposed = AuthorityRecord.sha256("the pending record".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] bytes = AuthorityRecords.oppose(opposed, authorizing.rawPublicKey(), 2, new byte[32]);
+
+        AuthorityRecord record = AuthorityRecordCodec.decode(bytes);
+
+        assertThat(bytes).hasSize(AuthorityRecord.OPPOSE_LENGTH);
+        assertThat(record.type()).isEqualTo(AuthorityRecordType.OPPOSE);
+        assertThat(record.opposedRecordHash()).isEqualTo(opposed);
+        assertThat(record.verifyingKey()).isEqualTo(authorizing.rawPublicKey());
+        // It carries no device key: it objects to a record rather than doing anything to the device set.
+        assertThat(record.deviceKey()).isNull();
+    }
+
+    @Test
+    void anOpposeThatNamesNothingIsRefused() {
+        byte[] bytes = AuthorityRecords.oppose(new byte[32], authorizing.rawPublicKey(), 2, new byte[32]);
+
+        // The value a caller who filled in nothing produces. A record objecting to nothing in particular
+        // would cancel whatever happened to be pending.
+        assertThat(reasonFor(bytes)).isEqualTo("zero_opposed_record");
+    }
+
+    @Test
+    void anOpposeWithNoAuthorizingKeyIsRefused() {
+        byte[] opposed = AuthorityRecord.sha256("pending".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        assertThat(reasonFor(AuthorityRecords.oppose(opposed, new byte[32], 2, new byte[32])))
+                .isEqualTo("zero_authorizing_key");
+        assertThat(reasonFor(AuthorityRecords.truncated(
+                AuthorityRecords.oppose(opposed, authorizing.rawPublicKey(), 2, new byte[32]))))
+                .isEqualTo("wrong_length");
+    }
+
+    @Test
+    void everyTypeHasItsOwnMagicAndLength() {
+        // The magic is the signature domain, so two types sharing one would let a record be replayed as the
+        // other. Checked as a set rather than one by one, because that is the property.
+        assertThat(java.util.Arrays.stream(AuthorityRecordType.values()).map(AuthorityRecordType::magic).toList())
+                .doesNotHaveDuplicates()
+                .containsExactlyInAnyOrder("GUAA", "GUAD", "GUAX", "GUAR", "GUAO");
+    }
+
     private static String reasonFor(byte[] bytes) {
         InvalidAuthorityRecordException refusal = catchThrowableOfType(
                 () -> AuthorityRecordCodec.decode(bytes), InvalidAuthorityRecordException.class);
