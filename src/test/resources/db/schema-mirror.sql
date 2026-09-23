@@ -171,7 +171,7 @@ CREATE TABLE IF NOT EXISTS account_authority_challenge (
     session_hash   VARCHAR(64) NOT NULL,
     purpose        VARCHAR(16) NOT NULL,
     challenge_hash VARCHAR(64) NOT NULL UNIQUE,
-    factor         VARCHAR(16),
+    factor         VARCHAR(16) NOT NULL,
     factor_created_at TIMESTAMP WITH TIME ZONE,
     expires_at     TIMESTAMP WITH TIME ZONE NOT NULL,
     spent_at       TIMESTAMP WITH TIME ZONE,
@@ -206,3 +206,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_security_notification_device_install
 
 CREATE INDEX IF NOT EXISTS idx_security_notification_device_user
     ON security_notification_device (user_id);
+
+-- V14 (continued): a challenge minted for a purpose with no factor has none to record.
+ALTER TABLE account_authority_challenge
+    ALTER COLUMN factor DROP NOT NULL;
+
+-- V15
+CREATE TABLE IF NOT EXISTS account_authority_candidate (
+    id             UUID        PRIMARY KEY,
+    account_id     VARCHAR(64) NOT NULL,
+    device_key_b64 TEXT        NOT NULL,
+    fingerprint    VARCHAR(16) NOT NULL,
+    label          TEXT,
+    created_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    expires_at     TIMESTAMP WITH TIME ZONE NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_account_authority_candidate_key
+    ON account_authority_candidate (account_id, device_key_b64);
+
+CREATE INDEX IF NOT EXISTS idx_account_authority_candidate_account
+    ON account_authority_candidate (account_id);
+
+CREATE INDEX IF NOT EXISTS idx_account_authority_candidate_expires
+    ON account_authority_candidate (expires_at);

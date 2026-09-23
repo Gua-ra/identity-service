@@ -35,6 +35,16 @@ public final class AuthorityRecords {
                 concat(deviceKey, new byte[] { (byte) reason }, authorizingKey));
     }
 
+    public static byte[] opposeFor(byte[] reference, byte[] opposedRecordHash, byte[] authorizingKey, long seq,
+            byte[] prevHash) {
+        return AuthorityRecordCodec.encode(AuthorityRecordType.OPPOSE, reference, prevHash, seq,
+                concat(opposedRecordHash, authorizingKey));
+    }
+
+    static byte[] oppose(byte[] opposedRecordHash, byte[] authorizingKey, long seq, byte[] prevHash) {
+        return opposeFor(REFERENCE, opposedRecordHash, authorizingKey, seq, prevHash);
+    }
+
     static byte[] adoptRoot(byte[] deviceKey, byte[] recoveryKey, String label, long seq, byte[] prevHash) {
         return AuthorityRecordCodec.encode(AuthorityRecordType.ADOPT_ROOT, REFERENCE, prevHash, seq,
                 concat(deviceKey, new byte[] { AuthorityRecord.RECOVERY_FRAMEWORK_COMMITTED_KEY }, recoveryKey,

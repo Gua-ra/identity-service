@@ -6,7 +6,7 @@ import java.security.MessageDigest;
 import java.util.Arrays;
 
 /**
- * The four record types of the authority chain (ADM-009 decision 2), each with its magic and its total
+ * The five record types of the authority chain (ADM-009 decision 2), each with its magic and its total
  * length.
  *
  * <p>The magic is the signature domain, which is why it is four ASCII bytes at offset 0 of the hashed
@@ -25,7 +25,17 @@ public enum AuthorityRecordType {
     DEVICE_REVOKE("GUAX", AuthorityRecord.DEVICE_REVOKE_LENGTH),
 
     /** Replaces the device set with one device and installs a new recovery authority key. */
-    AUTHORITY_RECOVERY("GUAR", AuthorityRecord.AUTHORITY_RECOVERY_LENGTH);
+    AUTHORITY_RECOVERY("GUAR", AuthorityRecord.AUTHORITY_RECOVERY_LENGTH),
+
+    /**
+     * Objects to the record it names. Signed by a key the chain has active and unquarantined.
+     *
+     * <p>Added by revision 4, because revisions 1 to 3 asked an active device to oppose a grant, a
+     * revocation and a recovery and gave it no object to oppose with. A bearer session's word was refused
+     * for those, correctly, since a stolen session could otherwise veto the owner's own revocation of the
+     * thief's device; that left the owner's device with nothing to say no with at all.
+     */
+    OPPOSE("GUAO", AuthorityRecord.OPPOSE_LENGTH);
 
     private final String magic;
     private final int length;

@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import me.sarahlacerda.gua.identityservice.account.authority.AuthorityFingerprint;
 import me.sarahlacerda.gua.identityservice.account.authority.AuthorityProofs;
 import me.sarahlacerda.gua.identityservice.account.authority.AuthorityRecord;
 import me.sarahlacerda.gua.identityservice.account.authority.AuthorityRecordCodec;
@@ -26,9 +27,11 @@ import me.sarahlacerda.gua.identityservice.domain.AuthorityChainHead;
 import me.sarahlacerda.gua.identityservice.domain.AuthorityChainRecord;
 import me.sarahlacerda.gua.identityservice.domain.AuthorityChallenge.Purpose;
 import me.sarahlacerda.gua.identityservice.domain.AuthorityDevice;
+import me.sarahlacerda.gua.identityservice.domain.AuthorityDeviceCandidate;
 import me.sarahlacerda.gua.identityservice.exception.AuthorityTransitionException;
 import me.sarahlacerda.gua.identityservice.repository.AuthorityChainHeadRepository;
 import me.sarahlacerda.gua.identityservice.repository.AuthorityChainRecordRepository;
+import me.sarahlacerda.gua.identityservice.repository.AuthorityDeviceCandidateRepository;
 import me.sarahlacerda.gua.identityservice.repository.AuthorityDeviceRepository;
 import me.sarahlacerda.gua.identityservice.service.authority.AuthorityAccounts.AuthorityStateResponse;
 import me.sarahlacerda.gua.identityservice.service.authority.AuthorityAccounts.ChainState;
@@ -71,6 +74,7 @@ public class AccountAuthorityService {
     private final AuthorityChainHeadRepository headRepository;
     private final AuthorityChainRecordRepository recordRepository;
     private final AuthorityDeviceRepository deviceRepository;
+    private final AuthorityDeviceCandidateRepository candidateRepository;
     private final AuthorityNotifications notifications;
     private final AuthorityBackoff backoff;
     private final SecurityAuditLogger auditLogger;
@@ -79,8 +83,9 @@ public class AccountAuthorityService {
     public AccountAuthorityService(AuthorityPolicy policy, AuthorityAccounts accounts,
             AuthorityChallengeService challenges, AuthorityStepUpService stepUps,
             AuthorityChainHeadRepository headRepository, AuthorityChainRecordRepository recordRepository,
-            AuthorityDeviceRepository deviceRepository, AuthorityNotifications notifications,
-            AuthorityBackoff backoff, SecurityAuditLogger auditLogger, Clock clock) {
+            AuthorityDeviceRepository deviceRepository, AuthorityDeviceCandidateRepository candidateRepository,
+            AuthorityNotifications notifications, AuthorityBackoff backoff, SecurityAuditLogger auditLogger,
+            Clock clock) {
         this.policy = policy;
         this.accounts = accounts;
         this.challenges = challenges;
@@ -88,6 +93,7 @@ public class AccountAuthorityService {
         this.headRepository = headRepository;
         this.recordRepository = recordRepository;
         this.deviceRepository = deviceRepository;
+        this.candidateRepository = candidateRepository;
         this.notifications = notifications;
         this.backoff = backoff;
         this.auditLogger = auditLogger;
@@ -202,7 +208,166 @@ public class AccountAuthorityService {
         cancelPending(account, head, pending, decoded, now, "opposed by the account holder");
     }
 
+    /**
+     * Cancels the pending record an active device objects to, with an {@code Oppose} it signed (ADM-009
+     * decision 2's fifth record).
+     *
+     * <p>Separate from {@link #oppose} because the two are different claims. A bearer session can say "someone
+     * who can already read this account's notifications says no", which decision 4 accepts at {@code seq = 1}
+     * and nowhere else: accepting it for a grant or a revocation would let a stolen session veto the owner's
+     * own revocation of the thief's device, which is the inversion decision 5's exclusion exists to prevent.
+     * An {@code Oppose} is the stronger claim, signed by a key the chain has active and unquarantined right
+     * now, and it is what decisions 5 and 7 mean by "an active device may oppose".
+     *
+     * <p><b>It takes no slot and starts no window.</b> It cancels the record it names, or it is refused, and it
+     * is never appended to the chain: an objection that consumed a position would let one device cycle
+     * objections and move the chain forward without any transition ever happening. The record therefore stands
+     * at the same position as the record it cancels, which is what its {@code seq} and {@code prevHash} are
+     * checked against.
+     *
+     * <p>No hold is weighed anywhere here. The fresh-factor hold and the recovery hold gate <em>starting</em> a
+     * transition and never opposing one: an owner who has just changed their PIN to lock a thief out must not
+     * be the one disarmed by it.
+     */
+    @Transactional
+    public void opposeWithRecord(String userId, Optional<String> clientId, String sessionHash, String recordB64,
+            String signatureB64, String challengeB64) {
+        policy.requireEnabled();
+        policy.requireNativeSession(clientId);
+        Resolved account = accounts.require(userId);
+        AuthorityRecord record = decodeSubmitted(recordB64, AuthorityRecordType.OPPOSE);
+        accounts.requireMatches(account, record.accountReference());
+
+        Instant now = clock.instant();
+        AuthorityChallengeService.Spent spent =
+                challenges.spend(account.reference(), sessionHash, Purpose.OPPOSE, challengeB64, now);
+        byte[] signature = decode(signatureB64, "bad_signature_encoding");
+        if (!AuthorityProofs.verifyRecord(record, spent.challenge(), signature)) {
+            throw new InvalidAuthorityRecordException("invalid_signature",
+                    "the signature does not verify over magic, challenge and canonical bytes");
+        }
+
+        AuthorityChainHead head = lockHead(account, now);
+        if (!head.hasPending()) {
+            // Settled while this was in flight, or never there. Answered the same way either way, so an
+            // opposition cannot be used to ask what state the account is in.
+            return;
+        }
+        AuthorityChainRecord pending = requirePending(account, head);
+        if (!head.getPendingHash().equalsIgnoreCase(record.opposedRecordHashHex())
+                || record.seq() != pending.getSeq()
+                || !record.prevHashHex().equalsIgnoreCase(pending.getPrevHash())) {
+            // Named something else, or was built against another position of this chain. Either way it is not
+            // an objection to what is actually pending.
+            throw new AuthorityTransitionException(HttpStatus.CONFLICT, "authority_opposition_stale",
+                    "That objection names a different step. Read the chain again.");
+        }
+
+        List<AuthorityDevice> devices = deviceRepository.findByAccount(account.reference());
+        AuthorityDevice signer = requireKnownDevice(devices, record.verifyingKey());
+        // A quarantined device may not sign an authority-sensitive approval, and an objection is one.
+        policy.requireNotQuarantined(signer.isQuarantined(now));
+
+        AuthorityRecord decoded = decodeStored(pending);
+        boolean opposerIsNamedDevice = decoded.deviceKey() != null
+                && encode(decoded.deviceKey()).equals(signer.getDeviceKeyB64());
+        Opposition outcome = policy.opposition(decoded.type(), decoded.authorization(), opposerIsNamedDevice,
+                acceptingWouldLeaveSignerAlone(decoded, devices, now));
+        if (outcome == Opposition.REFUSED) {
+            throw new AuthorityTransitionException(HttpStatus.FORBIDDEN, "authority_opposition_refused",
+                    "That device cannot object to this step.");
+        }
+        if (outcome == Opposition.EXTENDS_ONCE) {
+            extendOnce(account, head, pending, decoded, now);
+            return;
+        }
+        cancelPending(account, head, pending, decoded, now, "opposed by an active device");
+    }
+
+    /**
+     * Whether accepting the pending revocation would leave the device that signed it as the only active one.
+     *
+     * <p>The carve-out of decision 5. Revision 2's unconditional "the named device may not veto its own
+     * removal" handed the mirror-image power to an intruder: one device evicting the other with no objection
+     * possible is a takeover, while a standoff between two devices is a worse outcome for nobody. The standoff
+     * is broken by the rank-2 record, which no pending revocation can block and no device can cast.
+     */
+    private static boolean acceptingWouldLeaveSignerAlone(AuthorityRecord pending, List<AuthorityDevice> devices,
+            Instant now) {
+        if (pending.type() != AuthorityRecordType.DEVICE_REVOKE) {
+            return false;
+        }
+        String target = Base64.getUrlEncoder().withoutPadding().encodeToString(pending.deviceKey());
+        long remaining = devices.stream()
+                .filter(device -> !device.getDeviceKeyB64().equals(target))
+                .filter(device -> device.isUnquarantinedActive(now))
+                .count();
+        return remaining == 1;
+    }
+
     // --- Devices --------------------------------------------------------------
+
+    /**
+     * Offers this device's own public key as a candidate for a grant (ADM-009 decision 5, revision 4).
+     *
+     * <p>The new device posts only its public key, under its own authenticated session, and gets back a short
+     * fingerprint. Revisions 1 to 3 fixed both ends of the transfer and left this middle undefined: the new
+     * device generates its own key and never receives another device's, an existing device signs a grant over
+     * it, and nothing said how the public key crossed between them.
+     *
+     * <p>No step-up and no native-session rule here, deliberately. Offering a public key grants nothing: it
+     * creates something an existing active device must then sign over, after a human has compared the
+     * fingerprint on both screens. The controls belong on the grant, which is where authority actually moves.
+     *
+     * <p>An upsert, so a device that offers twice refreshes its own row rather than filling the account with
+     * copies of one key.
+     */
+    @Transactional
+    public Candidate registerCandidate(String userId, String deviceKeyB64, String label) {
+        policy.requireEnabled();
+        Resolved account = accounts.require(userId);
+        byte[] deviceKey = decode(deviceKeyB64, "bad_device_key_encoding");
+        if (deviceKey.length != AuthorityRecord.KEY_LENGTH) {
+            throw new InvalidAuthorityRecordException("invalid_device_key",
+                    "a device key is " + AuthorityRecord.KEY_LENGTH + " bytes");
+        }
+        String encoded = encode(deviceKey);
+        Instant now = clock.instant();
+        // Swept here rather than by a scheduler, as the challenge table is swept and for the same reason.
+        candidateRepository.deleteExpired(now);
+
+        Instant expiresAt = now.plus(policy.candidateLife());
+        AuthorityDeviceCandidate candidate = candidateRepository
+                .findByAccountAndDeviceKeyB64(account.reference(), encoded)
+                .orElseGet(() -> AuthorityDeviceCandidate.offered(account.reference(), encoded,
+                        AuthorityFingerprint.of(deviceKey), label, now, expiresAt));
+        candidate.setLabel(label);
+        candidate.setExpiresAt(expiresAt);
+        candidateRepository.save(candidate);
+
+        return new Candidate(encoded, candidate.getFingerprint(), candidate.getLabel(),
+                expiresAt.getEpochSecond());
+    }
+
+    /**
+     * The keys this account's new devices have offered, for the device that will sign the grant.
+     *
+     * <p>The granting device shows the fingerprint beside the label, and the person holding the other phone
+     * reads the same eight characters off their own screen. That comparison is the only thing binding the key
+     * to the person, which is why the fingerprint is derived from the key rather than issued by the server.
+     */
+    @Transactional
+    public List<Candidate> candidates(String userId) {
+        policy.requireEnabled();
+        Resolved account = accounts.require(userId);
+        Instant now = clock.instant();
+        candidateRepository.deleteExpired(now);
+        return candidateRepository.findByAccount(account.reference()).stream()
+                .filter(candidate -> candidate.isLive(now))
+                .map(candidate -> new Candidate(candidate.getDeviceKeyB64(), candidate.getFingerprint(),
+                        candidate.getLabel(), candidate.getExpiresAt().getEpochSecond()))
+                .toList();
+    }
 
     /**
      * Activates another device key (ADM-009 decision 5).
@@ -388,6 +553,15 @@ public class AccountAuthorityService {
             case DEVICE_GRANT, DEVICE_REVOKE -> {
                 AuthorityDevice signer = requireKnownDevice(devices, record.verifyingKey());
                 policy.requireNotQuarantined(signer.isQuarantined(now));
+                if (record.type() == AuthorityRecordType.DEVICE_GRANT) {
+                    // The key has to be one a device of this account offered, and offered recently. Without
+                    // it a grant is a signature over 32 bytes from anywhere, and the human fingerprint
+                    // comparison the ceremony rests on has nothing behind it on the server side.
+                    policy.requireLiveCandidate(candidateRepository
+                            .findByAccountAndDeviceKeyB64(account.reference(), encode(record.deviceKey()))
+                            .filter(candidate -> candidate.isLive(now))
+                            .isPresent());
+                }
                 if (record.type() == AuthorityRecordType.DEVICE_REVOKE) {
                     policy.requireLeavesAnActiveDevice(
                             countUnquarantinedActiveAfterRevoking(devices, record.deviceKey(), now));
@@ -400,6 +574,7 @@ public class AccountAuthorityService {
                             "That is not the recovery key this account committed.");
                 }
             }
+            case OPPOSE -> throw new IllegalStateException("an Oppose never joins the chain");
         }
     }
 
@@ -615,9 +790,15 @@ public class AccountAuthorityService {
         switch (record.type()) {
             case ADOPT_ROOT -> deviceRepository.save(AuthorityDevice.granted(account.reference(),
                     encode(record.deviceKey()), record.label(), seq, null, AuthorityDevice.State.ACTIVE, now));
-            case DEVICE_GRANT -> deviceRepository.save(AuthorityDevice.granted(account.reference(),
-                    encode(record.deviceKey()), record.label(), seq, policy.quarantineUntil(now),
-                    AuthorityDevice.State.QUARANTINED, now));
+            case DEVICE_GRANT -> {
+                deviceRepository.save(AuthorityDevice.granted(account.reference(), encode(record.deviceKey()),
+                        record.label(), seq, policy.quarantineUntil(now), AuthorityDevice.State.QUARANTINED,
+                        now));
+                // Spent. A candidate that outlived the grant it was offered for would let a second grant be
+                // signed over the same key without anybody comparing a fingerprint again.
+                candidateRepository.findByAccountAndDeviceKeyB64(account.reference(), encode(record.deviceKey()))
+                        .ifPresent(candidateRepository::delete);
+            }
             case DEVICE_REVOKE -> revokeDeviceRow(account, record.deviceKey(), seq, now);
             case AUTHORITY_RECOVERY -> {
                 // Replaces the set with one device. Every previous key goes, because the premise of recovering
@@ -632,6 +813,8 @@ public class AccountAuthorityService {
                 deviceRepository.save(AuthorityDevice.granted(account.reference(), encode(record.deviceKey()),
                         record.label(), seq, null, AuthorityDevice.State.ACTIVE, now));
             }
+            // It takes no slot and starts no window: it cancels the record it names, or it is refused.
+            case OPPOSE -> throw new IllegalStateException("an Oppose has no effect to apply");
         }
     }
 
@@ -674,6 +857,7 @@ public class AccountAuthorityService {
             case DEVICE_GRANT -> Purpose.GRANT;
             case DEVICE_REVOKE -> Purpose.REVOKE;
             case AUTHORITY_RECOVERY -> Purpose.RECOVER;
+            case OPPOSE -> Purpose.OPPOSE;
         };
     }
 
@@ -726,5 +910,16 @@ public class AccountAuthorityService {
      * @param recordHash               SHA-256 hex over its canonical bytes, which an opposition names
      */
     public record Submitted(long seq, boolean pending, long effectiveAtEpochSeconds, String recordHash) {
+    }
+
+    /**
+     * A key a new device has offered.
+     *
+     * @param deviceKeyB64          the raw Ed25519 public key it generated, base64url
+     * @param fingerprint           the eight characters both devices compute and a person compares
+     * @param label                 what the new device suggests calling itself
+     * @param expiresAtEpochSeconds when the offer stops being grantable
+     */
+    public record Candidate(String deviceKeyB64, String fingerprint, String label, long expiresAtEpochSeconds) {
     }
 }

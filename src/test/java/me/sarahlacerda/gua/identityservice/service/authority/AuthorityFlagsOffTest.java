@@ -60,6 +60,9 @@ class AuthorityFlagsOffTest {
     private AuthorityChallengeRepository challengeRepository;
 
     @Mock
+    private me.sarahlacerda.gua.identityservice.repository.AuthorityDeviceCandidateRepository candidateRepository;
+
+    @Mock
     private AuthorityNotifications notifications;
 
     @Mock
@@ -81,7 +84,8 @@ class AuthorityFlagsOffTest {
         assertThat(properties.getAuthority().isEnabled()).isFalse();
         AuthorityPolicy policy = new AuthorityPolicy(properties, userSecurityService);
         service = new AccountAuthorityService(policy, accounts, challenges, stepUps, headRepository,
-                recordRepository, deviceRepository, notifications, backoff, auditLogger, java.time.Clock.systemUTC());
+                recordRepository, deviceRepository, candidateRepository, notifications, backoff, auditLogger,
+                java.time.Clock.systemUTC());
     }
 
     @Test
@@ -128,8 +132,21 @@ class AuthorityFlagsOffTest {
     void opposingIsRefusedAndTakesNoLock() {
         assertThat(refusalFrom(() -> service.oppose("@a:gua", "hash", null, null, null, "127.0.0.1")))
                 .isEqualTo("authority_disabled");
+        assertThat(refusalFrom(() -> service.opposeWithRecord("@a:gua", Optional.of("gua-ios"), "s", "r", "sig",
+                "c"))).isEqualTo("authority_disabled");
 
         verifyNoInteractions(headRepository, recordRepository, accounts, stepUps);
+    }
+
+    @Test
+    void theCandidateStepIsRefusedAndStoresNothing() {
+        assertThat(refusalFrom(() -> service.registerCandidate("@a:gua", "key", "iPad")))
+                .isEqualTo("authority_disabled");
+        assertThat(refusalFrom(() -> service.candidates("@a:gua"))).isEqualTo("authority_disabled");
+
+        // Refused before the account is resolved, so a deployment with the flag off cannot hold a candidate
+        // key any more than it can hold a chain row.
+        verifyNoInteractions(accounts, candidateRepository);
     }
 
     @Test

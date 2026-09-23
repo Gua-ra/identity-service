@@ -620,6 +620,15 @@ public class IdentityServiceProperties {
         @NotNull
         private List<String> nativeClientIds = new ArrayList<>();
 
+        /**
+         * How long a candidate device key stays grantable (ADM-009 decision 5, revision 4).
+         *
+         * <p>Short, because a candidate is a step in a ceremony two people are performing right now. One left
+         * lying around is a key over which a grant could later be signed without anybody comparing anything.
+         */
+        @NotNull
+        private Duration candidateLife = Duration.ofMinutes(10);
+
         /** The out-of-band channel of gate 2. Off by default, which is why gate 2 still blocks. */
         @Valid
         @NotNull

@@ -63,6 +63,7 @@ public final class AuthorityRecord {
     public static final int DEVICE_GRANT_LENGTH = 161;
     public static final int DEVICE_REVOKE_LENGTH = 145;
     public static final int AUTHORITY_RECOVERY_LENGTH = 209;
+    public static final int OPPOSE_LENGTH = 144;
 
     /** The only recovery framework the chain accepts, as ADM-008 decision 4 fixes it. */
     public static final int RECOVERY_FRAMEWORK_COMMITTED_KEY = 0x01;
@@ -99,12 +100,13 @@ public final class AuthorityRecord {
     private final Integer reason;
     private final Integer authorization;
     private final byte[] authorizingKey;
+    private final byte[] opposedRecordHash;
     private final byte[] canonicalBytes;
 
     AuthorityRecord(AuthorityRecordType type, int version, int suite, byte[] accountReference, byte[] prevHash,
             long seq, byte[] deviceKey, Integer recoveryFrameworkId, byte[] recoveryAuthorityKey, String label,
             byte[] entropy, Integer flags, Integer reason, Integer authorization, byte[] authorizingKey,
-            byte[] canonicalBytes) {
+            byte[] opposedRecordHash, byte[] canonicalBytes) {
         this.type = type;
         this.version = version;
         this.suite = suite;
@@ -120,6 +122,7 @@ public final class AuthorityRecord {
         this.reason = reason;
         this.authorization = authorization;
         this.authorizingKey = authorizingKey;
+        this.opposedRecordHash = opposedRecordHash;
         this.canonicalBytes = canonicalBytes;
     }
 
@@ -156,7 +159,17 @@ public final class AuthorityRecord {
 
     /** The device authority key this record activates, or names for removal. */
     public byte[] deviceKey() {
-        return deviceKey.clone();
+        return deviceKey == null ? null : deviceKey.clone();
+    }
+
+    /** The record an {@link AuthorityRecordType#OPPOSE} objects to, by its SHA-256, or null. */
+    public byte[] opposedRecordHash() {
+        return opposedRecordHash == null ? null : opposedRecordHash.clone();
+    }
+
+    /** Lowercase hex of {@link #opposedRecordHash()}, the form the head row stores a pending hash in. */
+    public String opposedRecordHashHex() {
+        return opposedRecordHash == null ? null : HexFormat.of().formatHex(opposedRecordHash);
     }
 
     /** Only on {@link AuthorityRecordType#ADOPT_ROOT}. */

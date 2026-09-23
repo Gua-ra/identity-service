@@ -304,6 +304,10 @@ public class AuthorityPolicy {
                             && authorization != null
                             && authorization == AuthorityRecord.AUTHORIZATION_ACCOUNT_RECOVERY);
             case DEVICE_GRANT, DEVICE_REVOKE -> context.unquarantinedActiveDevices() >= 1;
+            // An Oppose takes no slot and starts no window, so it never reaches the position rules. Refused
+            // here rather than permitted, so a future caller that routed one through the submission path
+            // would fail closed instead of appending it to the chain.
+            case OPPOSE -> false;
         };
         if (!permitted) {
             throw new AuthorityTransitionException(HttpStatus.CONFLICT, "authority_position_refused",
@@ -384,6 +388,8 @@ public class AuthorityPolicy {
                     && pendingAuthorization == AuthorityRecord.AUTHORIZATION_RECOVERY_KEY
                             ? Opposition.EXTENDS_ONCE
                             : Opposition.CANCELS;
+            // An Oppose never holds a slot, so nothing can ever be pending as one.
+            case OPPOSE -> Opposition.REFUSED;
         };
     }
 
@@ -534,6 +540,25 @@ public class AuthorityPolicy {
         // A grant only adds, and its holder is quarantined; a device removing its own authority reduces
         // what an attacker holding it could do, and delaying that helps nobody.
         return record.type() == AuthorityRecordType.DEVICE_GRANT || record.isSelfRevocation();
+    }
+
+    /** How long a candidate device key stays grantable (ADM-009 decision 5, revision 4). */
+    public Duration candidateLife() {
+        return authority().getCandidateLife();
+    }
+
+    /**
+     * Refuses a grant over a key that is not a live candidate of this account.
+     *
+     * <p>Two failures collapse into one refusal on purpose. A key nobody offered and a key whose candidate has
+     * expired are both "no human compared this fingerprint just now", and telling the caller which would let a
+     * grant probe whether some key was ever a candidate of this account.
+     */
+    public void requireLiveCandidate(boolean live) {
+        if (!live) {
+            throw new AuthorityTransitionException(HttpStatus.CONFLICT, "authority_unknown_candidate",
+                    "That device has not offered its key to this account, or the offer has expired.");
+        }
     }
 
     public Duration approvalTtl() {

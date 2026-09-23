@@ -83,6 +83,9 @@ identity:
     challenge-ttl: ${IDENTITY_AUTHORITY_CHALLENGE_TTL:PT15M}
     approval-ttl: ${IDENTITY_AUTHORITY_APPROVAL_TTL:PT10M}
     max-live-approvals: ${IDENTITY_AUTHORITY_MAX_LIVE_APPROVALS:3}
+    # How long a new device's offered key stays grantable. Short on purpose: it is a step in a ceremony
+    # two people are performing right now.
+    candidate-life: ${IDENTITY_AUTHORITY_CANDIDATE_LIFE:PT10M}
     allow-short-windows-for-testing: ${IDENTITY_AUTHORITY_ALLOW_SHORT_WINDOWS_FOR_TESTING:false}
     # Registered client ids whose tokens count as a native session (ADM-009 decision 4 step 1). Read
     # from the token's verified audience, never from the client-asserted downstream marker. Empty means

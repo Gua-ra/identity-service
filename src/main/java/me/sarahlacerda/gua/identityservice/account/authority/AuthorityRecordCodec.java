@@ -10,7 +10,7 @@ import me.sarahlacerda.gua.identityservice.account.genesis.Ed25519Keys;
 import me.sarahlacerda.gua.identityservice.account.genesis.InvalidGenesisException;
 
 /**
- * The canonical codec for the four authority-chain records (ADM-009 decision 2).
+ * The canonical codec for the five authority-chain records (ADM-009 decision 2).
  *
  * <p>One envelope, fixed layout, big-endian, no delimiters:
  *
@@ -33,6 +33,7 @@ import me.sarahlacerda.gua.identityservice.account.genesis.InvalidGenesisExcepti
  * GUAX DeviceRevoke       deviceKey 32 | reason 1 | authorizingKey 32                                              = 145
  * GUAR AuthorityRecovery  deviceKey 32 | recoveryAuthorityKey 32 | label 16 | entropy 16 | authorization 1
  *                         | authorizingKey 32                                                                     = 209
+ * GUAO Oppose             opposedRecordHash 32 | authorizingKey 32                                                = 144
  * </pre>
  *
  * <h2>Why the same shape as AccountGenesisCodec</h2>
@@ -83,6 +84,10 @@ public final class AuthorityRecordCodec {
     private static final int REVOKE_REASON = 112;
     private static final int REVOKE_AUTHORIZING_KEY = 113;
 
+    // Oppose body.
+    private static final int OPPOSE_RECORD_HASH = OFFSET_BODY;
+    private static final int OPPOSE_AUTHORIZING_KEY = 112;
+
     // AuthorityRecovery body.
     private static final int RECOVER_DEVICE_KEY = OFFSET_BODY;
     private static final int RECOVER_RECOVERY_KEY = 112;
@@ -128,6 +133,7 @@ public final class AuthorityRecordCodec {
             case DEVICE_GRANT -> decodeGrant(bytes, version, suite, accountReference, prevHash, seq);
             case DEVICE_REVOKE -> decodeRevoke(bytes, version, suite, accountReference, prevHash, seq);
             case AUTHORITY_RECOVERY -> decodeRecovery(bytes, version, suite, accountReference, prevHash, seq);
+            case OPPOSE -> decodeOppose(bytes, version, suite, accountReference, prevHash, seq);
         };
     }
 
@@ -144,7 +150,7 @@ public final class AuthorityRecordCodec {
         byte[] entropy = Arrays.copyOfRange(bytes, ADOPT_ENTROPY, AuthorityRecord.ADOPT_ROOT_LENGTH);
 
         return new AuthorityRecord(AuthorityRecordType.ADOPT_ROOT, version, suite, account, prevHash, seq,
-                deviceKey, framework, recoveryKey, label, entropy, null, null, null, null, bytes);
+                deviceKey, framework, recoveryKey, label, entropy, null, null, null, null, null, bytes);
     }
 
     private static AuthorityRecord decodeGrant(byte[] bytes, int version, int suite, byte[] account,
@@ -160,7 +166,7 @@ public final class AuthorityRecordCodec {
         byte[] authorizingKey = key(bytes, GRANT_AUTHORIZING_KEY, "authorizing_key");
 
         return new AuthorityRecord(AuthorityRecordType.DEVICE_GRANT, version, suite, account, prevHash, seq,
-                deviceKey, null, null, label, null, flags, null, null, authorizingKey, bytes);
+                deviceKey, null, null, label, null, flags, null, null, authorizingKey, null, bytes);
     }
 
     private static AuthorityRecord decodeRevoke(byte[] bytes, int version, int suite, byte[] account,
@@ -173,7 +179,7 @@ public final class AuthorityRecordCodec {
         byte[] authorizingKey = key(bytes, REVOKE_AUTHORIZING_KEY, "authorizing_key");
 
         return new AuthorityRecord(AuthorityRecordType.DEVICE_REVOKE, version, suite, account, prevHash, seq,
-                deviceKey, null, null, null, null, null, reason, null, authorizingKey, bytes);
+                deviceKey, null, null, null, null, null, reason, null, authorizingKey, null, bytes);
     }
 
     private static AuthorityRecord decodeRecovery(byte[] bytes, int version, int suite, byte[] account,
@@ -211,7 +217,27 @@ public final class AuthorityRecordCodec {
         }
 
         return new AuthorityRecord(AuthorityRecordType.AUTHORITY_RECOVERY, version, suite, account, prevHash, seq,
-                deviceKey, null, recoveryKey, label, entropy, null, null, authorization, authorizingKey, bytes);
+                deviceKey, null, recoveryKey, label, entropy, null, null, authorization, authorizingKey, null,
+                bytes);
+    }
+
+    /**
+     * {@code GUAO}: the hash of the record being objected to, and the key that objects.
+     *
+     * <p>An all-zero opposed hash is refused for the same reason an all-zero key is: it is the value a
+     * caller who filled in nothing produces, and a record that objects to nothing in particular would cancel
+     * whatever happened to be pending.
+     */
+    private static AuthorityRecord decodeOppose(byte[] bytes, int version, int suite, byte[] account,
+            byte[] prevHash, long seq) {
+        byte[] opposed = Arrays.copyOfRange(bytes, OPPOSE_RECORD_HASH, OPPOSE_AUTHORIZING_KEY);
+        if (Ed25519Keys.isAllZero(opposed)) {
+            throw new InvalidAuthorityRecordException("zero_opposed_record", "the opposed record hash is all zero");
+        }
+        byte[] authorizingKey = key(bytes, OPPOSE_AUTHORIZING_KEY, "authorizing_key");
+
+        return new AuthorityRecord(AuthorityRecordType.OPPOSE, version, suite, account, prevHash, seq,
+                null, null, null, null, null, null, null, null, authorizingKey, opposed, bytes);
     }
 
     /**

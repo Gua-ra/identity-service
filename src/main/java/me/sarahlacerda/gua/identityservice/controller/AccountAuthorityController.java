@@ -31,6 +31,7 @@ import me.sarahlacerda.gua.identityservice.controller.dto.AuthorityApprovalRespo
 import me.sarahlacerda.gua.identityservice.controller.dto.AuthorityApprovalSignRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.AuthorityApprovalStartRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.AuthorityApprovalView;
+import me.sarahlacerda.gua.identityservice.controller.dto.AuthorityCandidateRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.AuthorityChallengeRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.AuthorityChallengeResponse;
 import me.sarahlacerda.gua.identityservice.controller.dto.AuthorityOpposeRequest;
@@ -169,6 +170,71 @@ public class AccountAuthorityController {
         authorityService.oppose(userId, body.getRecordHash(), body.getPasskeyStepUpId(),
                 body.getPasskeyCredential(), body.getPin(), servletRequest.getRemoteAddr());
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/oppose/record")
+    @Operation(summary = "Object to the pending transition with a signed record",
+            description = "The Oppose record of ADM-009 decision 2, signed by a key the chain has active and "
+                    + "unquarantined right now. It takes no slot and starts no window: it cancels the record "
+                    + "it names, or it is refused. This is what decisions 5 and 7 mean by an active device "
+                    + "objecting, and it is the claim a bearer session cannot make, because a stolen session "
+                    + "would otherwise veto the owner's own revocation of the thief's device. No factor is "
+                    + "asked for and no hold is weighed: the holds gate starting a transition, never opposing "
+                    + "one.",
+            security = @SecurityRequirement(name = "oidcAccessToken"))
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "Cancelled, extended, or nothing was pending"),
+            @ApiResponse(responseCode = "400", description = "invalid_authority_record", content = @Content),
+            @ApiResponse(responseCode = "403", description = "authority_signer_refused, "
+                    + "authority_device_quarantined, authority_opposition_refused or "
+                    + "authority_challenge_invalid", content = @Content),
+            @ApiResponse(responseCode = "409", description = "authority_opposition_stale or "
+                    + "authority_account_mismatch", content = @Content),
+            @ApiResponse(responseCode = "503", description = "authority_disabled", content = @Content)
+    })
+    public ResponseEntity<Void> opposeWithRecord(@RequestBody @Valid AuthorityRecordSubmission request,
+            @Parameter(hidden = true) HttpServletRequest servletRequest) {
+        String userId = authenticatedUserAccessor.requireCurrentUserId();
+        authorityService.opposeWithRecord(userId, authenticatedUserAccessor.currentClientId(),
+                sessionHash(servletRequest), request.getRecord(), request.getSignature(), request.getChallenge());
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/device/candidate")
+    @Operation(summary = "Offer this device's own public key for a grant",
+            description = "The new device posts only its public key, under its own session, and gets back a "
+                    + "short fingerprint. The granting device reads the account's candidates, shows the same "
+                    + "fingerprint, and signs a grant over the one the user confirms. That comparison is the "
+                    + "only thing crossing between the two phones a person has to make, so the fingerprint is "
+                    + "derived from the key rather than issued: both devices compute the same eight characters "
+                    + "from the same 32 bytes.",
+            security = @SecurityRequirement(name = "oidcAccessToken"))
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Offered, with its fingerprint and its expiry",
+                    content = @Content(schema = @Schema(
+                            implementation = AccountAuthorityService.Candidate.class))),
+            @ApiResponse(responseCode = "400", description = "invalid_device_key", content = @Content),
+            @ApiResponse(responseCode = "503", description = "authority_disabled", content = @Content)
+    })
+    public ResponseEntity<AccountAuthorityService.Candidate> offerCandidate(
+            @RequestBody @Valid AuthorityCandidateRequest request) {
+        String userId = authenticatedUserAccessor.requireCurrentUserId();
+        return ResponseEntity.ok(authorityService.registerCandidate(userId, request.getDeviceKeyB64(),
+                request.getLabel()));
+    }
+
+    @GetMapping("/device/candidate")
+    @Operation(summary = "The keys this account's new devices have offered",
+            description = "For the device that will sign the grant. A grant over a key that is not a live "
+                    + "candidate of this account is refused, so this list is what a grant may name.",
+            security = @SecurityRequirement(name = "oidcAccessToken"))
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The live candidates"),
+            @ApiResponse(responseCode = "503", description = "authority_disabled", content = @Content)
+    })
+    public ResponseEntity<List<AccountAuthorityService.Candidate>> candidates() {
+        return ResponseEntity.ok(
+                authorityService.candidates(authenticatedUserAccessor.requireCurrentUserId()));
     }
 
     @PostMapping("/device/grant")

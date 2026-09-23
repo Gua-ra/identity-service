@@ -41,7 +41,11 @@ class AccountAuthorityGuardTest {
     private static final List<Path> AUTHORITY_SOURCES = List.of(
             MAIN.resolve("account/authority"),
             MAIN.resolve("service/authority"),
-            MAIN.resolve("controller/AccountAuthorityController.java"));
+            MAIN.resolve("controller/AccountAuthorityController.java"),
+            // Gate 2's channel. Listed here so the three rules cover it too: it is the one part of the
+            // feature that talks about a device the account holder carries, which is exactly where a phone
+            // number would look like it belonged.
+            MAIN.resolve("controller/AccountAuthorityNotificationController.java"));
 
     /**
      * The OTP surface, by the names an authority file would have to write to reach it. {@code OtpScope} and
@@ -129,12 +133,47 @@ class AccountAuthorityGuardTest {
     @Test
     void theHoldNeverGatesAnOpposition() throws IOException {
         String service = read(MAIN.resolve("service/authority/AccountAuthorityService.java"));
-        String body = methodBody(service, "public void oppose(");
 
         // An owner who has just changed their PIN to lock a thief out must not be the one disarmed by it.
-        assertThat(body).doesNotContain("enforceFreshFactorHold");
-        assertThat(body).doesNotContain("enforceRecoveryOutsideHold");
-        assertThat(body).doesNotContain("enforceHolds");
+        // Both shapes of objection: the bearer session's, and the Oppose record an active device signs.
+        for (String method : new String[] { "public void oppose(", "public void opposeWithRecord(" }) {
+            String body = methodBody(service, method);
+            assertThat(body).as("in %s", method).doesNotContain("enforceFreshFactorHold");
+            assertThat(body).as("in %s", method).doesNotContain("enforceRecoveryOutsideHold");
+            assertThat(body).as("in %s", method).doesNotContain("enforceHolds");
+        }
+
+        // And the minting path, which is shared, skips both for the opposing purpose rather than being
+        // trusted not to be called: a challenge a held account cannot get is a hold on opposing by proxy.
+        String stepUps = read(MAIN.resolve("service/authority/AuthorityStepUpService.java"));
+        assertThat(methodBody(stepUps, "public void enforceHolds(")).contains("Purpose.OPPOSE");
+    }
+
+    @Test
+    void anOpposeIsNeverAppendedToTheChain() throws IOException {
+        String service = read(MAIN.resolve("service/authority/AccountAuthorityService.java"));
+        String policy = read(MAIN.resolve("service/authority/AuthorityPolicy.java"));
+
+        // It takes no slot and starts no window: it cancels the record it names, or it is refused. An
+        // objection that consumed a position would let one device cycle objections and walk the chain forward
+        // with no transition ever happening.
+        String oppose = methodBody(service, "public void opposeWithRecord(");
+        assertThat(oppose).doesNotContain("recordRepository.save(");
+        assertThat(oppose).doesNotContain("head.place(");
+
+        // And if a future caller ever routed one through the submission path, it would fail closed.
+        assertThat(methodBody(policy, "public void requirePermittedAt(")).contains("case OPPOSE -> false");
+    }
+
+    @Test
+    void aGrantMayOnlyNameAKeyADeviceOfThisAccountOffered() throws IOException {
+        String service = read(MAIN.resolve("service/authority/AccountAuthorityService.java"));
+
+        // Revision 4's candidate step. Without this check a grant is a signature over 32 bytes from anywhere,
+        // and the human fingerprint comparison the ceremony rests on has nothing behind it server side.
+        String signer = methodBody(service, "private void requireSignerMayAct(");
+        assertThat(signer).contains("policy.requireLiveCandidate(");
+        assertThat(signer).contains("candidate.isLive(now)");
     }
 
     @Test
@@ -201,12 +240,23 @@ class AccountAuthorityGuardTest {
         // Either the handler asks, or the service method it calls does. Checked as a set, because a handler
         // that delegates immediately has nothing else to check.
         long gatedInTheService = Stream.of("public AuthorityChallengeService.Minted challenge(",
-                        "public Submitted adopt(", "public void oppose(", "public Submitted grantDevice(",
-                        "public Submitted revokeDevice(", "public Submitted recoverAuthority(",
-                        "public AuthorityStateResponse state(")
+                        "public Submitted adopt(", "public void oppose(", "public void opposeWithRecord(",
+                        "public Submitted grantDevice(", "public Submitted revokeDevice(",
+                        "public Submitted recoverAuthority(", "public AuthorityStateResponse state(",
+                        "public Candidate registerCandidate(", "public List<Candidate> candidates(")
                 .filter(method -> methodBody(service, method).contains("policy.requireEnabled()"))
                 .count();
-        assertThat(gatedInTheService).isEqualTo(7);
+        assertThat(gatedInTheService).isEqualTo(10);
+
+        // The channel has its own switch on top of the chain's, because turning it on means this service
+        // starts holding two push credentials it has never held.
+        String registry = read(MAIN.resolve("service/authority/AuthorityNotificationRegistry.java"));
+        for (String method : new String[] { "public Registered register(", "public String remove(",
+                "public List<AuthorityNotificationRegistration> listForHolder(" }) {
+            assertThat(methodBody(registry, method)).as("flag gates in %s", method)
+                    .contains("policy.requireEnabled()")
+                    .contains("policy.requireNotificationsEnabled()");
+        }
 
         for (String method : new String[] { "public ResponseEntity<AuthorityApprovalResponse> startApproval(",
                 "public ResponseEntity<List<AuthorityApprovalView>> liveApprovals(",

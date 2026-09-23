@@ -81,6 +81,9 @@ class AccountAuthorityTransitionTest {
     @Autowired
     private AuthorityChallengeRepository challengeRepository;
 
+    @Autowired
+    private me.sarahlacerda.gua.identityservice.repository.AuthorityDeviceCandidateRepository candidateRepository;
+
     private final TestEd25519.Pair firstDevice = TestEd25519.generate();
     private final TestEd25519.Pair secondDevice = TestEd25519.generate();
     private final TestEd25519.Pair recoveryKey = TestEd25519.generate();
@@ -110,8 +113,8 @@ class AccountAuthorityTransitionTest {
         challenges = new AuthorityChallengeService(challengeRepository, policy);
         channel = new StubChannel();
         service = new AccountAuthorityService(policy, accounts, challenges, null, headRepository, recordRepository,
-                deviceRepository, new AuthorityNotifications(List.of(channel)), new NoBackoff(policy),
-                new LoggingSecurityAuditLogger(), clock);
+                deviceRepository, candidateRepository, new AuthorityNotifications(List.of(channel)),
+                new NoBackoff(policy), new LoggingSecurityAuditLogger(), clock);
 
         BootstrapGenesis genesis = BootstrapGenesisCodec.mint();
         genesisRepository.saveAndFlush(AccountGenesisRecord.attachedBootstrap(genesis.accountId().value(), USER,
@@ -451,6 +454,136 @@ class AccountAuthorityTransitionTest {
         assertThat(recordRepository.findByAccountOrderBySeqAsc(account())).isEmpty();
     }
 
+    // --- Oppose, and the candidate step -------------------------------------
+
+    @Test
+    void anActiveDeviceCancelsAPendingRevocationWithASignedOppose() {
+        rootTheAccount();
+        grantSecondDevice();
+        clock.advance(Duration.ofHours(73));
+        service.state(USER);
+
+        // The first device asks for the second to be removed; the second objects. A bearer session cannot
+        // make that objection, because a stolen session would then veto the owner's own revocation.
+        AccountAuthorityService.Submitted revocation = revokeSecondDevice();
+        assertThat(revocation.pending()).isTrue();
+
+        opposeAsSecondDevice(revocation.recordHash());
+
+        assertThat(head().hasPending()).isFalse();
+        assertThat(recordRepository.findByAccountAndSeq(account(), revocation.seq()).orElseThrow().getState())
+                .isEqualTo(AuthorityChainRecord.State.CANCELLED);
+        assertThat(device(secondDevice.rawPublicKey()).getState()).isEqualTo(AuthorityDevice.State.ACTIVE);
+    }
+
+    @Test
+    void anOpposeTakesNoSlotSoTheChainDoesNotMoveOn() {
+        rootTheAccount();
+        grantSecondDevice();
+        clock.advance(Duration.ofHours(73));
+        service.state(USER);
+
+        AccountAuthorityService.Submitted revocation = revokeSecondDevice();
+        // The revocation holds its own slot while its window runs, and keeps it once cancelled, so the hash
+        // chain has no gap. What must not move is the position after that.
+        long seqWithThePendingRevocation = head().getHeadSeq();
+
+        opposeAsSecondDevice(revocation.recordHash());
+
+        // It cancels the record it names, or it is refused. An objection that consumed a position of its own
+        // would let one device cycle objections and walk the chain forward with no transition ever happening.
+        assertThat(head().getHeadSeq()).isEqualTo(seqWithThePendingRevocation);
+        assertThat(recordRepository.findByAccountOrderBySeqAsc(account()))
+                .noneMatch(row -> AuthorityRecordType.OPPOSE.magic().equals(row.getMagic()));
+    }
+
+    @Test
+    void anOpposeNamingSomethingElseIsRefused() {
+        rootTheAccount();
+        grantSecondDevice();
+        clock.advance(Duration.ofHours(73));
+        service.state(USER);
+        revokeSecondDevice();
+
+        String wrongHash = java.util.HexFormat.of().formatHex(new byte[]{ 9 }).repeat(64).substring(0, 64);
+
+        assertThat(refusalFrom(() -> opposeAsSecondDevice(wrongHash)))
+                .isEqualTo("authority_opposition_stale");
+        assertThat(head().hasPending()).isTrue();
+    }
+
+    @Test
+    void aDeviceTheChainDoesNotHoldCannotOppose() {
+        rootTheAccount();
+        grantSecondDevice();
+        clock.advance(Duration.ofHours(73));
+        service.state(USER);
+        AccountAuthorityService.Submitted revocation = revokeSecondDevice();
+
+        // A signature by a key nobody granted is not authority, whatever it says about itself. The key here
+        // is a perfectly good Ed25519 key that this account's chain has never activated.
+        assertThat(refusalFrom(() -> opposeAs(recoveryKey, revocation.recordHash())))
+                .isEqualTo("authority_signer_refused");
+        assertThat(head().hasPending()).isTrue();
+    }
+
+    @Test
+    void aGrantOverAKeyNobodyOfferedIsRefused() {
+        rootTheAccount();
+
+        // No candidate step: the key arrived from somewhere the human fingerprint comparison never covered.
+        String challenge = mint(Purpose.GRANT);
+        byte[] bytes = AuthorityRecords.grantFor(reference, secondDevice.rawPublicKey(),
+                firstDevice.rawPublicKey(), "iPad", head().nextSeq(), hexToBytes(head().getHeadHash()));
+
+        assertThat(refusalFrom(() -> service.grantDevice(USER, Optional.of(NATIVE_CLIENT), SESSION, encode(bytes),
+                sign(firstDevice, AuthorityRecordType.DEVICE_GRANT, challenge, bytes), challenge)))
+                .isEqualTo("authority_unknown_candidate");
+    }
+
+    @Test
+    void aCandidateExpiresAndIsThenNoLongerGrantable() {
+        rootTheAccount();
+        service.registerCandidate(USER, encode(secondDevice.rawPublicKey()), "iPad");
+
+        clock.advance(Duration.ofMinutes(11));
+
+        assertThat(service.candidates(USER)).isEmpty();
+        // Same refusal as a key nobody offered: telling the caller which would let a grant probe whether some
+        // key was ever a candidate of this account.
+        String challenge = mint(Purpose.GRANT);
+        byte[] bytes = AuthorityRecords.grantFor(reference, secondDevice.rawPublicKey(),
+                firstDevice.rawPublicKey(), "iPad", head().nextSeq(), hexToBytes(head().getHeadHash()));
+        assertThat(refusalFrom(() -> service.grantDevice(USER, Optional.of(NATIVE_CLIENT), SESSION, encode(bytes),
+                sign(firstDevice, AuthorityRecordType.DEVICE_GRANT, challenge, bytes), challenge)))
+                .isEqualTo("authority_unknown_candidate");
+    }
+
+    @Test
+    void aCandidateCarriesTheFingerprintBothDevicesComputeAndIsSpentByItsGrant() {
+        rootTheAccount();
+
+        AccountAuthorityService.Candidate candidate =
+                service.registerCandidate(USER, encode(secondDevice.rawPublicKey()), "iPad");
+
+        // Derived from the key, so the other phone computes the same eight characters without asking anyone.
+        assertThat(candidate.fingerprint())
+                .isEqualTo(me.sarahlacerda.gua.identityservice.account.authority.AuthorityFingerprint
+                        .of(secondDevice.rawPublicKey()));
+        assertThat(candidate.fingerprint()).hasSize(8).matches("[ABCDEFGHJKLMNPQRSTUVWXYZ2346789]+");
+        assertThat(service.candidates(USER)).hasSize(1);
+
+        String challenge = mint(Purpose.GRANT);
+        byte[] bytes = AuthorityRecords.grantFor(reference, secondDevice.rawPublicKey(),
+                firstDevice.rawPublicKey(), "iPad", head().nextSeq(), hexToBytes(head().getHeadHash()));
+        service.grantDevice(USER, Optional.of(NATIVE_CLIENT), SESSION, encode(bytes),
+                sign(firstDevice, AuthorityRecordType.DEVICE_GRANT, challenge, bytes), challenge);
+
+        // Spent. A candidate that outlived its grant would let a second grant be signed over the same key
+        // without anybody comparing a fingerprint again.
+        assertThat(service.candidates(USER)).isEmpty();
+    }
+
     // --- Helpers ------------------------------------------------------------
 
     private AccountAuthorityService.Submitted adopt() {
@@ -467,11 +600,41 @@ class AccountAuthorityTransitionTest {
     }
 
     private AccountAuthorityService.Submitted grantSecondDevice() {
+        // A grant may only name a key a device of this account offered, so the candidate step of revision 4
+        // comes first, exactly as it does on a real pair of phones.
+        service.registerCandidate(USER, encode(secondDevice.rawPublicKey()), "iPad");
         String challenge = mint(Purpose.GRANT);
         byte[] bytes = AuthorityRecords.grantFor(reference, secondDevice.rawPublicKey(),
                 firstDevice.rawPublicKey(), "iPad", head().nextSeq(), hexToBytes(head().getHeadHash()));
         return service.grantDevice(USER, Optional.of(NATIVE_CLIENT), SESSION, encode(bytes),
                 sign(firstDevice, AuthorityRecordType.DEVICE_GRANT, challenge, bytes), challenge);
+    }
+
+    private AccountAuthorityService.Submitted revokeSecondDevice() {
+        String challenge = mint(Purpose.REVOKE);
+        byte[] bytes = AuthorityRecords.revokeFor(reference, secondDevice.rawPublicKey(),
+                firstDevice.rawPublicKey(), AuthorityRecord.REASON_UNSPECIFIED, head().nextSeq(),
+                hexToBytes(head().getHeadHash()));
+        return service.revokeDevice(USER, Optional.of(NATIVE_CLIENT), SESSION, encode(bytes),
+                sign(firstDevice, AuthorityRecordType.DEVICE_REVOKE, challenge, bytes), challenge);
+    }
+
+    /**
+     * An Oppose stands at the same position as the record it cancels, because it takes no slot: its seq and
+     * prevHash are the pending record's own.
+     */
+    private void opposeAsSecondDevice(String opposedRecordHash) {
+        opposeAs(secondDevice, opposedRecordHash);
+    }
+
+    private void opposeAs(TestEd25519.Pair signer, String opposedRecordHash) {
+        String challenge = mint(Purpose.OPPOSE);
+        AuthorityChainRecord pending = recordRepository.findByAccountAndSeq(account(), head().getPendingSeq())
+                .orElseThrow();
+        byte[] bytes = AuthorityRecords.opposeFor(reference, hexToBytes(opposedRecordHash),
+                signer.rawPublicKey(), pending.getSeq(), hexToBytes(pending.getPrevHash()));
+        service.opposeWithRecord(USER, Optional.of(NATIVE_CLIENT), SESSION, encode(bytes),
+                sign(signer, AuthorityRecordType.OPPOSE, challenge, bytes), challenge);
     }
 
     private byte[] adoptRootBytes() {
