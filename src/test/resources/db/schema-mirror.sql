@@ -171,7 +171,7 @@ CREATE TABLE IF NOT EXISTS account_authority_challenge (
     session_hash   VARCHAR(64) NOT NULL,
     purpose        VARCHAR(16) NOT NULL,
     challenge_hash VARCHAR(64) NOT NULL UNIQUE,
-    factor         VARCHAR(16) NOT NULL,
+    factor         VARCHAR(16),
     factor_created_at TIMESTAMP WITH TIME ZONE,
     expires_at     TIMESTAMP WITH TIME ZONE NOT NULL,
     spent_at       TIMESTAMP WITH TIME ZONE,
@@ -183,3 +183,26 @@ CREATE INDEX IF NOT EXISTS idx_account_authority_challenge_expires
 
 CREATE INDEX IF NOT EXISTS idx_account_authority_challenge_account
     ON account_authority_challenge (account_id);
+
+-- V14
+CREATE TABLE IF NOT EXISTS security_notification_device (
+    id                      UUID        PRIMARY KEY,
+    user_id                 TEXT        NOT NULL,
+    installation_id         TEXT        NOT NULL,
+    platform                TEXT        NOT NULL,
+    app_id                  TEXT        NOT NULL,
+    token                   TEXT        NOT NULL,
+    token_fingerprint       TEXT        NOT NULL,
+    device_label            TEXT,
+    authority_device_key_b64 TEXT,
+    created_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    last_seen_at            TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    consecutive_failures    INT         NOT NULL DEFAULT 0,
+    last_failure_at         TIMESTAMP WITH TIME ZONE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_security_notification_device_install
+    ON security_notification_device (user_id, installation_id);
+
+CREATE INDEX IF NOT EXISTS idx_security_notification_device_user
+    ON security_notification_device (user_id);

@@ -40,6 +40,21 @@ public interface AuthorityNotifier {
     boolean isOutOfBand();
 
     /**
+     * Whether this implementation reaches <em>this</em> account holder out of band right now.
+     *
+     * <p>The per-account half of the same claim, and the one a transition consults. {@link #isOutOfBand()}
+     * answers a question about the deployment, which is what the startup gate needs; a window, though, is a
+     * promise made to one account holder, and an account with no live registration has nothing behind that
+     * promise. Answering the deployment question for both would let gate 2 pass on the existence of a
+     * transport while the owner of the account being rooted is told nothing.
+     *
+     * <p>False by default, because an implementation that is not a channel is not a channel for anybody.
+     */
+    default boolean reachesOutOfBand(String userId) {
+        return false;
+    }
+
+    /**
      * A transition has been recorded and its window is running.
      *
      * @param userId       the account holder
@@ -55,4 +70,14 @@ public interface AuthorityNotifier {
 
     /** A transition took effect, whether after its window or immediately. */
     void notifyTransitionCompleted(String userId, String transition, String deviceLabel);
+
+    /**
+     * A security-notification registration was removed from the account.
+     *
+     * <p>Announced because removing a channel is how an attacker would go quiet before opening a window, so
+     * the remaining installs are told rather than left to notice. A default no-op, so an implementation that
+     * is not a channel has nothing to say about one being taken away.
+     */
+    default void notifyChannelRemoved(String userId, String deviceLabel) {
+    }
 }

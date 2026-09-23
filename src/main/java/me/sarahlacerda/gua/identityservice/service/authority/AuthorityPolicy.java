@@ -148,7 +148,11 @@ public class AuthorityPolicy {
             case ADOPT, GRANT, REVOKE, RECOVER -> new StepUpPolicy(List.of(AuthFactor.PASSKEY, AuthFactor.PIN), true);
             // Starting an approval is not an authority transition. It creates a pending object a device
             // must sign, so no factor stands in for that signature and none is asked for here.
-            case APPROVE -> new StepUpPolicy(List.of(), false);
+            //
+            // Nor is opposing one, nor binding a notification registration: both are authorized by a
+            // signature from a key the chain already holds active, and for the opposition a factor
+            // requirement would be the fresh-factor hold reaching an owner who is trying to say no.
+            case APPROVE, OPPOSE, NOTIFY -> new StepUpPolicy(List.of(), false);
         };
     }
 
@@ -166,6 +170,56 @@ public class AuthorityPolicy {
      */
     public StepUpPolicy oppositionStepUp() {
         return new StepUpPolicy(List.of(AuthFactor.PASSKEY, AuthFactor.PIN), true);
+    }
+
+    /**
+     * What removing another install's security-notification registration accepts (ADM-009 gate 2, tier 2).
+     *
+     * <p>The same two factors, and the fresh-factor hold applied on top by the caller. That hold is the whole
+     * defence here: the attacker's only factor after a completed recovery is the PIN that recovery minted, so
+     * a tier that accepted any PIN would hand them the one thing they need, which is a quiet channel.
+     */
+    public StepUpPolicy notificationRemovalStepUp() {
+        return new StepUpPolicy(List.of(AuthFactor.PASSKEY, AuthFactor.PIN), true);
+    }
+
+    /** Whether the security-notification channel is switched on. Off by default, so gate 2 still blocks. */
+    public boolean notificationsEnabled() {
+        return authority().getNotifications().isEnabled();
+    }
+
+    /** Refuses a registration or a removal while the channel is off, so no push secret is ever read. */
+    public void requireNotificationsEnabled() {
+        if (!notificationsEnabled()) {
+            throw new AuthorityTransitionException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "authority_notifications_disabled",
+                    "Security notifications are not switched on for this deployment.");
+        }
+    }
+
+    /** How long a registration counts as a channel with nothing heard from it. */
+    public Duration registrationLife() {
+        return authority().getNotifications().getRegistrationLife();
+    }
+
+    /** How many consecutive permanent transport failures retire a registration. */
+    public int registrationFailureLimit() {
+        return authority().getNotifications().getFailureLimit();
+    }
+
+    /**
+     * Refuses a record that would start a window on an account nobody can be told about (ADM-009 gate 2).
+     *
+     * <p>Stated on the account and checked at submission, because the startup gate can only answer whether the
+     * deployment has a transport. A window is the whole security of the transition, and a window whose holder
+     * is never told is a delay rather than a control, so the honest answer for an account with no live
+     * registration is to refuse the transition rather than to run the window anyway.
+     */
+    public void requireReachableOutOfBand(boolean reachable) {
+        if (!reachable) {
+            throw new AuthorityTransitionException(HttpStatus.CONFLICT, "authority_no_notification_channel",
+                    "Turn on security notifications on a device of this account before making this change.");
+        }
     }
 
     /** Whether this opposition, counted from one, has to present a factor. */

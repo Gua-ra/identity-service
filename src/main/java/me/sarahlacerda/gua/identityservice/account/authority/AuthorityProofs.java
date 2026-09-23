@@ -42,12 +42,23 @@ public final class AuthorityProofs {
     /** Bytes of a pending-approval id inside the preimage. */
     public static final int APPROVAL_ID_LENGTH = 16;
 
+    /** The domain an install signs to bind its security-notification registration to a device key. */
+    public static final String NOTIFICATION_DOMAIN = "gua-authority-notification.v1";
+
     private static final byte[] APPROVAL_DOMAIN_BYTES = APPROVAL_DOMAIN.getBytes(StandardCharsets.US_ASCII);
+
+    private static final byte[] NOTIFICATION_DOMAIN_BYTES =
+            NOTIFICATION_DOMAIN.getBytes(StandardCharsets.US_ASCII);
 
     /** 25 + 34 + 16 + 32 + 32. */
     public static final int APPROVAL_PREIMAGE_LENGTH = APPROVAL_DOMAIN_BYTES.length
             + AuthorityRecord.ACCOUNT_REFERENCE_LENGTH + APPROVAL_ID_LENGTH + AuthorityRecord.HASH_LENGTH
             + AuthorityRecord.CHALLENGE_LENGTH;
+
+    /** 29 + 34 + 32 + 32 + 32. */
+    public static final int NOTIFICATION_PREIMAGE_LENGTH = NOTIFICATION_DOMAIN_BYTES.length
+            + AuthorityRecord.ACCOUNT_REFERENCE_LENGTH + AuthorityRecord.HASH_LENGTH
+            + AuthorityRecord.KEY_LENGTH + AuthorityRecord.CHALLENGE_LENGTH;
 
     private AuthorityProofs() {
     }
@@ -125,6 +136,49 @@ public final class AuthorityProofs {
             byte[] actionDigest, byte[] challenge, byte[] signature) {
         return Ed25519Keys.verify(deviceKey,
                 approvalPreimage(accountReference, approvalId, actionDigest, challenge), signature);
+    }
+
+    /**
+     * The preimage an install signs to bind its security-notification registration to a device authority key
+     * (ADM-009 gate 2, the removal tiers).
+     *
+     * <p>Why it has to be signed rather than asserted. A registration that carries a device key needs a
+     * signature by that key before it may be removed from another install, so the key on the row is the
+     * thing standing between an attacker with a fresh post-recovery session and an empty channel. If the
+     * field could simply be claimed, an attacker would name the owner's key on their own row, and, worse, a
+     * row could be planted that the owner's own device can never remove.
+     *
+     * <p>The installation id is hashed rather than carried, so every element is fixed length and no field can
+     * be shifted into another, exactly as in {@link #approvalPreimage}. ADM-009 does not define this
+     * preimage; it is the wire addition gate 2's own removal tiers need, and it is stated here so both
+     * clients sign the same bytes.
+     */
+    public static byte[] notificationPreimage(byte[] accountReference, byte[] installationIdHash, byte[] deviceKey,
+            byte[] challenge) {
+        require(accountReference, AuthorityRecord.ACCOUNT_REFERENCE_LENGTH, "the account reference");
+        require(installationIdHash, AuthorityRecord.HASH_LENGTH, "an installation id hash");
+        require(deviceKey, AuthorityRecord.KEY_LENGTH, "a device key");
+        require(challenge, AuthorityRecord.CHALLENGE_LENGTH, "a notification challenge");
+
+        byte[] preimage = new byte[NOTIFICATION_PREIMAGE_LENGTH];
+        int offset = 0;
+        System.arraycopy(NOTIFICATION_DOMAIN_BYTES, 0, preimage, offset, NOTIFICATION_DOMAIN_BYTES.length);
+        offset += NOTIFICATION_DOMAIN_BYTES.length;
+        System.arraycopy(accountReference, 0, preimage, offset, accountReference.length);
+        offset += accountReference.length;
+        System.arraycopy(installationIdHash, 0, preimage, offset, installationIdHash.length);
+        offset += installationIdHash.length;
+        System.arraycopy(deviceKey, 0, preimage, offset, deviceKey.length);
+        offset += deviceKey.length;
+        System.arraycopy(challenge, 0, preimage, offset, challenge.length);
+        return preimage;
+    }
+
+    /** Verifies that the install really holds the device key its registration names. */
+    public static boolean verifyNotificationBinding(byte[] deviceKey, byte[] accountReference,
+            byte[] installationIdHash, byte[] challenge, byte[] signature) {
+        return Ed25519Keys.verify(deviceKey,
+                notificationPreimage(accountReference, installationIdHash, deviceKey, challenge), signature);
     }
 
     private static void require(byte[] value, int length, String what) {

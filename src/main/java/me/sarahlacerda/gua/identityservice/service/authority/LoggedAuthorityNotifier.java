@@ -44,4 +44,10 @@ public class LoggedAuthorityNotifier implements AuthorityNotifier {
     public void notifyTransitionCompleted(String userId, String transition, String deviceLabel) {
         log.info("Authority transition {} completed for {}", transition, userId);
     }
+
+    @Override
+    public void notifyChannelRemoved(String userId, String deviceLabel) {
+        log.info("A security-notification registration was removed for {} (device label withheld from logs)",
+                userId);
+    }
 }

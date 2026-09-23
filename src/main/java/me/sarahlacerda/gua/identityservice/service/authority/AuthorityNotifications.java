@@ -36,6 +36,18 @@ public class AuthorityNotifications {
         return notifiers.stream().anyMatch(AuthorityNotifier::isOutOfBand);
     }
 
+    /**
+     * Whether at least one wired notifier reaches <em>this</em> account holder out of band right now.
+     *
+     * <p>Asked before a record that starts a window is accepted. The deployment-level question above is what
+     * the startup gate needs; this is what the account holder needs, and the two differ for exactly the
+     * account that matters: one that has never registered an install has no channel however well the
+     * deployment is configured, so its window would run unwitnessed.
+     */
+    public boolean reachesOutOfBandChannel(String userId) {
+        return notifiers.stream().anyMatch(notifier -> notifier.reachesOutOfBand(userId));
+    }
+
     public void pending(String userId, String transition, String deviceLabel, Instant effectiveAt) {
         each(notifier -> notifier.notifyTransitionPending(userId, transition, deviceLabel, effectiveAt));
     }
@@ -46,6 +58,11 @@ public class AuthorityNotifications {
 
     public void completed(String userId, String transition, String deviceLabel) {
         each(notifier -> notifier.notifyTransitionCompleted(userId, transition, deviceLabel));
+    }
+
+    /** One of the account's own channels was removed, announced to the ones that are left. */
+    public void channelRemoved(String userId, String deviceLabel) {
+        each(notifier -> notifier.notifyChannelRemoved(userId, deviceLabel));
     }
 
     private void each(java.util.function.Consumer<AuthorityNotifier> action) {

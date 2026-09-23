@@ -88,6 +88,32 @@ identity:
     # from the token's verified audience, never from the client-asserted downstream marker. Empty means
     # no client may root an account, which is the safe direction.
     native-client-ids: ${IDENTITY_AUTHORITY_NATIVE_CLIENT_IDS:}
+    # The out-of-band channel of ADM-009 gate 2. Off by default, and separately from the chain itself,
+    # because turning it on means this service starts holding two push credentials it has never held.
+    # With it off no registration is accepted, nothing is sent, and no credential is read, so a
+    # deployment that switches identity.authority.enabled on without configuring a transport still
+    # fails to start rather than running windows nobody is told about.
+    notifications:
+      enabled: ${IDENTITY_AUTHORITY_NOTIFICATIONS_ENABLED:false}
+      # Far past any window: the row's job is to still be there when a window opens weeks later.
+      registration-life: ${IDENTITY_AUTHORITY_NOTIFICATIONS_REGISTRATION_LIFE:P180D}
+      failure-limit: ${IDENTITY_AUTHORITY_NOTIFICATIONS_FAILURE_LIMIT:3}
+      apns:
+        # Empty means this transport is not configured, which is the default.
+        base-url: ${IDENTITY_AUTHORITY_APNS_BASE_URL:}
+        key-id: ${IDENTITY_AUTHORITY_APNS_KEY_ID:}
+        team-id: ${IDENTITY_AUTHORITY_APNS_TEAM_ID:}
+        private-key-pkcs8-base64: ${IDENTITY_AUTHORITY_APNS_PRIVATE_KEY:}
+        # One key addresses every topic of the team, so this map picks the topic and not a credential.
+        topics: {}
+        token-life: ${IDENTITY_AUTHORITY_APNS_TOKEN_LIFE:PT50M}
+      fcm:
+        base-url: ${IDENTITY_AUTHORITY_FCM_BASE_URL:}
+        project-id: ${IDENTITY_AUTHORITY_FCM_PROJECT_ID:}
+        client-email: ${IDENTITY_AUTHORITY_FCM_CLIENT_EMAIL:}
+        private-key-pkcs8-base64: ${IDENTITY_AUTHORITY_FCM_PRIVATE_KEY:}
+        token-uri: ${IDENTITY_AUTHORITY_FCM_TOKEN_URI:https://oauth2.googleapis.com/token}
+        refresh-skew: ${IDENTITY_AUTHORITY_FCM_REFRESH_SKEW:PT5M}
   # Generation-1 placement records and the shadow comparison (ADM-008 Phase 4). Every flag is off by
   # default and the feature is inert until one is turned on: no scheduler is started, no record is
   # signed, no MAS is read and no new metric series appears. There is deliberately no flag that serves

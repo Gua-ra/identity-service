@@ -619,5 +619,125 @@ public class IdentityServiceProperties {
          */
         @NotNull
         private List<String> nativeClientIds = new ArrayList<>();
+
+        /** The out-of-band channel of gate 2. Off by default, which is why gate 2 still blocks. */
+        @Valid
+        @NotNull
+        private NotificationProperties notifications = new NotificationProperties();
+    }
+
+    /**
+     * The security-notification channel ADM-009 gate 2 requires, and the two transports that carry it.
+     *
+     * <p>Off by default, and that is not a formality: with no transport configured
+     * {@code AuthorityPushNotifier.isOutOfBand()} answers false, so a deployment that turns
+     * {@code identity.authority.enabled} on without configuring one still fails to start. Turning the
+     * feature on and turning a channel on are deliberately two decisions, because the credentials below are
+     * two secrets this service has never held.
+     */
+    @Getter
+    @Setter
+    public static class NotificationProperties {
+
+        /**
+         * Master switch for the channel. While it is false no registration is accepted, nothing is sent,
+         * and no credential is read, so a half-configured deployment holds no push secrets at all.
+         */
+        private boolean enabled = false;
+
+        /**
+         * How long a registration counts as a channel with nothing heard from it.
+         *
+         * <p>Far past any window, because the row's job is to survive a recovery and be there when a window
+         * opens weeks later. It bounds retention rather than liveness.
+         */
+        @NotNull
+        private Duration registrationLife = Duration.ofDays(180);
+
+        /**
+         * How many consecutive permanent transport failures retire a registration.
+         *
+         * <p>A destination the transport says is gone must stop counting as a channel, or gate 2 passes on
+         * a promise nobody can keep.
+         */
+        @Min(1)
+        private int failureLimit = 3;
+
+        @Valid
+        @NotNull
+        private ApnsProperties apns = new ApnsProperties();
+
+        @Valid
+        @NotNull
+        private FcmProperties fcm = new FcmProperties();
+    }
+
+    /**
+     * Apple's own push service, spoken directly.
+     *
+     * <p>Directly rather than through the Matrix push gateway, because that gateway's only exposed path
+     * takes a Matrix event notification keyed on a pushkey this service never sees, it is unauthenticated,
+     * and it runs in one namespace only. Routing a security alert through it would mean forging a
+     * notification and making the channel only as trustworthy as an endpoint that takes anyone's POST.
+     */
+    @Getter
+    @Setter
+    public static class ApnsProperties {
+
+        /** Empty means this transport is not configured, which is the default. */
+        private String baseUrl = "";
+
+        /** The ES256 signing key id of the p8, which becomes the JWT's kid. */
+        private String keyId = "";
+
+        /** The Apple team id, which becomes the JWT's iss. */
+        private String teamId = "";
+
+        /** The PKCS#8 body of the p8, base64. Never logged, and absent by default. */
+        private String privateKeyPkcs8Base64 = "";
+
+        /**
+         * Maps the app id the client already sends to the APNs topic.
+         *
+         * <p>One key addresses every topic of the team, so the map exists to pick the topic and not a
+         * credential, and it is the same constant the Matrix pusher uses so the two cannot drift.
+         */
+        @NotNull
+        private Map<String, String> topics = new LinkedHashMap<>();
+
+        /** How long a minted provider token is reused before another is signed. Apple's cap is an hour. */
+        @NotNull
+        private Duration tokenLife = Duration.ofMinutes(50);
+    }
+
+    /**
+     * Firebase Cloud Messaging v1, with the bearer minted here rather than by a Google library.
+     *
+     * <p>The nimbus library is already on this classpath for the OIDC work, so the service-account
+     * assertion and its exchange cost no new dependency, no new transitive tree and no new credential
+     * loading path. The token is cached to its own expiry.
+     */
+    @Getter
+    @Setter
+    public static class FcmProperties {
+
+        /** Empty means this transport is not configured, which is the default. */
+        private String baseUrl = "";
+
+        /** The Firebase project the messages are sent into. */
+        private String projectId = "";
+
+        /** The service account's client_email, which is the assertion's iss and sub. */
+        private String clientEmail = "";
+
+        /** The PKCS#8 body of the service account's RSA key, base64. Never logged. */
+        private String privateKeyPkcs8Base64 = "";
+
+        /** Where the assertion is exchanged for a bearer. */
+        private String tokenUri = "https://oauth2.googleapis.com/token";
+
+        /** Refreshed this long before the bearer's own expiry, so a send never races the exchange. */
+        @NotNull
+        private Duration refreshSkew = Duration.ofMinutes(5);
     }
 }
