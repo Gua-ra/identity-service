@@ -321,6 +321,8 @@ Two implementation decisions worth stating. APNs is spoken over the JDK's own `H
 
 **What this does not close.** On an account with exactly one install, the only registration belongs to the install performing the transition, so on a stolen unlocked phone the alert reaches the thief. Gate 2 is satisfied in form and not in substance for that account. The chain refuses a windowed transition outright when the account has no live registration at all (`authority_no_notification_channel`), which is the honest answer where a window would otherwise run unwitnessed, but it cannot tell one install from one thief.
 
+**Cross-platform golden vectors.** `docs/specs/authority-vectors.v1.json` publishes all five record types, their canonical bytes, their hashes, the preimage of the one rule every type obeys, the deterministic signatures over it, and every case a conforming decoder must refuse together with the rule that refuses it. The keys are the RFC 8032 section 7.1 test constants, which is what makes the signatures reproducible; they are published values and sign nothing real. `AuthorityVectorsTest` recomputes every byte of the file, and both clients test against the same file, because a cross-platform byte format that only one implementation has ever produced is a format with one implementation.
+
 **Rollback.** Turn `identity.authority.*` off: every endpoint answers `503` and nothing writes. The tables may then be dropped, but they do not need to be, because nothing else reads them. Keep `identity_users.recovery_completed_at` either way: it is a fact about the account rather than feature state, and dropping it would silently reopen the hold above.
 
 ### Which factor applies where
