@@ -284,7 +284,35 @@ Two prerequisites ship with it, because the feature is incoherent without them. 
 | `identity.authority.allow-short-windows-for-testing` | `IDENTITY_AUTHORITY_ALLOW_SHORT_WINDOWS_FOR_TESTING` | `false` | Lifts the 24-hour floor on both windows. Dev only. |
 | `identity.authority.native-client-ids` | `IDENTITY_AUTHORITY_NATIVE_CLIENT_IDS` | empty | Client ids whose tokens count as a native session, read from the token's verified audience. Empty means no client may root an account. |
 
-**Startup refuses `enabled=true`** while no out-of-band notification channel is wired, which is ADM-009 gate 2. Every window here is theatre without a channel that survives both a SIM swap and the session revocation a recovery performs: the shipped `AuthorityNotifier` writes a log line and answers `isOutOfBand() == false`, and a log line is not a channel. Startup also refuses a window under 24 hours without the testing switch, and a challenge TTL over 15 minutes.
+**Startup refuses `enabled=true`** while no out-of-band notification channel is wired, which is ADM-009 gate 2. Every window here is theatre without a channel that survives both a SIM swap and the session revocation a recovery performs. Startup also refuses a window under 24 hours without the testing switch, and a challenge TTL over 15 minutes.
+
+#### The security notification channel
+
+Gate 2's channel is a registration this service owns, delivered straight to APNs and FCM. It is deliberately **not** a Matrix pusher: a pusher lives under a session, and completing an account recovery ends every session of the user in the same transaction that mints the attacker's PIN, so the destination would die with the thing the attacker had just destroyed. It is also not the phone number, which is the channel a SIM-swap attacker holds.
+
+Each row is keyed on an **installation id** the client generates and keeps in the keychain or keystore, stable across sign-out and re-login. Nothing in the recovery path can reach it: `AccountRecoveryService.complete` writes `identity_users` and `passkey_credentials` only, and the session sign-out runs in another service against another database. `AuthorityNotificationSurvivesRecoveryTest` drives the shipped recovery end to end and asserts the registration is still there, with a negative control in the same test asserting every passkey is gone, so the survival cannot pass for the wrong reason.
+
+The table holds a live push destination beside a user id, which is a stronger link than anything else this service keeps, so: the token is never logged or returned (each row is named by a SHA-256 fingerprint of it), no IP and no user agent are stored, no accountId and no phone number are stored, retention is bounded by `last_seen_at`, and the alert names a device label, a sentence and a time and nothing else.
+
+**Removal has three tiers, and the asymmetry is the design.** From the install itself, naming its own installation id, with no extra factor, because the person holding that phone is the person the channel serves. From another install, with a step-up on a factor that is itself past the fresh-factor hold, plus a signature by an active unquarantined device key where the row carries one. From nowhere else: no admin path, no bulk delete, nothing reachable from a browser session. An attacker who has just completed a recovery therefore cannot quietly strip the channel, because the only factor they hold is the PIN that recovery minted seconds ago. Every accepted removal is announced to the registrations that remain.
+
+| Endpoint | What it does |
+| --- | --- |
+| `POST /account/security-notifications` | Registers or refreshes this install's destination, as an upsert on the installation id. Optionally binds a device authority key, and only with a signature by that key over a spent `NOTIFY` challenge. |
+| `GET /account/security-notifications` | The account's own registrations, named by token fingerprint, never by token. |
+| `POST /account/security-notifications/remove` | Removes one registration through whichever tier the caller can pass. |
+
+| Property | Env | Default | Effect |
+| --- | --- | --- | --- |
+| `identity.authority.notifications.enabled` | `IDENTITY_AUTHORITY_NOTIFICATIONS_ENABLED` | `false` | The channel's own switch, separate from the chain's, because turning it on means this service starts holding two push credentials it has never held. |
+| `identity.authority.notifications.registration-life` | `IDENTITY_AUTHORITY_NOTIFICATIONS_REGISTRATION_LIFE` | `P180D` | How long a registration counts as a channel with nothing heard from it. Far past any window on purpose. |
+| `identity.authority.notifications.failure-limit` | `IDENTITY_AUTHORITY_NOTIFICATIONS_FAILURE_LIMIT` | `3` | Consecutive permanent transport failures that retire a destination. |
+| `identity.authority.notifications.apns.*` | `IDENTITY_AUTHORITY_APNS_*` | empty | Base URL, key id, team id, the p8 and the app-id-to-topic map. Empty means this transport is not configured. |
+| `identity.authority.notifications.fcm.*` | `IDENTITY_AUTHORITY_FCM_*` | empty | Base URL, project, service-account email and key, and the token endpoint. Empty means this transport is not configured. |
+
+Two implementation decisions worth stating. APNs is spoken over the JDK's own `HttpClient` because APNs refuses HTTP/1.1 and that client negotiates HTTP/2 by configuration rather than by hope. The FCM bearer is minted with the nimbus library already on this classpath rather than by adding a Google dependency, and it is cached to the expiry the exchange itself stated less a skew; `AuthorityFcmBearerTest` walks a clock across that boundary, because a cache that never refreshes and one that refreshes per send look identical until a token expires in production.
+
+**What this does not close.** On an account with exactly one install, the only registration belongs to the install performing the transition, so on a stolen unlocked phone the alert reaches the thief. Gate 2 is satisfied in form and not in substance for that account. The chain refuses a windowed transition outright when the account has no live registration at all (`authority_no_notification_channel`), which is the honest answer where a window would otherwise run unwitnessed, but it cannot tell one install from one thief.
 
 **Rollback.** Turn `identity.authority.*` off: every endpoint answers `503` and nothing writes. The tables may then be dropped, but they do not need to be, because nothing else reads them. Keep `identity_users.recovery_completed_at` either way: it is a fact about the account rather than feature state, and dropping it would silently reopen the hold above.
 

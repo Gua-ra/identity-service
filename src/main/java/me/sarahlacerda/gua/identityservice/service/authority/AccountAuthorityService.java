@@ -113,7 +113,7 @@ public class AccountAuthorityService {
         Accepted accepted = stepUps.accept(userId, policy.stepUpFor(purpose), "AUTHORITY_" + purpose,
                 passkeyStepUpId, passkeyCredential, pin, requesterIp);
         // Weighed after the factor is known to be the caller's own, and both refusals expire on their own.
-        stepUps.enforceHolds(userId, accepted);
+        stepUps.enforceHolds(userId, purpose, accepted);
 
         Instant now = clock.instant();
         return challenges.mint(account.reference(), sessionHash, purpose, accepted.factor(),
@@ -302,6 +302,14 @@ public class AccountAuthorityService {
                     "the signature does not verify over magic, challenge and canonical bytes");
         }
 
+        boolean immediate = policy.takesEffectImmediately(record);
+        if (!immediate) {
+            // ADM-009 gate 2, asked about this account rather than about the deployment. A window is the whole
+            // security of the transition, so one whose holder cannot be told is a delay and not a control: the
+            // honest answer is to refuse the transition, not to run the window and hope.
+            policy.requireReachableOutOfBand(notifications.reachesOutOfBandChannel(userId));
+        }
+
         AuthorityChainHead head = lockHead(account, now);
         List<AuthorityDevice> devices = deviceRepository.findByAccount(account.reference());
 
@@ -338,7 +346,6 @@ public class AccountAuthorityService {
 
         requireSignerMayAct(account, record, devices, now);
 
-        boolean immediate = policy.takesEffectImmediately(record);
         Instant effectiveAt = immediate ? now : now.plus(policy.windowFor(record.type(), record.authorization()));
         long seq = head.nextSeq();
 

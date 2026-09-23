@@ -9,6 +9,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import me.sarahlacerda.gua.identityservice.domain.AuthorityChallenge.Purpose;
 import me.sarahlacerda.gua.identityservice.exception.AuthorityTransitionException;
 import me.sarahlacerda.gua.identityservice.service.authority.AuthorityPolicy.StepUpPolicy;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactor;
@@ -122,10 +123,16 @@ public class AuthorityStepUpService {
      * Applies the hold rules a transition owes before it may start (ADM-009 decision 4 step 2 and decision 9
      * rule 3). Both refusals expire on their own and take nothing away from anyone.
      *
-     * <p>Not applied to an opposition. The hold gates starting a transition and never opposing one: an owner
-     * who has just changed their PIN to lock a thief out must not be the one disarmed by it.
+     * <p>Not applied to an opposition, and not to a notification registration. The hold gates starting a
+     * transition and never opposing one: an owner who has just changed their PIN to lock a thief out must not
+     * be the one disarmed by it, and an owner who has just been through a legitimate recovery must not be
+     * refused the very channel the next window will be announced on. Neither purpose grants authority, so
+     * neither is the laundering path decision 9 rule 3 closes.
      */
-    public void enforceHolds(String userId, Accepted accepted) {
+    public void enforceHolds(String userId, Purpose purpose, Accepted accepted) {
+        if (purpose == Purpose.OPPOSE || purpose == Purpose.NOTIFY) {
+            return;
+        }
         if (accepted.factor() != null) {
             policy.enforceFreshFactorHold(accepted.factorCreatedAt());
         }

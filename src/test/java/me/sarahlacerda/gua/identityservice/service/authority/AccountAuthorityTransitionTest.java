@@ -91,6 +91,7 @@ class AccountAuthorityTransitionTest {
     private AccountAuthorityService service;
     private AuthorityAccounts accounts;
     private MutableClock clock;
+    private StubChannel channel;
     private byte[] reference;
 
     @BeforeEach
@@ -107,8 +108,9 @@ class AccountAuthorityTransitionTest {
         policy = new AuthorityPolicy(properties, userSecurityService);
         accounts = new AuthorityAccounts(genesisRepository);
         challenges = new AuthorityChallengeService(challengeRepository, policy);
+        channel = new StubChannel();
         service = new AccountAuthorityService(policy, accounts, challenges, null, headRepository, recordRepository,
-                deviceRepository, new AuthorityNotifications(List.of()), new NoBackoff(policy),
+                deviceRepository, new AuthorityNotifications(List.of(channel)), new NoBackoff(policy),
                 new LoggingSecurityAuditLogger(), clock);
 
         BootstrapGenesis genesis = BootstrapGenesisCodec.mint();
@@ -439,6 +441,16 @@ class AccountAuthorityTransitionTest {
         assertThat(state.pending().seq()).isEqualTo(1L);
     }
 
+    @Test
+    void anAdoptionIsRefusedWhileNothingCanTellTheAccountHolderItIsRunning() {
+        // Gate 2, asked about this account rather than about the deployment. A window whose holder is never
+        // told is a delay and not a control, so the transition is refused rather than run in the dark.
+        channel.reaches = false;
+
+        assertThat(refusalFrom(this::adopt)).isEqualTo("authority_no_notification_channel");
+        assertThat(recordRepository.findByAccountOrderBySeqAsc(account())).isEmpty();
+    }
+
     // --- Helpers ------------------------------------------------------------
 
     private AccountAuthorityService.Submitted adopt() {
@@ -537,6 +549,39 @@ class AccountAuthorityTransitionTest {
         @Override
         public Instant instant() {
             return now;
+        }
+    }
+
+    /**
+     * A channel that says it reaches the holder, because every windowed transition now refuses when nothing
+     * does (ADM-009 gate 2). The transport and the registration table have their own tests; what this class is
+     * about is what the chain rows say.
+     */
+    private static final class StubChannel implements AuthorityNotifier {
+
+        private boolean reaches = true;
+
+        @Override
+        public boolean isOutOfBand() {
+            return true;
+        }
+
+        @Override
+        public boolean reachesOutOfBand(String userId) {
+            return reaches;
+        }
+
+        @Override
+        public void notifyTransitionPending(String userId, String transition, String deviceLabel,
+                Instant effectiveAt) {
+        }
+
+        @Override
+        public void notifyTransitionCancelled(String userId, String transition, String deviceLabel) {
+        }
+
+        @Override
+        public void notifyTransitionCompleted(String userId, String transition, String deviceLabel) {
         }
     }
 

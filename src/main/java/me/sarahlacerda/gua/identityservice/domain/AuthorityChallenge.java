@@ -41,7 +41,18 @@ public class AuthorityChallenge {
 
     /** What the challenge may be spent on. A step-up for one purpose does not carry over to another. */
     public enum Purpose {
-        ADOPT, GRANT, REVOKE, RECOVER, APPROVE
+        ADOPT, GRANT, REVOKE, RECOVER, APPROVE,
+        /**
+         * A signed {@code Oppose} record. It asks for no factor: the authorization is a signature by a key
+         * the chain has active and unquarantined, and the hold gates starting a transition and never
+         * opposing one.
+         */
+        OPPOSE,
+        /**
+         * Binding a security-notification registration to a device authority key, or removing one that
+         * carries such a binding. The challenge is there so the device's signature is not replayable.
+         */
+        NOTIFY
     }
 
     @Id
@@ -61,7 +72,12 @@ public class AuthorityChallenge {
     @Column(name = "challenge_hash", nullable = false, length = 64, unique = true)
     private String challengeHash;
 
-    @Column(name = "factor", nullable = false, length = 16)
+    /**
+     * Null for a purpose whose step-up is no factor at all: the browser-started approval, which a device
+     * signs afterwards, and the notification binding, which a device key signs. A sentinel value would be
+     * worse than null, because the fresh-factor hold reads this column.
+     */
+    @Column(name = "factor", length = 16)
     @Enumerated(EnumType.STRING)
     private AuthFactor factor;
 
