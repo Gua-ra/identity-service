@@ -342,10 +342,12 @@ public class AccountAuthorityController {
     @PostMapping("/approval")
     @Operation(summary = "Start an approval a browser session cannot grant itself",
             description = "A browser login grants account access and never authority. This creates a pending "
-                    + "approval carrying the account, the action digest and a challenge, and returns a "
-                    + "four-character code from an alphabet with no look-alikes. An active authority device shows "
-                    + "the same code and the action in the reader's own words and signs it. The browser never "
-                    + "learns a key and never proxies one.",
+                    + "approval carrying the account, the digest the server derives from the named action, and a "
+                    + "challenge, and returns a four-character code from an alphabet with no look-alikes. An "
+                    + "active authority device shows the same code and the action in the reader's own words and "
+                    + "signs it. The digest is never taken from the caller, because the sentence on the screen "
+                    + "and the bytes in the signature have to be the same action. The browser never learns a key "
+                    + "and never proxies one.",
             security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Approval started",
@@ -358,8 +360,8 @@ public class AccountAuthorityController {
             @RequestBody @Valid AuthorityApprovalStartRequest request) {
         policy.requireEnabled();
         AuthorityAccounts.Resolved account = accounts.require(authenticatedUserAccessor.requireCurrentUserId());
-        AuthorityApprovalService.Started started = approvalService.start(account, request.getAction(),
-                request.getActionDigest(), clock.instant());
+        AuthorityApprovalService.Started started =
+                approvalService.start(account, request.getAction(), clock.instant());
         return ResponseEntity.ok(new AuthorityApprovalResponse(started.approvalId(), started.code(),
                 started.challenge(), secondsUntil(started.expiresAt())));
     }
