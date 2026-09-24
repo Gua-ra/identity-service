@@ -276,14 +276,13 @@ public class AccountAuthorityService {
             throw new AuthorityTransitionException(HttpStatus.CONFLICT, "authority_opposition_stale",
                     "That objection names a different step. Read the chain again.");
         }
-        AuthorityChainRecord pending = opposable;
 
         List<AuthorityDevice> devices = deviceRepository.findByAccount(account.reference());
         AuthorityDevice signer = requireKnownDevice(devices, record.verifyingKey());
         // A quarantined device may not sign an authority-sensitive approval, and an objection is one.
         policy.requireNotQuarantined(signer.isQuarantined(now));
 
-        AuthorityRecord decoded = decodeStored(pending);
+        AuthorityRecord decoded = decodeStored(opposable);
         boolean opposerIsNamedDevice = decoded.deviceKey() != null
                 && encode(decoded.deviceKey()).equals(signer.getDeviceKeyB64());
         Opposition outcome = policy.opposition(decoded.type(), decoded.authorization(), opposerIsNamedDevice,
@@ -293,18 +292,18 @@ public class AccountAuthorityService {
                     "That device cannot object to this step.");
         }
         if (outcome == Opposition.EXTENDS_ONCE) {
-            extendOnce(account, head, pending, decoded, now);
+            extendOnce(account, head, opposable, decoded, now);
             return;
         }
         if (!namesThePending) {
             // Decision 5's other half: opposing a grant revokes the granted device immediately. The record
             // itself stays in the chain, because it was accepted and every later prevHash covers it; what the
             // objection undoes is its effect.
-            revokeGrantedDevice(account, head, pending, decoded, now);
+            revokeGrantedDevice(account, head, opposable, decoded, now);
             chargeCancellation(account, decoded, now);
             return;
         }
-        cancelPending(account, head, pending, decoded, now, "opposed by an active device");
+        cancelPending(account, head, opposable, decoded, now, "opposed by an active device");
         chargeCancellation(account, decoded, now);
     }
 
