@@ -247,6 +247,31 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PASSKEY_VERIFY_LIMIT:20}
         refresh-period: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PASSKEY_VERIFY_REFRESH:PT1M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PASSKEY_VERIFY_TIMEOUT:PT0S}
+      # The authority step-up: where a signed-in user confirms one authority transition on a page that
+      # can run the ceremony. Same budgets as the enrollment step-up above, and deliberately no OTP
+      # entries, because that page has no arm that sends a code.
+      - path: /login/authority/stepup/pin
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PIN_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PIN_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PIN_TIMEOUT:PT0S}
+      - path: /login/authority/stepup/passkey/options
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PASSKEY_OPTIONS_LIMIT:20}
+        refresh-period: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PASSKEY_OPTIONS_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PASSKEY_OPTIONS_TIMEOUT:PT0S}
+      - path: /login/authority/stepup/passkey/verify
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PASSKEY_VERIFY_LIMIT:20}
+        refresh-period: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PASSKEY_VERIFY_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PASSKEY_VERIFY_TIMEOUT:PT0S}
+      # Minting the sheet itself. Bearer-gated, and each call writes a login session, so it is bounded
+      # per caller like the other /security starts rather than left to the throughput default.
+      - path: /security/authority/step-up/start
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_AUTHORITY_STEP_UP_START_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_AUTHORITY_STEP_UP_START_REFRESH:PT5M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_AUTHORITY_STEP_UP_START_TIMEOUT:PT0S}
       # Re-authentication. Both calls check a number against the account's own binding, and
       # verify checks a code on top, so they are credential checks and need the same shape of
       # budget as the step-up pair above rather than the throughput default. The per-account

@@ -157,6 +157,26 @@ public class AuthorityPolicy {
     }
 
     /**
+     * Whether a transition of this purpose may take its step-up in the web sheet (ADM-009 decision 4 step 2).
+     *
+     * <p>Exactly the purposes that ask for a factor, derived from {@link #stepUpFor(Purpose)} rather than
+     * written out again: a second list is a second place for the answer to drift, and the answer here has to
+     * be the same one. A purpose that asks for no factor would open a page with nothing to ask, and a proof
+     * recorded for it would be a proof of nothing.
+     */
+    public boolean canOpenStepUpSheet(Purpose purpose) {
+        return stepUpFor(purpose).required();
+    }
+
+    /** The refusal behind {@link #canOpenStepUpSheet(Purpose)}, so the rule has one name and one message. */
+    public void requireStepUpSheetPurpose(Purpose purpose) {
+        if (!canOpenStepUpSheet(purpose)) {
+            throw new AuthorityTransitionException(HttpStatus.CONFLICT, "authority_step_up_purpose_refused",
+                    "That step is not confirmed this way.");
+        }
+    }
+
+    /**
      * What an opposition accepts, and from which opposition onward (ADM-009 decision 4, bounds).
      *
      * <p>The first opposition is deliberately cheap: at {@code seq = 1} the account holds no authority to

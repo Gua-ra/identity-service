@@ -122,6 +122,8 @@ class LoginFlowControllerTest {
     private static final String CSRF = "csrf-token";
     private static final String CALLBACK = "https://mas.example.com/callback";
     private static final String ENROLL_APP_SCHEME = "global.gua:/oidc";
+    /** Stands in for the SHA-256 of the access token that asked for an authority step-up sheet. */
+    private static final String AUTHORITY_SESSION_HASH = "c".repeat(64);
     private static final String PHONE = "+15551234567";
 
     @Autowired
@@ -169,6 +171,8 @@ class LoginFlowControllerTest {
     private TokenRevocationService tokenRevocationService;
     @MockitoBean
     private EndOtherSessionsService endOtherSessionsService;
+    @MockitoBean
+    private me.sarahlacerda.gua.identityservice.service.authority.AuthorityWebStepUpService authorityWebStepUps;
 
     @BeforeEach
     void setUp() {
@@ -743,6 +747,140 @@ class LoginFlowControllerTest {
     }
 
     /** Mirrors SecurityController.startFactorEnrollment: an enrollment session has no OIDC client. */
+    // --- The authority step-up sheet (ADM-009 decision 4 step 2) ---
+
+    /**
+     * The whole point of the page, on the wire: an account confirms one transition with its PIN, the proof is
+     * recorded against that account, that access token and that purpose, and the sheet closes back into the
+     * app with no authorization code.
+     */
+    @Test
+    void theAuthorityStepUpRecordsWhatItProvedAndHandsTheSheetBack() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(authoritySession()));
+        when(userSecurityService.hasPin("@alice:gua.local")).thenReturn(true);
+        Instant pinSetAt = Instant.now().minus(Duration.ofDays(40));
+        when(userSecurityService.pinSetAt("@alice:gua.local")).thenReturn(Optional.of(pinSetAt));
+
+        mockMvc.perform(post("/login/authority/stepup/pin")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"pin\":\"284917\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.redirectUrl").value(ENROLL_APP_SCHEME));
+
+        verify(userSecurityService).validatePinOrThrow("@alice:gua.local", "284917");
+        verify(authorityWebStepUps).proved("@alice:gua.local", AUTHORITY_SESSION_HASH, "ADOPT",
+                me.sarahlacerda.gua.identityservice.service.security.AuthFactor.PIN, pinSetAt);
+        // No code, for the same reason enrollment issues none: there is no OIDC request in flight.
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    /** The page names the transition it is asking about, so the copy can say what is being authorized. */
+    @Test
+    void theAuthorityStepUpPublishesWhichTransitionItIsFor() throws Exception {
+        LoginSession session = authoritySession();
+        session.setAuthorityPurpose("REVOKE");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(userSecurityService.hasPin("@alice:gua.local")).thenReturn(true);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("AUTHORITY_STEP_UP"))
+                .andExpect(jsonPath("$.authorityPurpose").value("REVOKE"))
+                // And what the account holds, so the page offers the passkey, the PIN, or both.
+                .andExpect(jsonPath("$.pinRegistered").value(true));
+    }
+
+    /** Every other step keeps the field out of the response, because no other step has one. */
+    @Test
+    void noOtherStepPublishesATransition() throws Exception {
+        LoginSession session = enrollSession();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("ENROLL_STEP_UP"))
+                .andExpect(jsonPath("$.authorityPurpose").doesNotExist());
+    }
+
+    /**
+     * There is no arm of this page that sends a code, and the absence is asserted on the wire as well as in
+     * the guard test: an authority record is never accepted on the strength of a phone code (ADM-009 decision
+     * 9), and this page is where one would be easiest to add.
+     */
+    @Test
+    void theAuthorityStepUpHasNoCodeToSend() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(authoritySession()));
+
+        // There is no handler at all, so the slice refuses it rather than answering it. Which refusal it is
+        // is Spring's business; that nothing was sent to a phone is this test's.
+        org.springframework.test.web.servlet.MvcResult result = mockMvc.perform(
+                post("/login/authority/stepup/otp/send")
+                        .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"phoneNumber\":\"" + PHONE + "\"}"))
+                .andReturn();
+        org.junit.jupiter.api.Assertions.assertNotEquals(200, result.getResponse().getStatus());
+
+        org.mockito.Mockito.verifyNoInteractions(accountReauthService, otpService);
+    }
+
+    /** An account with no PIN is told so, rather than counting a guess against a PIN it lacks. */
+    @Test
+    void theAuthorityPinStepUpIsRefusedWhenTheAccountHasNoPin() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(authoritySession()));
+
+        mockMvc.perform(post("/login/authority/stepup/pin")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"pin\":\"284917\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("pin_not_set"));
+
+        verify(userSecurityService, org.mockito.Mockito.never()).validatePinOrThrow(any(), any());
+        // The page asked whether it may run at all, and recorded nothing.
+        verify(authorityWebStepUps, org.mockito.Mockito.never())
+                .proved(any(), any(), anyString(), any(), any());
+    }
+
+    /** A sign-in session cannot borrow the page, and an authority session cannot sign in. */
+    @Test
+    void theAuthorityStepUpBelongsToItsOwnSessionAndNothingElse() throws Exception {
+        LoginSession signingIn = new LoginSession();
+        signingIn.setCsrfToken(CSRF);
+        signingIn.setUserId("@alice:gua.local");
+        signingIn.setPhase(Phase.PIN_REQUIRED);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(signingIn));
+
+        mockMvc.perform(post("/login/authority/stepup/pin")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"pin\":\"284917\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("unexpected_step"));
+
+        // And the other direction: what the sheet proves is for one transition, not for a login.
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(authoritySession()));
+        mockMvc.perform(post("/login/passkey/auth/options")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("enroll_session_cannot_sign_in"));
+
+        org.mockito.Mockito.verifyNoInteractions(authorityWebStepUps);
+    }
+
+    /** The session a sheet runs in: one transition, one access token, and no factor to add. */
+    private LoginSession authoritySession() {
+        LoginSession session = new LoginSession();
+        session.setUserId("@alice:gua.local");
+        session.setReauthUserId("@alice:gua.local");
+        session.setRedirectUri(ENROLL_APP_SCHEME);
+        session.setCsrfToken(CSRF);
+        session.setAuthorityPurpose("ADOPT");
+        session.setAuthoritySessionHash(AUTHORITY_SESSION_HASH);
+        session.setPhase(Phase.AUTHORITY_STEP_UP);
+        return session;
+    }
+
     private LoginSession enrollSession() {
         LoginSession session = new LoginSession();
         session.setEnroll(true);

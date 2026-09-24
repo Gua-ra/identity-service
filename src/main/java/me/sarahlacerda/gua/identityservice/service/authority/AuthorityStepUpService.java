@@ -2,6 +2,7 @@
 package me.sarahlacerda.gua.identityservice.service.authority;
 
 import java.time.Instant;
+import java.util.Optional;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -12,6 +13,7 @@ import org.springframework.util.StringUtils;
 import me.sarahlacerda.gua.identityservice.domain.AuthorityChallenge.Purpose;
 import me.sarahlacerda.gua.identityservice.exception.AuthorityTransitionException;
 import me.sarahlacerda.gua.identityservice.service.authority.AuthorityPolicy.StepUpPolicy;
+import me.sarahlacerda.gua.identityservice.service.authority.AuthorityWebStepUpService.Proved;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactor;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
@@ -42,6 +44,12 @@ import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditL
  * <p>The fresh-factor hold is applied by {@link AuthorityPolicy}, on the instant this returns, after the
  * factor is known to be the caller's own. Weighing an age before ownership would tell a caller something
  * about a credential that is not theirs.
+ *
+ * <p>There is a third way to take this step-up and it is not a third factor: the web sheet of
+ * {@link AuthorityWebStepUpService}, where the same passkey assertion or the same PIN is run on a page this
+ * service serves, for a platform that cannot run the assertion natively. It is weighed by the purpose-scoped
+ * overload of {@link #accept}, only for a request that produced no proof of its own, and only from a row this
+ * service wrote about a ceremony it ran.
  */
 @Service
 public class AuthorityStepUpService {
@@ -49,14 +57,50 @@ public class AuthorityStepUpService {
     private final PasskeyService passkeyService;
     private final UserSecurityService userSecurityService;
     private final AuthorityPolicy policy;
+    private final AuthorityWebStepUpService webStepUps;
     private final SecurityAuditLogger auditLogger;
 
     public AuthorityStepUpService(PasskeyService passkeyService, UserSecurityService userSecurityService,
-            AuthorityPolicy policy, SecurityAuditLogger auditLogger) {
+            AuthorityPolicy policy, AuthorityWebStepUpService webStepUps, SecurityAuditLogger auditLogger) {
         this.passkeyService = passkeyService;
         this.userSecurityService = userSecurityService;
         this.policy = policy;
+        this.webStepUps = webStepUps;
         this.auditLogger = auditLogger;
+    }
+
+    /**
+     * The same step-up, with the web sheet counted as a way of taking it (ADM-009 decision 4 step 2).
+     *
+     * <p>Order, and it is the only order that keeps the native path untouched: a passkey assertion in this
+     * request settles it, then the PIN in this request, and only a request that produced neither looks for a
+     * proof the sheet left behind for this account, this session and this purpose. A client that signs its own
+     * assertions never reaches the third branch, so nothing about the existing platforms changes.
+     *
+     * <p>The sheet is not a weaker proof and not a third factor. It is the same two factors, run where they
+     * can be run, on a page this service serves, and recorded by this service rather than claimed by a client.
+     * What the caller hands back is nothing at all: there is no token in this signature for a sheet, because a
+     * token a client carries is a token a client can be talked out of.
+     */
+    public Accepted accept(String userId, Purpose purpose, String sessionHash, StepUpPolicy stepUp,
+            String passkeyStepUpId, JsonNode passkeyCredential, String pin, String requesterIp) {
+        String operation = "AUTHORITY_" + purpose;
+        if (stepUp.required() && !presentedSomething(passkeyStepUpId, passkeyCredential, pin)) {
+            Optional<Proved> fromSheet = webStepUps.consume(userId, sessionHash, purpose);
+            if (fromSheet.isPresent()) {
+                Proved proved = fromSheet.get();
+                if (!stepUp.accepts(proved.factor())) {
+                    // The sheet only ever records the passkey or the PIN, and every purpose that opens one
+                    // accepts both. Refused rather than ignored, because the alternative to a refusal here is
+                    // falling through to a branch that would report "no proof was produced" about a proof
+                    // that was.
+                    throw new AuthorityTransitionException(HttpStatus.CONFLICT, "authority_step_up_required",
+                            "Confirm it is you with your passkey or your account PIN first.");
+                }
+                return new Accepted(proved.factor(), proved.factorCreatedAt());
+            }
+        }
+        return accept(userId, stepUp, operation, passkeyStepUpId, passkeyCredential, pin, requesterIp);
     }
 
     /**
@@ -73,9 +117,7 @@ public class AuthorityStepUpService {
             return new Accepted(null, null);
         }
 
-        // An explicit JSON null arrives as a NullNode, which is no more an assertion than a missing field.
-        boolean passkeyAttempted = StringUtils.hasText(passkeyStepUpId)
-                && passkeyCredential != null && !passkeyCredential.isNull();
+        boolean passkeyAttempted = assertionOffered(passkeyStepUpId, passkeyCredential);
 
         if (passkeyAttempted && stepUp.accepts(AuthFactor.PASSKEY)) {
             return acceptPasskey(userId, passkeyStepUpId, passkeyCredential, operation, requesterIp);
@@ -85,9 +127,26 @@ public class AuthorityStepUpService {
         }
 
         // Unconditional, because a refusal that any single edit can turn into a fallthrough is not a
-        // refusal. There is no third branch to reach, and in particular no code sent to the number.
+        // refusal. There is no third branch here, and in particular no code sent to the number. The one
+        // other way to satisfy this step-up is the web sheet, and it is weighed by the overload above,
+        // before this method is reached, on a proof this service recorded rather than one a caller sent.
         throw new AuthorityTransitionException(HttpStatus.CONFLICT, "authority_step_up_required",
                 "Confirm it is you with your passkey or your account PIN first.");
+    }
+
+    /** An explicit JSON null arrives as a NullNode, which is no more an assertion than a missing field. */
+    private static boolean assertionOffered(String passkeyStepUpId, JsonNode passkeyCredential) {
+        return StringUtils.hasText(passkeyStepUpId) && passkeyCredential != null && !passkeyCredential.isNull();
+    }
+
+    /**
+     * Whether this request carried a proof of its own, which is what decides whether the sheet is looked at.
+     *
+     * <p>Deliberately not "whether the caller says it can produce one": there is no input for that claim
+     * anywhere in this service, because a claim that a factor is unavailable costs an attacker nothing.
+     */
+    private static boolean presentedSomething(String passkeyStepUpId, JsonNode passkeyCredential, String pin) {
+        return assertionOffered(passkeyStepUpId, passkeyCredential) || StringUtils.hasText(pin);
     }
 
     private Accepted acceptPasskey(String userId, String passkeyStepUpId, JsonNode passkeyCredential,

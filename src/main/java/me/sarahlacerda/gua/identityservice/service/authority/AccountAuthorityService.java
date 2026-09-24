@@ -116,7 +116,10 @@ public class AccountAuthorityService {
         policy.requireNativeSession(clientId);
         Resolved account = accounts.require(userId);
 
-        Accepted accepted = stepUps.accept(userId, policy.stepUpFor(purpose), "AUTHORITY_" + purpose,
+        // The purpose-scoped overload, so a platform that cannot run a WebAuthn assertion natively can have
+        // taken the same step-up in the web sheet. A request that carries its own assertion or PIN never
+        // looks at the sheet, so nothing about the native path changes.
+        Accepted accepted = stepUps.accept(userId, purpose, sessionHash, policy.stepUpFor(purpose),
                 passkeyStepUpId, passkeyCredential, pin, requesterIp);
         // Weighed after the factor is known to be the caller's own, and both refusals expire on their own.
         stepUps.enforceHolds(userId, purpose, accepted);
