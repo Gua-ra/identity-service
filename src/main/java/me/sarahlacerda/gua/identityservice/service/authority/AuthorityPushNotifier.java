@@ -112,9 +112,17 @@ public class AuthorityPushNotifier implements AuthorityNotifier {
     }
 
     private void send(String userId, String title, String body) {
-        if (!isOutOfBand() || !StringUtils.hasText(userId)) {
-            // Either nothing is configured, or the caller had no account holder to name. Both are silent
-            // rather than an error: the startup gate is what refuses a deployment with no channel at all.
+        if (!StringUtils.hasText(userId)) {
+            // Loud, because there is no such thing as a notification with nobody to send it to. Silence here
+            // let three of the four notification kinds be dropped on every account for as long as they
+            // existed, with nothing in any log to say so. AuthorityNotifications catches and logs this, so a
+            // caller with no holder to name still cannot roll back a transition the chain accepted.
+            throw new IllegalStateException("a security notification was raised with no account holder to send "
+                    + "it to");
+        }
+        if (!isOutOfBand()) {
+            // Nothing is configured. Silent rather than an error: the startup gate is what refuses a
+            // deployment that turned the chain on with no channel at all.
             return;
         }
         Instant now = clock.instant();
