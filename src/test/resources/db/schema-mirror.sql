@@ -267,7 +267,8 @@ CREATE TABLE IF NOT EXISTS account_authority_publication (
     not_after      TIMESTAMP WITH TIME ZONE NOT NULL,
     signed_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
     confirmed_at   TIMESTAMP WITH TIME ZONE,
-    attempts       INTEGER     NOT NULL DEFAULT 0
+    attempts       INTEGER     NOT NULL DEFAULT 0,
+    last_attempt_at TIMESTAMP WITH TIME ZONE
 );
 
 CREATE INDEX IF NOT EXISTS idx_account_authority_publication_unconfirmed

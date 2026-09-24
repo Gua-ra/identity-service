@@ -58,6 +58,7 @@ public class AuthorityHeadPublications {
             return;
         }
         publication.setAttempts(publication.getAttempts() + 1);
+        publication.setLastAttemptAt(now);
         if (held) {
             publication.setConfirmedAt(now);
         }

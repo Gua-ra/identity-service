@@ -111,6 +111,11 @@ public class AuthorityPublicationStartupCheck {
                     + republish + ", which would re-issue a head on every pass over the account and grow the "
                     + "transparency log once per read"));
         }
+        Duration retry = publication.getRetryAfter();
+        if (retry.isNegative()) {
+            throw new IllegalStateException(refusal("identity.authority.publication.retry-after is " + retry
+                    + ", which is not a wait"));
+        }
         if (republish.compareTo(validity) >= 0) {
             throw new IllegalStateException(refusal("identity.authority.publication.republish-after is "
                     + republish + ", which is not shorter than head-validity of " + validity + ", so a "
