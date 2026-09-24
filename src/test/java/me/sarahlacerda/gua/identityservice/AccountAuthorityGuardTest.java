@@ -393,6 +393,15 @@ class AccountAuthorityGuardTest {
         assertThat(consume.indexOf("setConsumedAt(now)")).isLessThan(consume.indexOf("return Optional.of("));
         assertThat(service).contains("@Transactional(propagation = Propagation.REQUIRES_NEW)");
 
+        // The challenge burn reaches the same guarantee the same way, and needs it for the same reason: every
+        // refusal after the spend throws out of the caller's transaction, so a burn written inside it is given
+        // back and one step-up pays for every attempt inside the challenge's life. Its own bean, because
+        // REQUIRES_NEW is applied by the proxy and a service calling itself does not go through one.
+        String burn = read(MAIN.resolve("service/authority/AuthorityChallengeBurn.java"));
+        assertThat(burn).contains("@Transactional(propagation = Propagation.REQUIRES_NEW)");
+        assertThat(methodBody(read(MAIN.resolve("service/authority/AuthorityChallengeService.java")),
+                "public Spent spend(")).contains("burn.burn(");
+
         // The same life as the challenge, so a sheet left open is not a step-up an hour later.
         assertThat(methodBody(service, "public Instant proved(String userId, String sessionHash, Purpose purpose"))
                 .contains("policy.challengeTtl()");

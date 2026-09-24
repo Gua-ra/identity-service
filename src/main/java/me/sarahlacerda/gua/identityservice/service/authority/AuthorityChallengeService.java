@@ -47,11 +47,14 @@ public class AuthorityChallengeService {
 
     private final AuthorityChallengeRepository repository;
     private final AuthorityPolicy policy;
+    private final AuthorityChallengeBurn burn;
     private final SecureRandom random = new SecureRandom();
 
-    public AuthorityChallengeService(AuthorityChallengeRepository repository, AuthorityPolicy policy) {
+    public AuthorityChallengeService(AuthorityChallengeRepository repository, AuthorityPolicy policy,
+            AuthorityChallengeBurn burn) {
         this.repository = repository;
         this.policy = policy;
+        this.burn = burn;
     }
 
     /**
@@ -88,6 +91,10 @@ public class AuthorityChallengeService {
      * is not a description of two code paths, it is one: marking it spent here means no arrangement of later
      * failures can leave it spendable, and a caller whose record was refused asks for a new challenge rather
      * than retrying against the old one.
+     *
+     * <p>The burn itself is {@link AuthorityChallengeBurn}, in a transaction of its own, because every refusal
+     * after this point throws out of the transaction this spend would otherwise have joined. Written here, the
+     * burn was rolled back with the refusal and one step-up paid for every attempt inside the challenge's life.
      */
     @Transactional
     public Spent spend(String account, String sessionHash, Purpose purpose, String challengeB64, Instant now) {
@@ -113,8 +120,7 @@ public class AuthorityChallengeService {
             throw refused("the challenge is spent or expired");
         }
 
-        row.setSpentAt(now);
-        repository.save(row);
+        burn.burn(row.getChallengeHash(), now);
         return new Spent(decode(challengeB64.trim()), row.getFactor(), row.getFactorCreatedAt());
     }
 
@@ -147,8 +153,7 @@ public class AuthorityChallengeService {
     }
 
     private AuthorityTransitionException refusedAfterBurning(AuthorityChallenge row, Instant now, String reason) {
-        row.setSpentAt(now);
-        repository.save(row);
+        burn.burn(row.getChallengeHash(), now);
         return refused(reason);
     }
 

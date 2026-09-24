@@ -142,7 +142,8 @@ class AuthorityWebStepUpChallengeTest {
         AuthorityStepUpService stepUps = new AuthorityStepUpService(passkeyService, userSecurityService, policy,
                 webStepUps, audit);
         service = new AccountAuthorityService(policy, new AuthorityAccounts(genesisRepository),
-                new AuthorityChallengeService(challengeRepository, policy), stepUps, headRepository,
+                new AuthorityChallengeService(challengeRepository, policy,
+                        new AuthorityChallengeBurn(challengeRepository)), stepUps, headRepository,
                 recordRepository, deviceRepository, candidateRepository, mock(AuthorityNotifications.class),
                 mock(AuthorityBackoff.class), audit, clock);
 

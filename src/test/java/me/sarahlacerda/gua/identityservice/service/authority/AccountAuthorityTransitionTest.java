@@ -115,7 +115,8 @@ class AccountAuthorityTransitionTest {
         UserSecurityService userSecurityService = org.mockito.Mockito.mock(UserSecurityService.class);
         policy = new AuthorityPolicy(properties, userSecurityService);
         accounts = new AuthorityAccounts(genesisRepository);
-        challenges = new AuthorityChallengeService(challengeRepository, policy);
+        challenges = new AuthorityChallengeService(challengeRepository, policy,
+                new AuthorityChallengeBurn(challengeRepository));
         // Mocked, and never asked for anything the other classes cover: what this class needs from it is
         // whether an opposition was asked to present a factor at all.
         stepUps = org.mockito.Mockito.mock(AuthorityStepUpService.class);
