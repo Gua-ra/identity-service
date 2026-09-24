@@ -12,12 +12,16 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * What a removal presents (ADM-009 gate 2, the three tiers).
+ * What a removal presents (ADM-009 gate 2).
  *
- * <p>Which tier the caller reaches is decided by what they can produce and never by a field they set. Naming
- * your own install in {@code callerInstallationId} and in {@code installationId} is tier 1 and needs nothing
- * else; naming another install is tier 2 and needs a factor past the fresh-factor hold, plus a device
- * signature where the row carries a key. There is no third tier, no admin path and no bulk delete.
+ * <p>Which tier the caller reaches is decided by what they can produce and never by a field they set, so
+ * there is no field here for the caller to name itself with. Every removal needs a factor past the
+ * fresh-factor hold, plus a device signature where the row carries a key. There is no cheaper tier, no admin
+ * path and no bulk delete.
+ *
+ * <p>{@code callerInstallationId} is deliberately absent. It used to make a removal free whenever it equalled
+ * {@code installationId}, which is one caller's value authenticating another of the same caller's values, over
+ * an id the account's own listing hands to any bearer.
  */
 @Getter
 @Setter
@@ -29,11 +33,6 @@ public class SecurityNotificationRemoveRequest {
     @Schema(description = "The install whose registration is being removed",
             requiredMode = Schema.RequiredMode.REQUIRED)
     private String installationId;
-
-    @Size(max = 128)
-    @Schema(description = "The calling app's own installation id. When it equals installationId the caller is "
-            + "removing its own registration, which needs no extra factor.")
-    private String callerInstallationId;
 
     @Schema(description = "A step-up assertion id, for removing another install's registration")
     private String passkeyStepUpId;

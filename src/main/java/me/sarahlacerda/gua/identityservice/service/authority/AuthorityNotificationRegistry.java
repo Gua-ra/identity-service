@@ -32,23 +32,30 @@ import me.sarahlacerda.gua.identityservice.service.authority.AuthorityStepUpServ
 /**
  * The registrations that make ADM-009 gate 2 true, and the three tiers a removal has to pass.
  *
- * <h2>Why removal is asymmetric</h2>
+ * <h2>What a removal costs, and why the cheap tier is gone</h2>
  *
  * <p>The attacker this channel exists to defeat holds, after a completed account recovery: the phone number,
  * a PIN they chose seconds ago, a fresh session, and an account whose other sessions are ended. What they do
- * not hold is the previous owner's installation id, that install's authority device key, or any factor older
- * than the fresh-factor hold. The tiers are written against exactly that list:
+ * not hold is that install's authority device key, or any factor older than the fresh-factor hold. The rules
+ * are written against exactly that list:
  *
  * <ol>
- * <li><b>From the install itself.</b> The body names the caller's own installation id and no extra factor is
- * asked for, because the person holding that phone is the person the channel serves.</li>
- * <li><b>From another install of the same account.</b> A step-up on a factor that is itself past the
+ * <li><b>Every removal, whichever install it names.</b> A step-up on a factor that is itself past the
  * fresh-factor hold, so the PIN the recovery just minted is refused, plus, where the row carries a device
  * key, a signature by a key the chain has active and unquarantined, which the rank-0 account-recovery path
  * never mints.</li>
  * <li><b>From nowhere else.</b> No admin path, no bulk delete, and nothing reachable from a browser session,
  * because ADM-009 decision 6 forbids browser-held material authorizing anything.</li>
  * </ol>
+ *
+ * <p>There was a cheaper first tier, "from the install itself, with no extra factor at all", and it was
+ * decided by comparing the installation id the request body named against another installation id in the
+ * same body. Two values one caller sets cannot authenticate each other, and the target is not even secret:
+ * the account's own listing returns every installation id to any bearer of the account. So any session could
+ * empty the channel every window in ADM-009 rests on, with no factor, no hold and no device signature, which
+ * is the one thing gate 2 exists to prevent. The tier is removed rather than patched. It can come back when
+ * an install is bound to server state a caller cannot assert, a per-install secret this service issues at
+ * registration or the access token itself, and not before.
  *
  * <p>Every accepted removal is announced to whatever registrations are left, so stripping the channel is loud
  * rather than silent. The announcement goes out after the row is gone rather than before, so the install that
@@ -94,6 +101,20 @@ public class AuthorityNotificationRegistry {
      * <p>An upsert rather than an insert because the id is stable across sign-out and re-login: without it
      * every re-login would add a row and stale tokens would accumulate forever, and a sweep would be the only
      * thing standing between the account and a list of destinations that no longer exist.
+     *
+     * <p><b>An upsert may not move an existing row's destination for free.</b> The installation id is handed
+     * to any bearer of the account by the account's own listing, and the signed material on the row covers
+     * the installation id and the device key and never the token, so without this rule one request repoints
+     * the owner's alerts at the caller's own push token while the bound flag, the fingerprint and every
+     * liveness answer still report a healthy owner channel. That is the removal hole again by another route,
+     * and it removes nothing, so no tier would catch it. A changed token therefore costs what a removal
+     * costs: a signature by an active unquarantined device of this account over this installation id, across
+     * a spent {@code NOTIFY} challenge.
+     *
+     * <p>The honest bound: an account that holds no authority device yet has no such signature to offer, so
+     * a rotated push token on such an account cannot move the row. It removes the registration, which asks
+     * for the same step-up a removal asks for, and registers the new destination. Both cost the owner one
+     * factor past the fresh-factor hold, which is exactly what the attacker cannot produce.
      */
     @Transactional
     public Registered register(String userId, Registration request, String sessionHash, Instant now) {
@@ -113,6 +134,11 @@ public class AuthorityNotificationRegistry {
             row = AuthorityNotificationRegistration.registered(userId, installationId, platform, appId, token,
                     fingerprint(token), label, deviceKey, now);
         } else {
+            if (!token.equals(row.getToken()) && deviceKey == null) {
+                throw refused("authority_notification_destination_refused",
+                        "Moving this install's alerts to another destination needs a signature from a device "
+                                + "that holds this account's authority.");
+            }
             row.setPlatform(platform);
             row.setAppId(appId);
             row.setToken(token);
@@ -166,14 +192,14 @@ public class AuthorityNotificationRegistry {
     // --- Removal --------------------------------------------------------------
 
     /**
-     * Removes one registration, through whichever tier the caller can pass.
+     * Removes one registration, at the one price every removal pays.
      *
-     * @param callerInstallationId the installation id the calling app holds, which is what makes tier 1
-     *                             reachable. Null when the caller did not name its own install
+     * <p>There is no parameter here for the caller to say which install it is. The request names the
+     * registration to remove and nothing else, because a request cannot authenticate itself: which tier a
+     * caller reaches has to be decided by what they can produce.
      */
     @Transactional
-    public String remove(String userId, Removal request, String callerInstallationId, String sessionHash,
-            String requesterIp, Instant now) {
+    public String remove(String userId, Removal request, String sessionHash, String requesterIp, Instant now) {
         policy.requireEnabled();
         policy.requireNotificationsEnabled();
         String target = required(request.installationId(), "installation_id");
@@ -181,28 +207,25 @@ public class AuthorityNotificationRegistry {
                 .orElseThrow(() -> refused("authority_notification_unknown",
                         "There is no such registration on this account."));
 
-        boolean fromTheInstallItself = target.equals(callerInstallationId);
-        if (!fromTheInstallItself) {
-            requireSecondTier(userId, row, request, sessionHash, requesterIp, now);
-        }
+        requireFactorAndSignature(userId, row, request, sessionHash, requesterIp, now);
 
         repository.delete(row);
-        log.info("A security-notification registration was removed for {} ({}, own install: {})", userId,
-                row.getTokenFingerprint(), fromTheInstallItself);
+        log.info("A security-notification registration was removed for {} ({})", userId,
+                row.getTokenFingerprint());
         // The caller announces this to whatever is left, which is why the label comes back rather than nothing.
         // The row is already gone, so the install that was removed is not among the ones told.
         return row.getDeviceLabel();
     }
 
     /**
-     * Tier 2: a step-up on a factor past the fresh-factor hold, and a device signature where the row carries a
-     * key.
+     * What every removal presents: a step-up on a factor past the fresh-factor hold, and a device signature
+     * where the row carries a key.
      *
      * <p>The hold is what refuses the attacker. Their only factor is the PIN the recovery minted seconds ago,
      * and ADM-009 decision 9 rule 3 refuses a credential inside the hold; the account-level half of the same
      * rule refuses them again while the recovery itself is inside it.
      */
-    private void requireSecondTier(String userId, AuthorityNotificationRegistration row, Removal request,
+    private void requireFactorAndSignature(String userId, AuthorityNotificationRegistration row, Removal request,
             String sessionHash, String requesterIp, Instant now) {
         Accepted accepted = stepUps.accept(userId, policy.notificationRemovalStepUp(),
                 "AUTHORITY_NOTIFICATION_REMOVE", request.passkeyStepUpId(), request.passkeyCredential(),
@@ -365,7 +388,7 @@ public class AuthorityNotificationRegistry {
             String deviceLabel, String authorityDeviceKeyB64, String challenge, String signature) {
     }
 
-    /** What a removal presents. Which tier it reaches is decided by what it can produce, never by a flag. */
+    /** What a removal presents. What it can produce is the whole of its authorization, never what it says. */
     public record Removal(String installationId, String passkeyStepUpId, JsonNode passkeyCredential, String pin,
             String challenge, String signature) {
     }

@@ -75,13 +75,16 @@ public class AccountAuthorityNotificationController {
                     + "or keystore so it survives a sign-out. Nothing about this row is removed by a sign-out, a "
                     + "token revocation, a PIN reset, a passkey removal or a completed account recovery, which is "
                     + "the whole property gate 2 asks for. A device authority key may be bound to the row, and "
-                    + "only with a signature by that key over a spent challenge.",
+                    + "only with a signature by that key over a spent challenge. An upsert refreshes a "
+                    + "registration; it may not move an existing row's push destination without that signature, "
+                    + "because a destination change is a removal and a re-registration wearing one call.",
             security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Registered, described without its token",
                     content = @Content(schema = @Schema(implementation = SecurityNotificationView.class))),
             @ApiResponse(responseCode = "400", description = "authority_notification_invalid, "
-                    + "authority_notification_invalid_key or authority_notification_invalid_signature",
+                    + "authority_notification_invalid_key, authority_notification_invalid_signature or "
+                    + "authority_notification_destination_refused",
                     content = @Content),
             @ApiResponse(responseCode = "401", description = "Caller not authenticated", content = @Content),
             @ApiResponse(responseCode = "503", description = "authority_disabled or "
@@ -120,13 +123,14 @@ public class AccountAuthorityNotificationController {
     }
 
     @PostMapping("/remove")
-    @Operation(summary = "Remove one registration, through the tier the caller can pass",
-            description = "From the install itself, naming its own installation id, with no extra factor, because "
-                    + "the person holding that phone is the person the channel serves. From another install, with "
-                    + "a step-up on a factor that is itself past the fresh-factor hold, plus a signature by an "
-                    + "active unquarantined device key where the row carries one. From nowhere else: there is no "
-                    + "admin path, no bulk delete and nothing reachable from a browser session. Every accepted "
-                    + "removal is announced to the remaining registrations, so stripping the channel is loud.",
+    @Operation(summary = "Remove one registration, at the price every removal pays",
+            description = "A step-up on a factor that is itself past the fresh-factor hold, plus a signature by "
+                    + "an active unquarantined device key where the row carries one. That is the price whichever "
+                    + "install the request names, including the caller's own: which tier a caller reaches is "
+                    + "decided by what they can produce, and a request cannot authenticate itself. From nowhere "
+                    + "else: there is no admin path, no bulk delete and nothing reachable from a browser session. "
+                    + "Every accepted removal is announced to the remaining registrations, so stripping the "
+                    + "channel is loud.",
             security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "204", description = "Removed"),
@@ -146,8 +150,7 @@ public class AccountAuthorityNotificationController {
                 new AuthorityNotificationRegistry.Removal(request.getInstallationId(),
                         request.getPasskeyStepUpId(), request.getPasskeyCredential(), request.getPin(),
                         request.getChallenge(), request.getSignature()),
-                request.getCallerInstallationId(), sessionHash(servletRequest), servletRequest.getRemoteAddr(),
-                clock.instant());
+                sessionHash(servletRequest), servletRequest.getRemoteAddr(), clock.instant());
         // Announced here rather than inside the registry, because the notifier reads the registrations and a
         // registry that called it back would be a cycle in the wiring rather than a decision.
         notifications.channelRemoved(userId, label);
