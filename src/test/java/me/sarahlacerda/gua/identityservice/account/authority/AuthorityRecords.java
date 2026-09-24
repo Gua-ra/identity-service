@@ -64,8 +64,14 @@ public final class AuthorityRecords {
 
     static byte[] recovery(byte[] deviceKey, byte[] recoveryKey, int authorization, byte[] authorizingKey,
             long seq, byte[] prevHash) {
-        return AuthorityRecordCodec.encode(AuthorityRecordType.AUTHORITY_RECOVERY, REFERENCE, prevHash, seq,
-                concat(deviceKey, recoveryKey, AuthorityRecordCodec.labelBytes("phone"),
+        return recoveryFor(REFERENCE, deviceKey, recoveryKey, "phone", authorization, authorizingKey, seq,
+                prevHash);
+    }
+
+    public static byte[] recoveryFor(byte[] reference, byte[] deviceKey, byte[] recoveryKey, String label,
+            int authorization, byte[] authorizingKey, long seq, byte[] prevHash) {
+        return AuthorityRecordCodec.encode(AuthorityRecordType.AUTHORITY_RECOVERY, reference, prevHash, seq,
+                concat(deviceKey, recoveryKey, AuthorityRecordCodec.labelBytes(label),
                         new byte[AuthorityRecord.ENTROPY_LENGTH], new byte[] { (byte) authorization },
                         authorizingKey));
     }

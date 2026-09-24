@@ -68,6 +68,17 @@ public class AuthorityChainHead {
     @Column(name = "cooldown_until")
     private Instant cooldownUntil;
 
+    /**
+     * The magic of the record the cooldown was written for, so the cooldown refuses another transition of
+     * <em>that</em> shape and nothing else.
+     *
+     * <p>Without it one column refused every shape at once, which is the absolute freeze decision 3 rejected:
+     * an intruder cycling a revocation the owner objects to would freeze the owner's grant, revocation,
+     * self-revocation and recovery for a full window each time, while paying only their own doubling backoff.
+     */
+    @Column(name = "cooldown_magic", length = 4)
+    private String cooldownMagic;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
@@ -114,6 +125,12 @@ public class AuthorityChainHead {
         pendingMagic = magic;
         pendingRank = rank;
         pendingEffectiveAt = effectiveAt;
+    }
+
+    /** Opens the cooldown one cancelled record's shape owes, per ADM-009 decision 4's bounds. */
+    public void startCooldown(String magic, Instant until) {
+        cooldownMagic = magic;
+        cooldownUntil = until;
     }
 
     public void clearPending() {

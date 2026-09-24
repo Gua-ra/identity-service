@@ -525,9 +525,22 @@ public class AuthorityPolicy {
         }
     }
 
-    /** Refuses a second transition of the same shape inside the cooldown of one window. */
-    public void requireOutsideCooldown(Instant cooldownUntil, Instant now) {
-        if (cooldownUntil != null && now.isBefore(cooldownUntil)) {
+    /**
+     * Refuses a second transition of the same shape inside the cooldown of one window.
+     *
+     * <p>Of the same shape, which is what the cooldown is for and what one column could not say. A cooldown
+     * that refused every shape at once would be the absolute freeze decision 3 rejected, reached from the
+     * other side: the owner's own successful objection would stop them granting, revoking, self-revoking or
+     * recovering for a full window, while the intruder who opened the cancelled record pays only their own
+     * doubling backoff.
+     *
+     * @param cooldownMagic the magic the cancelled record carried, or null on a head that never recorded one,
+     *                      which refuses nothing rather than everything
+     */
+    public void requireOutsideCooldown(Instant cooldownUntil, String cooldownMagic, String submittedMagic,
+            Instant now) {
+        if (cooldownUntil != null && cooldownMagic != null && cooldownMagic.equals(submittedMagic)
+                && now.isBefore(cooldownUntil)) {
             throw new AuthorityTransitionException(HttpStatus.TOO_MANY_REQUESTS, "authority_cooldown",
                     "Try that again later.", Math.max(Duration.between(now, cooldownUntil).toSeconds(), 1L));
         }

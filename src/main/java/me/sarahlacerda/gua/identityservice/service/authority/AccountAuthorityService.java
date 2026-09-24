@@ -493,8 +493,18 @@ public class AccountAuthorityService {
                     "The chain moved. Read it again and decide with the other record in view.");
         }
 
+        // Both budgets are read here, before this request has written anything to the head. Read after the
+        // cancellation below, the cooldown read is the value this very request just wrote, which refused every
+        // outranking record for a full window and made the rank-2 escape hatch of decision 3 unreachable for
+        // every rank pair.
+        policy.requireOutsideBackoff(backoff.until(account.reference(), encode(record.verifyingKey())).orElse(null),
+                now);
+        policy.requireOutsideCooldown(head.getCooldownUntil(), head.getCooldownMagic(), record.type().magic(),
+                now);
+
         short rank = policy.rankOf(record.type(), record.authorization());
         AuthorityChainRecord cancelled = null;
+        AuthorityRecord cancelledRecord = null;
         if (head.hasPending()) {
             if (policy.resolveAgainstPending(rank, head.getPendingRank()) == SlotOutcome.REFUSED) {
                 throw new AuthorityTransitionException(HttpStatus.CONFLICT, "authority_pending_conflict",
@@ -504,13 +514,9 @@ public class AccountAuthorityService {
             // always reachable: the one record the owner can always land is the one signed by the key they
             // committed for exactly this, and it is not a key an intruder holding devices has.
             cancelled = requirePending(account, head);
-            AuthorityRecord cancelledRecord = decodeStored(cancelled);
+            cancelledRecord = decodeStored(cancelled);
             cancelPending(account, head, cancelled, cancelledRecord, now, "outranked by a later record");
         }
-
-        policy.requireOutsideBackoff(backoff.until(account.reference(), encode(record.verifyingKey())).orElse(null),
-                now);
-        policy.requireOutsideCooldown(head.getCooldownUntil(), now);
 
         requireSignerMayAct(account, record, devices, now);
 
@@ -776,7 +782,7 @@ public class AccountAuthorityService {
         }
 
         head.clearPending();
-        head.setCooldownUntil(now.plus(policy.oppositionWindow()));
+        head.startCooldown(decoded.type().magic(), now.plus(policy.oppositionWindow()));
         head.setUpdatedAt(now);
         headRepository.save(head);
 
