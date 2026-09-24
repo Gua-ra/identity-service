@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS account_authority_head (
     -- V17
     cooldown_magic       VARCHAR(4),
     pending_extended     BOOLEAN     NOT NULL DEFAULT FALSE,
+    cancelled_count      INTEGER     NOT NULL DEFAULT 0,
     updated_at           TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );
 

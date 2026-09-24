@@ -93,6 +93,7 @@ class AccountAuthorityTransitionTest {
     private IdentityServiceProperties properties;
     private AuthorityPolicy policy;
     private AuthorityChallengeService challenges;
+    private AuthorityStepUpService stepUps;
     private AccountAuthorityService service;
     private AuthorityAccounts accounts;
     private MutableClock clock;
@@ -113,8 +114,11 @@ class AccountAuthorityTransitionTest {
         policy = new AuthorityPolicy(properties, userSecurityService);
         accounts = new AuthorityAccounts(genesisRepository);
         challenges = new AuthorityChallengeService(challengeRepository, policy);
+        // Mocked, and never asked for anything the other classes cover: what this class needs from it is
+        // whether an opposition was asked to present a factor at all.
+        stepUps = org.mockito.Mockito.mock(AuthorityStepUpService.class);
         channel = new StubChannel();
-        service = new AccountAuthorityService(policy, accounts, challenges, null, headRepository, recordRepository,
+        service = new AccountAuthorityService(policy, accounts, challenges, stepUps, headRepository, recordRepository,
                 deviceRepository, candidateRepository, new AuthorityNotifications(List.of(channel)),
                 new NoBackoff(policy), new LoggingSecurityAuditLogger(), clock);
 
@@ -195,12 +199,43 @@ class AccountAuthorityTransitionTest {
     }
 
     @Test
-    void theCancelledRecordKeepsItsSlotSoTheChainHasNoGapAndNoBranch() {
+    void theCancelledRecordGivesItsSlotBackSoARetryLandsWhereBothClientsBuildIt() {
         adopt();
         service.oppose(USER, head().getPendingHash(), null, null, null, "127.0.0.1");
 
-        assertThat(head().getHeadSeq()).isEqualTo(1L);
-        assertThat(head().nextSeq()).isEqualTo(2L);
+        // While the cancelled record kept its slot, headSeq stayed at 1 forever and AdoptRoot is permitted
+        // only on an empty chain, so one free opposition, or one mistaken tap, denied the account its
+        // authority permanently and reported it as AUTHORITY_LOST without it ever having been rooted.
+        assertThat(head().getHeadSeq()).isEqualTo(0L);
+        assertThat(head().nextSeq()).isEqualTo(1L);
+        assertThat(head().getHeadHash())
+                .isEqualTo(java.util.HexFormat.of().formatHex(AuthorityRecord.emptyPrevHash()));
+        assertThat(service.state(USER).state()).isEqualTo("BOOTSTRAP");
+
+        // And the retry is the record both clients already build: seq 1, prevHash all zero. Past the cooldown
+        // one cancellation of this shape owes.
+        clock.advance(Duration.ofHours(73));
+        AccountAuthorityService.Submitted retry = adopt();
+
+        assertThat(retry.seq()).isEqualTo(1L);
+        assertThat(head().getPendingSeq()).isEqualTo(1L);
+    }
+
+    @Test
+    void theRetryDoesNotBuyAnotherFreeObjection() {
+        adopt();
+        service.oppose(USER, head().getPendingHash(), null, null, null, "127.0.0.1");
+        clock.advance(Duration.ofHours(73));
+        adopt();
+
+        service.oppose(USER, head().getPendingHash(), null, null, null, "127.0.0.1");
+
+        // Decision 4's bound. The first objection is deliberately free, because at seq 1 the account holds no
+        // authority to weigh; the second and later ones need a factor, so a stolen bearer session cannot veto
+        // the account out of ever gaining authority while remaining account-equivalent itself. Counted from
+        // the cancelled rows, the retry that replaced the row would have made this one free again.
+        org.mockito.Mockito.verify(stepUps).accept(USER, policy.oppositionStepUp(), "AUTHORITY_OPPOSE", null,
+                null, null, "127.0.0.1");
     }
 
     @Test
@@ -572,15 +607,16 @@ class AccountAuthorityTransitionTest {
         service.state(USER);
 
         AccountAuthorityService.Submitted revocation = revokeSecondDevice();
-        // The revocation holds its own slot while its window runs, and keeps it once cancelled, so the hash
-        // chain has no gap. What must not move is the position after that.
         long seqWithThePendingRevocation = head().getHeadSeq();
 
         opposeAsSecondDevice(revocation.recordHash());
 
-        // It cancels the record it names, or it is refused. An objection that consumed a position of its own
-        // would let one device cycle objections and walk the chain forward with no transition ever happening.
-        assertThat(head().getHeadSeq()).isEqualTo(seqWithThePendingRevocation);
+        // It cancels the record it names, or it is refused, and it is never appended: an objection that
+        // consumed a position of its own would let one device cycle objections and walk the chain forward with
+        // no transition ever happening. The chain therefore moves back to the position before the record that
+        // was cancelled, which is the one the next transition is built against, and never forward.
+        assertThat(head().getHeadSeq()).isEqualTo(seqWithThePendingRevocation - 1);
+        assertThat(head().nextSeq()).isEqualTo(revocation.seq());
         assertThat(recordRepository.findByAccountOrderBySeqAsc(account()))
                 .noneMatch(row -> AuthorityRecordType.OPPOSE.magic().equals(row.getMagic()));
     }

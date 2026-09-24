@@ -23,12 +23,21 @@ import me.sarahlacerda.gua.identityservice.account.authority.AuthorityRecord;
  * winner and one refusal carrying the current head. There is no merge, no last-writer-wins, and no state in
  * which two chains exist.
  *
- * <p>{@code headHash} and {@code headSeq} name the last record <em>placed</em> in a slot, whatever became of
- * it. That is the slot reservation of decision 3: a record inside an opposition window has already taken its
- * {@code seq}, and a cancelled one keeps it. Without that, every delayed transition loses to an immediate one
- * and an attacker holding any active device starves every revocation aimed at them, one cheap record per
- * window. It also means the hash chain has no gaps and no branch: the next record always follows the last
- * one placed, and whether a record took effect is its own {@code state} rather than a hole in the chain.
+ * <p>{@code headHash} and {@code headSeq} name the last record <em>placed</em> in a slot and not yet
+ * cancelled. That is the slot reservation of decision 3: a record inside an opposition window has already
+ * taken its {@code seq}, so every delayed transition is not simply outrun by an immediate one and an attacker
+ * holding any active device cannot starve a revocation aimed at them with one cheap record per window.
+ *
+ * <p>A <em>cancelled</em> record gives its slot back, and that is not a detail. While it kept the slot, one
+ * free opposition to a first adoption left {@code headSeq} at 1 forever, and {@code AdoptRoot} is permitted
+ * only on an empty chain: the account could never adopt again and reported {@code AUTHORITY_LOST} without
+ * ever having been rooted. So a cancellation rolls the head back to the cancelled record's own
+ * {@code prevHash} and {@code seq - 1}, which for a first record is the empty head, exactly the position both
+ * clients build a retry against.
+ *
+ * <p>{@link #getCancelledCount()} is therefore kept here rather than counted from the rows: a retry lands at
+ * the position the cancelled record held, so the row itself does not survive a retry, and decision 4's bound
+ * on free oppositions has to be counted somewhere that does.
  *
  * <p>The pending fields say that the last placed record is still inside its window, and carry its rank so a
  * rank comparison does not have to re-decode it.
@@ -76,6 +85,18 @@ public class AuthorityChainHead {
      */
     @Column(name = "pending_extended", nullable = false)
     private boolean pendingExtended;
+
+    /**
+     * How many records this account has had cancelled, which decision 4's bounds count to decide whether an
+     * opposition has to present a factor.
+     *
+     * <p>Counted here rather than from the {@code CANCELLED} rows, because a cancelled record gives its slot
+     * back and a retry at that position replaces the row. Counted from the rows, one opposition would be free,
+     * then the next retry would make the following one free again, and the bound that stops a stolen bearer
+     * session vetoing an account out of ever holding authority would never bind.
+     */
+    @Column(name = "cancelled_count", nullable = false)
+    private int cancelledCount;
 
     @Column(name = "cooldown_until")
     private Instant cooldownUntil;
@@ -138,6 +159,18 @@ public class AuthorityChainHead {
         pendingRank = rank;
         pendingEffectiveAt = effectiveAt;
         pendingExtended = false;
+    }
+
+    /**
+     * Gives a cancelled record's slot back, so the position it held is the next position again.
+     *
+     * <p>The empty-chain head hash is a first record's all-zero {@code prevHash}, so rolling back the first
+     * record of a chain leaves exactly the head an adoption is built against.
+     */
+    public void rollBackTo(String prevHash, long seq) {
+        headHash = prevHash;
+        headSeq = seq - 1;
+        cancelledCount++;
     }
 
     /** Opens the cooldown one cancelled record's shape owes, per ADM-009 decision 4's bounds. */

@@ -175,9 +175,9 @@ public class AccountAuthorityService {
         Instant now = clock.instant();
         AuthorityChainHead head = lockHead(account, now);
 
-        int already = (int) recordRepository.findByAccountAndState(account.reference(),
-                AuthorityChainRecord.State.CANCELLED).stream().count();
-        if (policy.oppositionNeedsStepUp(already)) {
+        // From the head rather than from the cancelled rows: a cancelled record's slot goes back, so a retry
+        // replaces the row and a count taken from the rows would hand out a free veto over and over.
+        if (policy.oppositionNeedsStepUp(head.getCancelledCount())) {
             // Any factor, at any age. The hold gates starting a transition and never opposing one.
             stepUps.accept(userId, policy.oppositionStepUp(), "AUTHORITY_OPPOSE", passkeyStepUpId,
                     passkeyCredential, pin, requesterIp);
@@ -521,7 +521,10 @@ public class AccountAuthorityService {
         requireSignerMayAct(account, record, devices, now);
 
         Instant effectiveAt = immediate ? now : now.plus(policy.windowFor(record.type(), record.authorization()));
-        long seq = head.nextSeq();
+        // The position the record itself claims, which the compare-and-set above already proved was the next
+        // one. Read from the record rather than from the head, because a cancellation between the two gave the
+        // outranked record's slot back and this record must still land where it was built and signed for.
+        long seq = record.seq();
 
         recordRepository.save(AuthorityChainRecord.of(account.reference(), seq, record.type().magic(), recordB64,
                 record.hashHex(), record.prevHashHex(), signatureB64, encode(record.verifyingKey()),
@@ -785,12 +788,11 @@ public class AccountAuthorityService {
         pending.setSettledAt(now);
         recordRepository.save(pending);
 
-        if (decoded.type() == AuthorityRecordType.DEVICE_GRANT) {
-            // Opposing a grant revokes the granted device immediately, which is what stops the two-record
-            // grant-then-self-revoke from leaving the owner's own phone with no authority.
-            revokeDeviceRow(account, decoded.deviceKey(), pending.getSeq(), now);
-        }
-
+        // The slot goes back. A cancelled record that kept it left a bootstrap account with headSeq 1 and no
+        // route to adoption ever again, because AdoptRoot is permitted only on an empty chain: one free
+        // opposition, or one mistaken tap, denied the account its authority permanently and reported it as
+        // AUTHORITY_LOST. The retry then lands at the position both clients build it for.
+        head.rollBackTo(pending.getPrevHash(), pending.getSeq());
         head.clearPending();
         head.startCooldown(decoded.type().magic(), now.plus(policy.oppositionWindow()));
         head.setUpdatedAt(now);

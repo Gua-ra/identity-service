@@ -20,3 +20,10 @@ ALTER TABLE account_authority_head
 -- objection was re-submittable until the account was postponed out of its own recovery.
 ALTER TABLE account_authority_head
     ADD COLUMN IF NOT EXISTS pending_extended BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- How many records this account has had cancelled (decision 4's bounds on free oppositions). A cancelled
+-- record now gives its slot back, so a retry lands at the position it held and replaces the row; the count
+-- has to live somewhere a retry does not erase, or the second opposition would be free again after every
+-- retry and a stolen bearer session could veto an account out of ever holding authority.
+ALTER TABLE account_authority_head
+    ADD COLUMN IF NOT EXISTS cancelled_count INTEGER NOT NULL DEFAULT 0;
