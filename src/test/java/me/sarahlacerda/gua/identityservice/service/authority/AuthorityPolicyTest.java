@@ -68,23 +68,32 @@ class AuthorityPolicyTest {
     // --- The native-session rule -------------------------------------------
 
     @Test
-    void withNoNativeClientConfiguredEveryCallerIsRefused() {
+    void aRegisteredClientOfOursThatIsNotListedIsRefused() {
         assertThat(codeOf(() -> policy.requireNativeSession(Optional.of("gua-ios"))))
                 .isEqualTo("authority_native_session_required");
         assertThat(policy.mayHoldAuthority(Optional.of("gua-ios"))).isFalse();
-    }
 
-    @Test
-    void onlyAConfiguredNativeClientMayHoldAuthority() {
         properties.getAuthority().getNativeClientIds().add("gua-ios");
 
         policy.requireNativeSession(Optional.of("gua-ios"));
-
         assertThat(policy.mayHoldAuthority(Optional.of("gua-ios"))).isTrue();
-        // A token this service did not mint names no client of ours, so it can never be the native app.
-        assertThat(policy.mayHoldAuthority(Optional.empty())).isFalse();
         assertThat(codeOf(() -> policy.requireNativeSession(Optional.of("gua-web"))))
                 .isEqualTo("authority_native_session_required");
+    }
+
+    @Test
+    void aTokenThatNamesNoClientOfOursIsNotRefused() {
+        // Both apps authenticate with MAS-issued tokens, which this service validates through the homeserver's
+        // whoami and turns into a principal with a null client id. Refusing that refused every real phone on
+        // every deployment, whatever the list held: the rule made the feature unreachable rather than
+        // native-only. What keeps a page out is that these endpoints are bearer-only and that no page can
+        // reach the signing key at all.
+        policy.requireNativeSession(Optional.empty());
+
+        assertThat(policy.mayHoldAuthority(Optional.empty())).isTrue();
+
+        properties.getAuthority().getNativeClientIds().add("gua-ios");
+        policy.requireNativeSession(Optional.empty());
     }
 
     // --- The step-up --------------------------------------------------------

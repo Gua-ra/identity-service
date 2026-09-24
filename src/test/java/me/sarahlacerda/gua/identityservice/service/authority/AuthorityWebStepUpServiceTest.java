@@ -154,13 +154,16 @@ class AuthorityWebStepUpServiceTest {
     }
 
     @Test
-    void theBrowserCannotOpenOneOfTheseForItself() {
+    void aWebClientOfOursCannotOpenOneOfTheseForItself() {
         // Decision 6 is a rule, not a default. A sheet a web session opened for itself would be a browser
         // arranging its own authority proof, which is the one thing that record forbids outright.
         assertThat(refusalFor(() -> service.requireMayOpen(Optional.of("gua-web"), Purpose.ADOPT)))
                 .isEqualTo("authority_native_session_required");
-        assertThat(refusalFor(() -> service.requireMayOpen(Optional.empty(), Purpose.ADOPT)))
-                .isEqualTo("authority_native_session_required");
+
+        // A token this service did not mint names no client of ours, which is how both apps authenticate. It
+        // is not refused here, and what keeps a page out of these endpoints is that they are bearer-only:
+        // the sheet holds a login session cookie, not an access token.
+        service.requireMayOpen(Optional.empty(), Purpose.ADOPT);
     }
 
     @Test
