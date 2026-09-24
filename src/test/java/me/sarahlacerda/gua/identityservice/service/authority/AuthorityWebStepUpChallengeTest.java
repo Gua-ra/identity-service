@@ -145,7 +145,7 @@ class AuthorityWebStepUpChallengeTest {
                 new AuthorityChallengeService(challengeRepository, policy,
                         new AuthorityChallengeBurn(challengeRepository)), stepUps, headRepository,
                 recordRepository, deviceRepository, candidateRepository, mock(AuthorityNotifications.class),
-                mock(AuthorityBackoff.class), audit, clock);
+                mock(AuthorityBackoff.class), AuthorityHeadPublisherFixtures.off(properties), audit, clock);
 
         BootstrapGenesis genesis = BootstrapGenesisCodec.mint();
         genesisRepository.saveAndFlush(AccountGenesisRecord.attachedBootstrap(genesis.accountId().value(), USER,
