@@ -758,10 +758,20 @@ public class AccountAuthorityService {
                         "the head reserves a slot with no record behind it"));
     }
 
+    /**
+     * Extends the pending window once, which is all decision 7 lets an active device do to a rank-2 recovery.
+     *
+     * <p>Once, and the head carries whether it has happened. The alternative is not "an extension per
+     * objection": an Oppose costs no factor and no backoff, and nothing an extension changes is part of the
+     * staleness check, so a second one is the same objection again and a thief holding every active key would
+     * postpone the owner's recovery indefinitely.
+     */
     private void extendOnce(Resolved account, AuthorityChainHead head, AuthorityChainRecord pending,
             AuthorityRecord decoded, Instant now) {
+        policy.requireExtensionUnspent(head.isPendingExtended());
         Instant extended = head.getPendingEffectiveAt().plus(policy.oppositionWindow());
         head.setPendingEffectiveAt(extended);
+        head.setPendingExtended(true);
         head.setUpdatedAt(now);
         headRepository.save(head);
         pending.setEffectiveAt(extended);
