@@ -47,7 +47,11 @@ CREATE TABLE IF NOT EXISTS account_authority_publication (
     confirmed_at   TIMESTAMP WITH TIME ZONE,
     -- How many delivery attempts this row has had. Read by nothing that decides anything; it exists so a
     -- resolver that has been unreachable for a week is visible as that rather than as an absence.
-    attempts       INTEGER     NOT NULL DEFAULT 0
+    attempts       INTEGER     NOT NULL DEFAULT 0,
+    -- When the last attempt was made, and the only thing that bounds retries. The catch-up rides the same
+    -- lazy path the account holder's own reads take, so without a floor an unreachable resolver would put a
+    -- socket timeout in front of every one of those reads.
+    last_attempt_at TIMESTAMP WITH TIME ZONE
 );
 
 -- Answers "which accounts are signed but unacknowledged" without a full scan.

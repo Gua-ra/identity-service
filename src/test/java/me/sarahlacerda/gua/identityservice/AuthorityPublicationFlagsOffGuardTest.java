@@ -66,6 +66,7 @@ class AuthorityPublicationFlagsOffGuardTest {
         assertThat(publication.getHomeserverId()).isEmpty();
         assertThat(publication.getHeadValidity()).isEqualTo(Duration.ofDays(400));
         assertThat(publication.getRepublishAfter()).isEqualTo(Duration.ofDays(300));
+        assertThat(publication.getRetryAfter()).isEqualTo(Duration.ofMinutes(5));
     }
 
     @Test
@@ -86,6 +87,7 @@ class AuthorityPublicationFlagsOffGuardTest {
         assertThat(yaml).contains("IDENTITY_AUTHORITY_PUBLICATION_HOMESERVER_ID:}");
         assertThat(yaml).contains("IDENTITY_AUTHORITY_PUBLICATION_HEAD_VALIDITY:P400D");
         assertThat(yaml).contains("IDENTITY_AUTHORITY_PUBLICATION_REPUBLISH_AFTER:P300D");
+        assertThat(yaml).contains("IDENTITY_AUTHORITY_PUBLICATION_RETRY_AFTER:PT5M");
     }
 
     // --- With the flag off, nothing happens ----------------------------------
@@ -255,6 +257,16 @@ class AuthorityPublicationFlagsOffGuardTest {
         assertThatThrownBy(() -> check(always).verifyAuthorityPublication())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("once per read");
+    }
+
+    @Test
+    void aRetryFloorThatIsNotAWaitIsRefusedAtStartup() {
+        IdentityServiceProperties properties = publishing();
+        properties.getAuthority().getPublication().setRetryAfter(Duration.ofMinutes(-1));
+
+        assertThatThrownBy(() -> check(properties).verifyAuthorityPublication())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("retry-after");
     }
 
     @Test

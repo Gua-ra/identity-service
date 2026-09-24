@@ -153,6 +153,11 @@ identity:
       # timer, so it costs one extra leaf per interval for an account with no transitions. Must be shorter
       # than head-validity or startup refuses it.
       republish-after: ${IDENTITY_AUTHORITY_PUBLICATION_REPUBLISH_AFTER:P300D}
+      # How long an unacknowledged head waits before it is retried. The catch-up rides the lazy path the
+      # account holder's own reads take, so a resolver that cannot be reached would otherwise put a socket
+      # timeout in front of every one of those reads. This is the only thing that bounds retries: there is no
+      # queue and no scheduler, and a head still unsent when the next transition happens is sent then.
+      retry-after: ${IDENTITY_AUTHORITY_PUBLICATION_RETRY_AFTER:PT5M}
   # Generation-1 placement records and the shadow comparison (ADM-008 Phase 4). Every flag is off by
   # default and the feature is inert until one is turned on: no scheduler is started, no record is
   # signed, no MAS is read and no new metric series appears. There is deliberately no flag that serves
