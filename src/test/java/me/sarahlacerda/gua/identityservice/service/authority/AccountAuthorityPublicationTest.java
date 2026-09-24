@@ -235,6 +235,7 @@ class AccountAuthorityPublicationTest {
         assertThat(row.getPayloadHash()).isEqualTo(published.payloadHashHex());
         assertThat(row.isConfirmed()).isTrue();
         assertThat(row.getAttempts()).isEqualTo(1);
+        assertThat(row.getLastAttemptAt()).isEqualTo(clock.instant());
     }
 
     @Test
@@ -328,6 +329,12 @@ class AccountAuthorityPublicationTest {
         String first = bodyOf(resolver.takeRequest());
         assertThat(publicationRepository.findByAccount(account()).orElseThrow().isConfirmed()).isFalse();
 
+        // Inside the retry floor nothing is resent, because this catch-up runs on the same reads the account
+        // holder's own client makes and an unreachable resolver must not put a socket timeout in front of them.
+        readState();
+        assertThat(resolver.getRequestCount()).isEqualTo(1);
+
+        clock.advance(Duration.ofMinutes(6));
         readState();
 
         assertThat(resolver.getRequestCount()).isEqualTo(2);
@@ -341,6 +348,7 @@ class AccountAuthorityPublicationTest {
         AuthorityHeadPublication row = publicationRepository.findByAccount(account()).orElseThrow();
         assertThat(row.isConfirmed()).isTrue();
         assertThat(row.getAttempts()).isEqualTo(2);
+        assertThat(row.getLastAttemptAt()).isEqualTo(clock.instant());
     }
 
     @Test

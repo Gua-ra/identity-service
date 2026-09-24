@@ -153,6 +153,12 @@ public class AuthorityHeadPublisher {
                 // with a fresh window. A new window is a new statement and a new leaf; it is not a duplicate,
                 // and it is what keeps a quiet account from going stale in the client.
                 publication = sign(publication, account, head, now);
+            } else if (publication.isRetryTooSoon(now,
+                    properties.getAuthority().getPublication().getRetryAfter())) {
+                // Too soon. This catch-up rides the lazy path the account holder's own reads take, so an
+                // unreachable resolver would otherwise put a socket timeout in front of every one of those
+                // reads. A head still unsent when the next transition happens is sent then.
+                return;
             }
             // Otherwise the bytes are resent exactly as they were signed, which is the retry.
         } else if (existing.isPresent() && existing.get().getHeadSeq() > head.getHeadSeq()) {

@@ -706,6 +706,17 @@ public class IdentityServiceProperties {
          */
         @NotNull
         private Duration republishAfter = Duration.ofDays(300);
+
+        /**
+         * How long an unacknowledged head waits before it is retried.
+         *
+         * <p>The catch-up rides the lazy path the account holder's own reads take, so a resolver that cannot
+         * be reached would otherwise put a socket timeout in front of every one of those reads. This is the
+         * only thing that bounds retries; there is no queue and no scheduler, and a head still unsent when
+         * the next transition happens is sent then.
+         */
+        @NotNull
+        private Duration retryAfter = Duration.ofMinutes(5);
     }
 
     /**

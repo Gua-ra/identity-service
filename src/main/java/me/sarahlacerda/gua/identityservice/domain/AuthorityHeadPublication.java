@@ -83,6 +83,16 @@ public class AuthorityHeadPublication {
     @Column(name = "attempts", nullable = false)
     private int attempts;
 
+    /**
+     * When the last delivery attempt was made, or null when none has been.
+     *
+     * <p>The only thing that bounds retries. The catch-up rides the same lazy path the account holder's own
+     * reads take, so without a floor a resolver that has been unreachable for an hour would put a socket
+     * timeout in front of every one of those reads.
+     */
+    @Column(name = "last_attempt_at")
+    private Instant lastAttemptAt;
+
     /** A freshly signed head, not yet delivered. */
     public static AuthorityHeadPublication of(String account, long headSeq, String headHash, String homeserverId,
             String recordB64, String signatureB64, String payloadHash, Instant issuedAt, Instant notAfter,
@@ -108,6 +118,13 @@ public class AuthorityHeadPublication {
         this.signedAt = now;
         this.confirmedAt = null;
         this.attempts = 0;
+        // A freshly signed head is delivered at once; the floor only ever holds back a retry.
+        this.lastAttemptAt = null;
+    }
+
+    /** True when this row is unconfirmed and its retry floor has not passed yet. */
+    public boolean isRetryTooSoon(Instant now, java.time.Duration retryAfter) {
+        return lastAttemptAt != null && lastAttemptAt.plus(retryAfter).isAfter(now);
     }
 
     /** True when this row already published exactly that head. */
