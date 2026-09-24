@@ -84,8 +84,8 @@ class AuthorityFlagsOffTest {
         assertThat(properties.getAuthority().isEnabled()).isFalse();
         AuthorityPolicy policy = new AuthorityPolicy(properties, userSecurityService);
         service = new AccountAuthorityService(policy, accounts, challenges, stepUps, headRepository,
-                recordRepository, deviceRepository, candidateRepository, notifications, backoff, auditLogger,
-                java.time.Clock.systemUTC());
+                recordRepository, deviceRepository, candidateRepository, notifications, backoff,
+                AuthorityHeadPublisherFixtures.off(properties), auditLogger, java.time.Clock.systemUTC());
     }
 
     @Test

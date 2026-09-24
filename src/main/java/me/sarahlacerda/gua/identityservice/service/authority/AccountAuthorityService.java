@@ -77,6 +77,7 @@ public class AccountAuthorityService {
     private final AuthorityDeviceCandidateRepository candidateRepository;
     private final AuthorityNotifications notifications;
     private final AuthorityBackoff backoff;
+    private final AuthorityHeadPublisher publisher;
     private final SecurityAuditLogger auditLogger;
     private final Clock clock;
 
@@ -84,8 +85,8 @@ public class AccountAuthorityService {
             AuthorityChallengeService challenges, AuthorityStepUpService stepUps,
             AuthorityChainHeadRepository headRepository, AuthorityChainRecordRepository recordRepository,
             AuthorityDeviceRepository deviceRepository, AuthorityDeviceCandidateRepository candidateRepository,
-            AuthorityNotifications notifications, AuthorityBackoff backoff, SecurityAuditLogger auditLogger,
-            Clock clock) {
+            AuthorityNotifications notifications, AuthorityBackoff backoff, AuthorityHeadPublisher publisher,
+            SecurityAuditLogger auditLogger, Clock clock) {
         this.policy = policy;
         this.accounts = accounts;
         this.challenges = challenges;
@@ -96,6 +97,7 @@ public class AccountAuthorityService {
         this.candidateRepository = candidateRepository;
         this.notifications = notifications;
         this.backoff = backoff;
+        this.publisher = publisher;
         this.auditLogger = auditLogger;
         this.clock = clock;
     }
@@ -605,6 +607,11 @@ public class AccountAuthorityService {
 
         if (immediate) {
             applyEffect(account, record, seq, now, false);
+            // The first of the two moments the settled head moves: a record that takes effect immediately.
+            // Off unless identity.authority.publication.enabled is on, and it never throws into the
+            // transition: a head that reaches the log late is a delay, while a transition refused because
+            // federation state was unreachable would be an outage.
+            publisher.publishSettledHead(account, head, now);
             notifications.completed(userId, record.type().name(), record.label());
         } else {
             // Every channel the account has, at least one of which must be one an account recovery cannot
@@ -773,6 +780,14 @@ public class AccountAuthorityService {
                 });
         materialiseCommittedDevice(account, now);
         settle(account, head, now);
+        // The second of the two moments ADM-009 decision 12's leaf is published at, and the catch-up for
+        // both. A promotion has just moved the settled head, and a delivery that failed or a head whose
+        // window is aging is picked up here too, on the same lazy path settlement already runs on rather
+        // than by a scheduler nothing in this application starts. Idempotent by construction: a head already
+        // in the log with a fresh window is a no-op, and a record still inside its window is never published
+        // at all, because the head row names it while it holds its slot and a cancellation rolls the head
+        // back to its prevHash.
+        publisher.publishSettledHead(account, head, now);
         return head;
     }
 

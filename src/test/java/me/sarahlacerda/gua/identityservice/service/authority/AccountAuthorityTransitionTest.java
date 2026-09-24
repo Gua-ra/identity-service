@@ -124,7 +124,8 @@ class AccountAuthorityTransitionTest {
         backoff = new NoBackoff(policy);
         service = new AccountAuthorityService(policy, accounts, challenges, stepUps, headRepository, recordRepository,
                 deviceRepository, candidateRepository, new AuthorityNotifications(List.of(channel)),
-                backoff, new LoggingSecurityAuditLogger(), clock);
+                backoff, AuthorityHeadPublisherFixtures.off(properties), new LoggingSecurityAuditLogger(),
+                clock);
 
         BootstrapGenesis genesis = BootstrapGenesisCodec.mint();
         genesisRepository.saveAndFlush(AccountGenesisRecord.attachedBootstrap(genesis.accountId().value(), USER,
