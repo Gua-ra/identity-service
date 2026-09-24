@@ -98,6 +98,7 @@ class AccountAuthorityTransitionTest {
     private AuthorityAccounts accounts;
     private MutableClock clock;
     private StubChannel channel;
+    private NoBackoff backoff;
     private byte[] reference;
 
     @BeforeEach
@@ -118,9 +119,10 @@ class AccountAuthorityTransitionTest {
         // whether an opposition was asked to present a factor at all.
         stepUps = org.mockito.Mockito.mock(AuthorityStepUpService.class);
         channel = new StubChannel();
+        backoff = new NoBackoff(policy);
         service = new AccountAuthorityService(policy, accounts, challenges, stepUps, headRepository, recordRepository,
                 deviceRepository, candidateRepository, new AuthorityNotifications(List.of(channel)),
-                new NoBackoff(policy), new LoggingSecurityAuditLogger(), clock);
+                backoff, new LoggingSecurityAuditLogger(), clock);
 
         BootstrapGenesis genesis = BootstrapGenesisCodec.mint();
         genesisRepository.saveAndFlush(AccountGenesisRecord.attachedBootstrap(genesis.accountId().value(), USER,
@@ -475,6 +477,9 @@ class AccountAuthorityTransitionTest {
         assertThat(recordRepository.findByAccountAndSeq(account(), weaker.seq()).orElseThrow().getState())
                 .isEqualTo(AuthorityChainRecord.State.CANCELLED);
         assertThat(head().getCooldownMagic()).isEqualTo(AuthorityRecordType.AUTHORITY_RECOVERY.magic());
+        // And ADM-002 D2's doubling is charged to the key set that opened the record that was cancelled, which
+        // is the whole of what stops the cancel becoming the attack.
+        assertThat(backoff.charged).containsExactly(encode(secondDevice.rawPublicKey()));
     }
 
     @Test
@@ -512,6 +517,28 @@ class AccountAuthorityTransitionTest {
         assertThat(refusalFrom(() -> opposeAs(firstDevice, recovery.recordHash())))
                 .isEqualTo("authority_extension_spent");
         assertThat(head().getPendingEffectiveAt()).isEqualTo(extended);
+    }
+
+    @Test
+    void aRefusedSubmissionChargesNobodysBackoff() {
+        rootTheAccount();
+        AccountAuthorityService.Submitted weaker = recoverThroughAccountRecovery();
+
+        // Rank 2 by its authorization byte, signed by a key the account never committed for that purpose. It
+        // outranks the pending record, so the cancellation runs, and then the submission is refused on its own
+        // merits. The backoff counter lives in Redis and commits whatever this transaction does, so a charge
+        // taken here would stand: four passes reached the cap and the victim's own device key could not
+        // initiate anything for days, which is the starvation the rank table exists to prevent.
+        String challenge = mint(Purpose.RECOVER);
+        byte[] bytes = AuthorityRecords.recoveryFor(reference, secondDevice.rawPublicKey(),
+                replacementRecoveryKey.rawPublicKey(), "iPhone", AuthorityRecord.AUTHORIZATION_RECOVERY_KEY,
+                thirdDevice.rawPublicKey(), head().nextSeq(), hexToBytes(head().getHeadHash()));
+
+        assertThat(refusalFrom(() -> service.recoverAuthority(USER, Optional.of(NATIVE_CLIENT), SESSION,
+                encode(bytes), sign(thirdDevice, AuthorityRecordType.AUTHORITY_RECOVERY, challenge, bytes),
+                challenge))).isEqualTo("authority_signer_refused");
+        assertThat(backoff.charged).isEmpty();
+        assertThat(weaker.pending()).isTrue();
     }
 
     @Test
@@ -895,8 +922,14 @@ class AccountAuthorityTransitionTest {
         }
     }
 
-    /** No Redis here, and the doubling backoff has its own unit test. */
+    /**
+     * No Redis here, and the doubling backoff has its own unit test. What this one records is <em>who</em> was
+     * charged and whether anybody was, because the real counter commits outside this transaction and a charge
+     * made before a later refusal is not undone by it.
+     */
     private static final class NoBackoff extends AuthorityBackoff {
+
+        private final List<String> charged = new java.util.ArrayList<>();
 
         private NoBackoff(AuthorityPolicy policy) {
             super(null, policy);
@@ -909,6 +942,7 @@ class AccountAuthorityTransitionTest {
 
         @Override
         public Instant recordCancellation(String account, String authorizingKeyB64, Instant now) {
+            charged.add(authorizingKeyB64);
             return now;
         }
     }
