@@ -106,5 +106,28 @@
     { "name" : "the recovery-key authorization naming no key", "hex" : "4755415201010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce685100000000000000002fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a69506164000000000000000000000000f0e1d2c3b4a5968778695a4b3c2d1e0f010000000000000000000000000000000000000000000000000000000000000000", "reason" : "authorizing_key_required" },
     { "name" : "the account-recovery authorization naming a key", "hex" : "4755415201010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce685100000000000000002fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a69506164000000000000000000000000f0e1d2c3b4a5968778695a4b3c2d1e0f023d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c", "reason" : "authorizing_key_not_permitted" },
     { "name" : "an Oppose naming no record", "hex" : "4755414f01010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a89915561c842609fc613453a223d8904dc2d660d3b2ac6339db42502ee0c7dc3ef8700000000000000030000000000000000000000000000000000000000000000000000000000000000d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", "reason" : "zero_opposed_record" }
-  ]
+  ],
+  "recoveryArtifact" : {
+    "notes" : [
+      "The artifact is the PRIVATE recovery authority key as a person takes it away: the prefix, a single space, then the base32 spelling of the 32 seed bytes in groups of four separated by single spaces. The prefix names the framework and the version, so a later framework's artifact cannot be mistaken for one of these.",
+      "The server never sees an artifact, so nothing on the wire can catch a client that renders or reads it in another spelling. These vectors are the only thing that holds the clients to one format.",
+      "Whitespace between the groups is free-form on the way back in, because nobody retypes four-character groups exactly as they were printed. Case is not: the alphabet is lowercase and the decoder is case-sensitive, so an artifact copied in the case it was shown in is the artifact that comes back.",
+      "A conforming implementation renders each artifact below from the seed of the key it names and reads the same 32 bytes back out of it, and refuses every entry under rejections. The reason names the refusal in the Gua vocabulary; a platform that does not tell them apart still has to refuse."
+    ],
+    "prefix" : "gua-recovery-1",
+    "groupSize" : 4,
+    "encodedLength" : 52,
+    "vectors" : [
+      { "key" : "rfc8032-test1", "artifact" : "gua-recovery-1 tvq3 dhpp 7vng boue jl2j f3bm yrce trlj pmzg sglq howa ghfo p5qa" },
+      { "key" : "rfc8032-test2", "artifact" : "gua-recovery-1 jtgq rgzi 76ln vhnw yndo yeko b5ny umm7 gwv2 mjg2 rt3o 2t5y u35q" },
+      { "key" : "rfc8032-test3", "artifact" : "gua-recovery-1 ywvi 35b7 t6bx x3nx iqxt dxfx wftn hbjv a5xq ss4f zy5c 4c2e ld3q" }
+    ],
+    "rejections" : [
+      { "name" : "the 52 characters with no prefix", "artifact" : "tvq3dhpp7vngbouejl2jf3bmyrcetrljpmzgsglqhowaghfop5qa", "reason" : "bad_artifact_prefix" },
+      { "name" : "another framework's prefix", "artifact" : "gua-recovery-2 tvq3 dhpp 7vng boue jl2j f3bm yrce trlj pmzg sglq howa ghfo p5qa", "reason" : "bad_artifact_prefix" },
+      { "name" : "the prefix and nothing else", "artifact" : "gua-recovery-1", "reason" : "bad_artifact" },
+      { "name" : "a character outside the alphabet", "artifact" : "gua-recovery-1 1111 1111", "reason" : "bad_artifact" },
+      { "name" : "the right alphabet, one group short", "artifact" : "gua-recovery-1 tvq3 dhpp 7vng boue jl2j f3bm yrce trlj pmzg sglq howa ghfo", "reason" : "bad_artifact_length" }
+    ]
+  }
 }
