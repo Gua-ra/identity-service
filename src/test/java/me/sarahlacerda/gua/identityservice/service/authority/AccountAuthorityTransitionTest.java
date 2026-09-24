@@ -605,6 +605,77 @@ class AccountAuthorityTransitionTest {
         assertThat(recordRepository.findByAccountOrderBySeqAsc(account())).isEmpty();
     }
 
+    // --- The grant, and the objection decision 5 gives it --------------------
+
+    @Test
+    void objectingToAGrantRevokesTheGrantedDeviceAtOnce() {
+        rootTheAccount();
+        AccountAuthorityService.Submitted grant = grantSecondDevice();
+        channel.sent.clear();
+
+        // Decision 5: a grant is opposable by any active device other than the one it names, and opposing it
+        // revokes the granted device immediately. A grant holds no slot, so both opposition paths used to
+        // return early on "nothing is pending" and this clause was unreachable from any caller: a borrowed
+        // unlocked phone's grant could only be answered with a revocation that waits out a full window.
+        opposeTheGrantAs(firstDevice, grant.recordHash());
+
+        assertThat(device(secondDevice.rawPublicKey()).getState()).isEqualTo(AuthorityDevice.State.REVOKED);
+        assertThat(channel.sent).containsExactly("CANCELLED DEVICE_GRANT " + USER);
+        // The record itself stays in the chain: it was accepted, and every later prevHash covers it. What the
+        // objection undoes is its effect.
+        assertThat(recordRepository.findByAccountAndSeq(account(), grant.seq()).orElseThrow().getState())
+                .isEqualTo(AuthorityChainRecord.State.ACTIVE);
+        // And another grant waits out one window, so objecting is not a way to cycle grants for free.
+        assertThat(head().getCooldownMagic()).isEqualTo(AuthorityRecordType.DEVICE_GRANT.magic());
+    }
+
+    @Test
+    void theGrantedDeviceCannotObjectToItsOwnGrant() {
+        rootTheAccount();
+        AccountAuthorityService.Submitted grant = grantSecondDevice();
+
+        // Its own grant is inside its window, and a quarantined device may not sign an authority-sensitive
+        // approval. Decision 5 names the same device again in the opposition rules, which is what would refuse
+        // it if a quarantine ever stopped being what the window is.
+        assertThat(refusalFrom(() -> opposeTheGrantAs(secondDevice, grant.recordHash())))
+                .isEqualTo("authority_device_quarantined");
+        assertThat(device(secondDevice.rawPublicKey()).getState())
+                .isEqualTo(AuthorityDevice.State.QUARANTINED);
+    }
+
+    @Test
+    void aGrantWhoseWindowHasPassedIsNoLongerOpposable() {
+        rootTheAccount();
+        AccountAuthorityService.Submitted grant = grantSecondDevice();
+        clock.advance(Duration.ofHours(73));
+        service.state(USER);
+
+        // Answered the same way as an objection to something that never existed, so an opposition cannot be
+        // used to ask what state the account is in. Removing it now is a revocation, with its own window.
+        opposeTheGrantAs(firstDevice, grant.recordHash());
+
+        assertThat(device(secondDevice.rawPublicKey()).getState()).isEqualTo(AuthorityDevice.State.ACTIVE);
+    }
+
+    @Test
+    void aGrantIsRefusedWhileNothingCanTellTheAccountHolderAboutIt() {
+        rootTheAccount();
+        service.registerCandidate(USER, encode(secondDevice.rawPublicKey()), "iPad");
+        channel.reaches = false;
+
+        // A grant takes effect at once, so it has no window of its own to run in the dark; what it has is a
+        // device set changed in silence, on the one transition that can happen on an account with no live
+        // registration at all.
+        String challenge = mint(Purpose.GRANT);
+        byte[] bytes = AuthorityRecords.grantFor(reference, secondDevice.rawPublicKey(),
+                firstDevice.rawPublicKey(), "iPad", head().nextSeq(), hexToBytes(head().getHeadHash()));
+        assertThat(refusalFrom(() -> service.grantDevice(USER, Optional.of(NATIVE_CLIENT), SESSION, encode(bytes),
+                sign(firstDevice, AuthorityRecordType.DEVICE_GRANT, challenge, bytes), challenge)))
+                .isEqualTo("authority_no_notification_channel");
+        assertThat(deviceRepository.findByAccountAndDeviceKeyB64(account(), encode(secondDevice.rawPublicKey())))
+                .isEmpty();
+    }
+
     // --- Who is told, and about what -----------------------------------------
 
     @Test
@@ -854,6 +925,20 @@ class AccountAuthorityTransitionTest {
      */
     private void opposeAsSecondDevice(String opposedRecordHash) {
         opposeAs(secondDevice, opposedRecordHash);
+    }
+
+    /**
+     * An Oppose naming a grant, which holds no pending slot: its seq and prevHash are the grant record's own,
+     * exactly as they are the pending record's own in the other case.
+     */
+    private void opposeTheGrantAs(TestEd25519.Pair signer, String grantRecordHash) {
+        String challenge = mint(Purpose.OPPOSE);
+        AuthorityChainRecord grant = recordRepository.findByAccountAndRecordHash(account(), grantRecordHash)
+                .orElseThrow();
+        byte[] bytes = AuthorityRecords.opposeFor(reference, hexToBytes(grantRecordHash), signer.rawPublicKey(),
+                grant.getSeq(), hexToBytes(grant.getPrevHash()));
+        service.opposeWithRecord(USER, Optional.of(NATIVE_CLIENT), SESSION, encode(bytes),
+                sign(signer, AuthorityRecordType.OPPOSE, challenge, bytes), challenge);
     }
 
     private void opposeAs(TestEd25519.Pair signer, String opposedRecordHash) {

@@ -585,6 +585,19 @@ public class AuthorityPolicy {
         return authority().getOppositionWindow();
     }
 
+    /**
+     * Whether this record may only be accepted on an account the holder can be told about (ADM-009 gate 2).
+     *
+     * <p>Every record that opens a window, because a window whose holder is never told is a delay rather than a
+     * control. And a grant, which opens no window: it takes effect on acceptance, and what is opposable is the
+     * quarantine of the device it named, so an unannounced grant is a device set changed in silence. It is also
+     * the one transition that adds authority to an account that may hold no live registration at all, which is
+     * exactly the account gate 2 is written for.
+     */
+    public boolean mustBeAnnounced(AuthorityRecord record) {
+        return !takesEffectImmediately(record) || record.type() == AuthorityRecordType.DEVICE_GRANT;
+    }
+
     /** Whether the record takes effect on acceptance rather than after a window. */
     public boolean takesEffectImmediately(AuthorityRecord record) {
         // A grant only adds, and its holder is quarantined; a device removing its own authority reduces

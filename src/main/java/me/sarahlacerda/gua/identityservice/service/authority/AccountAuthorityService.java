@@ -252,20 +252,31 @@ public class AccountAuthorityService {
         }
 
         AuthorityChainHead head = lockHead(account, now);
-        if (!head.hasPending()) {
+        boolean namesThePending = head.hasPending()
+                && head.getPendingHash().equalsIgnoreCase(record.opposedRecordHashHex());
+        // A grant is the one record that is opposable without holding a slot: it took effect on acceptance
+        // because it only adds, and what is still open is the quarantine of the device it named (decision 5).
+        AuthorityChainRecord opposable = namesThePending
+                ? requirePending(account, head)
+                : liveGrant(account, record.opposedRecordHashHex(), now).orElse(null);
+        if (opposable == null) {
+            if (head.hasPending()) {
+                // Something is pending and this objection is not about it. Named something else, or built
+                // against another position of this chain.
+                throw new AuthorityTransitionException(HttpStatus.CONFLICT, "authority_opposition_stale",
+                        "That objection names a different step. Read the chain again.");
+            }
             // Settled while this was in flight, or never there. Answered the same way either way, so an
             // opposition cannot be used to ask what state the account is in.
             return;
         }
-        AuthorityChainRecord pending = requirePending(account, head);
-        if (!head.getPendingHash().equalsIgnoreCase(record.opposedRecordHashHex())
-                || record.seq() != pending.getSeq()
-                || !record.prevHashHex().equalsIgnoreCase(pending.getPrevHash())) {
-            // Named something else, or was built against another position of this chain. Either way it is not
-            // an objection to what is actually pending.
+        if (record.seq() != opposable.getSeq()
+                || !record.prevHashHex().equalsIgnoreCase(opposable.getPrevHash())) {
+            // Built against another position of this chain, so it is not an objection to this record.
             throw new AuthorityTransitionException(HttpStatus.CONFLICT, "authority_opposition_stale",
                     "That objection names a different step. Read the chain again.");
         }
+        AuthorityChainRecord pending = opposable;
 
         List<AuthorityDevice> devices = deviceRepository.findByAccount(account.reference());
         AuthorityDevice signer = requireKnownDevice(devices, record.verifyingKey());
@@ -285,8 +296,57 @@ public class AccountAuthorityService {
             extendOnce(account, head, pending, decoded, now);
             return;
         }
+        if (!namesThePending) {
+            // Decision 5's other half: opposing a grant revokes the granted device immediately. The record
+            // itself stays in the chain, because it was accepted and every later prevHash covers it; what the
+            // objection undoes is its effect.
+            revokeGrantedDevice(account, head, pending, decoded, now);
+            chargeCancellation(account, decoded, now);
+            return;
+        }
         cancelPending(account, head, pending, decoded, now, "opposed by an active device");
         chargeCancellation(account, decoded, now);
+    }
+
+    /**
+     * The grant an objection may still name: one in the chain whose device is inside the quarantine that is
+     * its opposition window (ADM-009 decision 5).
+     *
+     * <p>A grant holds no pending slot, so both opposition entry points used to return early on "nothing is
+     * pending" and decision 5's "opposing it revokes the granted device immediately" was unreachable from any
+     * caller. The window that clause is about is the quarantine, and {@code lockHead} has already ended one
+     * that ran out, so a quarantined device is exactly a grant still inside its window.
+     */
+    private Optional<AuthorityChainRecord> liveGrant(Resolved account, String recordHash, Instant now) {
+        return recordRepository.findByAccountAndRecordHash(account.reference(), recordHash)
+                .filter(row -> AuthorityRecordType.DEVICE_GRANT.magic().equals(row.getMagic()))
+                .filter(row -> row.getState() == AuthorityChainRecord.State.ACTIVE)
+                .filter(row -> deviceRepository
+                        .findByAccountAndDeviceKeyB64(account.reference(), encode(decodeStored(row).deviceKey()))
+                        .filter(device -> device.getState() != AuthorityDevice.State.REVOKED)
+                        .filter(device -> device.isQuarantined(now))
+                        .isPresent());
+    }
+
+    /**
+     * Undoes an opposed grant: the device it named stops being this account's authority, at once.
+     *
+     * <p>The rest is what a cancellation owes and for the same reasons: the unspent challenges of that purpose
+     * are burned, another grant waits out one window, and the doubling backoff is charged to the key that
+     * signed the grant, so objecting to a grant is not a way for the granting key to cycle grants for free.
+     */
+    private void revokeGrantedDevice(Resolved account, AuthorityChainHead head, AuthorityChainRecord grant,
+            AuthorityRecord decoded, Instant now) {
+        // The seq of the record whose effect is being undone. An Oppose takes no slot, so it has none of its
+        // own to name.
+        revokeDeviceRow(account, decoded.deviceKey(), grant.getSeq(), now);
+        head.startCooldown(decoded.type().magic(), now.plus(policy.oppositionWindow()));
+        head.setUpdatedAt(now);
+        headRepository.save(head);
+        challenges.burnUnspent(account.reference(), purposeOf(decoded.type()), now);
+        notifications.cancelled(account.userId(), decoded.type().name(), decoded.label());
+        log.info("Authority transition {} at seq {} was opposed and its device revoked", decoded.type(),
+                grant.getSeq());
     }
 
     /**
@@ -473,7 +533,7 @@ public class AccountAuthorityService {
         }
 
         boolean immediate = policy.takesEffectImmediately(record);
-        if (!immediate) {
+        if (policy.mustBeAnnounced(record)) {
             // ADM-009 gate 2, asked about this account rather than about the deployment. A window is the whole
             // security of the transition, so one whose holder cannot be told is a delay and not a control: the
             // honest answer is to refuse the transition, not to run the window and hope.
