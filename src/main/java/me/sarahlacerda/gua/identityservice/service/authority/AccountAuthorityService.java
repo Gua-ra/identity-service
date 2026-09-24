@@ -209,6 +209,7 @@ public class AccountAuthorityService {
         }
 
         cancelPending(account, head, pending, decoded, now, "opposed by the account holder");
+        chargeCancellation(account, decoded, now);
     }
 
     /**
@@ -285,6 +286,7 @@ public class AccountAuthorityService {
             return;
         }
         cancelPending(account, head, pending, decoded, now, "opposed by an active device");
+        chargeCancellation(account, decoded, now);
     }
 
     /**
@@ -519,6 +521,15 @@ public class AccountAuthorityService {
         }
 
         requireSignerMayAct(account, record, devices, now);
+
+        if (cancelledRecord != null) {
+            // ADM-002 D2's last sentence, charged only once this submission is known to be accepted. The
+            // backoff lives in Redis and commits independently of this transaction, so a charge made before
+            // the last refusal survives the rollback of everything else: four refused attempts reached the cap
+            // and locked the victim's own key out for days, which is precisely the starvation the rank table
+            // exists to prevent.
+            chargeCancellation(account, cancelledRecord, now);
+        }
 
         Instant effectiveAt = immediate ? now : now.plus(policy.windowFor(record.type(), record.authorization()));
         // The position the record itself claims, which the compare-and-set above already proved was the next
@@ -799,10 +810,20 @@ public class AccountAuthorityService {
         headRepository.save(head);
 
         challenges.burnUnspent(account.reference(), purposeOf(decoded.type()), now);
-        // ADM-002 D2's last sentence: the key set that opened the cancelled initiation pays the doubling.
-        backoff.recordCancellation(account.reference(), encode(decoded.verifyingKey()), now);
         notifications.cancelled(null, decoded.type().name(), decoded.label());
         log.info("Authority transition {} cancelled: {}", decoded.type(), reason);
+    }
+
+    /**
+     * ADM-002 D2's last sentence: the key set that opened the cancelled initiation pays the doubling.
+     *
+     * <p>Charged by the caller, once the cancellation is certain, rather than inside {@code cancelPending}.
+     * The counter is in Redis, which has no part in this transaction, so a charge made before a later refusal
+     * is not undone by the rollback: on the submission path that let an attacker charge the <em>victim's</em>
+     * device key, repeatedly and for free, with a record that was then refused for a reason of its own.
+     */
+    private void chargeCancellation(Resolved account, AuthorityRecord cancelled, Instant now) {
+        backoff.recordCancellation(account.reference(), encode(cancelled.verifyingKey()), now);
     }
 
     // --- Effects on the device set -------------------------------------------
