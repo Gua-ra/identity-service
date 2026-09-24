@@ -216,21 +216,30 @@ class AuthorityNotificationSurvivesRecoveryTest {
         assertThat(refusal.getCode()).isEqualTo("authority_recovery_too_recent");
     }
 
-    // --- The three removal tiers, against the post-recovery state ------------
+    // --- What a removal costs, against the post-recovery state ---------------
 
     @Test
-    void theInstallItselfRemovesItsOwnRegistrationWithNoExtraFactor() {
+    void aRemovalThatNamesTheCallersOwnInstallPaysWhatEveryRemovalPays() {
         registerOwnInstall();
+        agePinPastTheHold();
 
-        registry.remove(USER, removal(OWN_INSTALL, null), OWN_INSTALL, SESSION, "127.0.0.1", clock.instant());
+        // The hole this closes: the removal tier used to be decided by comparing two installation ids in one
+        // request body, and the account's own listing hands every installation id to any bearer. So a session
+        // holding no factor at all emptied the channel every window in ADM-009 rests on.
+        AuthorityTransitionException refusal = catchThrowableOfType(
+                () -> registry.remove(USER, removal(OWN_INSTALL, null), SESSION, "127.0.0.1", clock.instant()),
+                AuthorityTransitionException.class);
+        assertThat(refusal).isNotNull();
+        assertThat(refusal.getCode()).isEqualTo("authority_step_up_required");
+        assertThat(registrationRepository.findByUserId(USER)).hasSize(1);
 
-        // Conceded by ADM-009 decision 5 already: whoever holds that unlocked phone can do this, and it
-        // reaches no other install.
+        // With a factor past the fresh-factor hold it goes through, which is the owner's own route.
+        registry.remove(USER, removal(OWN_INSTALL, "481937"), SESSION, "127.0.0.1", clock.instant());
         assertThat(registrationRepository.findByUserId(USER)).isEmpty();
     }
 
     @Test
-    void aCallerWhoseOnlyFactorIsTheJustMintedPinCannotRemoveAnotherInstall() {
+    void aCallerWhoseOnlyFactorIsTheJustMintedPinCannotRemoveAnyInstall() {
         registerOwnInstall();
         registerOtherInstall();
         String attackerPin = "902184";
@@ -239,8 +248,8 @@ class AuthorityNotificationSurvivesRecoveryTest {
         // The whole attack, in one call: the PIN was chosen seconds ago by whoever completed the recovery, and
         // it is the only factor they hold. The hold is measured on the credential itself, so it is refused.
         AuthorityTransitionException refusal = catchThrowableOfType(
-                () -> registry.remove(USER, removal(OWN_INSTALL, attackerPin), OTHER_INSTALL, SESSION,
-                        "127.0.0.1", clock.instant()),
+                () -> registry.remove(USER, removal(OWN_INSTALL, attackerPin), SESSION, "127.0.0.1",
+                        clock.instant()),
                 AuthorityTransitionException.class);
 
         assertThat(refusal).isNotNull();
@@ -249,16 +258,16 @@ class AuthorityNotificationSurvivesRecoveryTest {
     }
 
     @Test
-    void removingAnotherInstallNeedsADeviceSignatureWhenTheRowCarriesOne() {
+    void removingAnInstallNeedsADeviceSignatureWhenTheRowCarriesOne() {
         givenAnActiveAuthorityDevice();
         registerOwnInstallBoundToTheDevice();
         registerOtherInstall();
         agePinPastTheHold();
 
-        // Tier 2 with a factor past the hold, and nothing else: refused, because the row names a device key.
+        // A factor past the hold, and nothing else: refused, because the row names a device key.
         AuthorityTransitionException refusal = catchThrowableOfType(
-                () -> registry.remove(USER, removal(OWN_INSTALL, "481937"), OTHER_INSTALL, SESSION,
-                        "127.0.0.1", clock.instant()),
+                () -> registry.remove(USER, removal(OWN_INSTALL, "481937"), SESSION, "127.0.0.1",
+                        clock.instant()),
                 AuthorityTransitionException.class);
         assertThat(refusal).isNotNull();
         assertThat(refusal.getCode()).isEqualTo("authority_challenge_invalid");
@@ -268,11 +277,55 @@ class AuthorityNotificationSurvivesRecoveryTest {
         agePinPastTheHold();
         String challenge = mintNotifyChallenge();
         String signature = signBinding(OWN_INSTALL, challenge);
-        registry.remove(USER, removal(OWN_INSTALL, "481937", challenge, signature), OTHER_INSTALL, SESSION,
-                "127.0.0.1", clock.instant());
+        registry.remove(USER, removal(OWN_INSTALL, "481937", challenge, signature), SESSION, "127.0.0.1",
+                clock.instant());
 
         assertThat(registrationRepository.findByUserIdAndInstallationId(USER, OWN_INSTALL)).isEmpty();
         assertThat(registrationRepository.findByUserIdAndInstallationId(USER, OTHER_INSTALL)).isPresent();
+    }
+
+    // --- The destination on an existing row ----------------------------------
+
+    @Test
+    void anUpsertCannotRepointAnExistingRowAtAnotherDestination() {
+        registerOwnInstall();
+        String fingerprintBefore = registrationRepository.findByUserIdAndInstallationId(USER, OWN_INSTALL)
+                .orElseThrow().getTokenFingerprint();
+
+        // The same installation id, a token of the attacker's choosing, no challenge and no signature. It
+        // removes nothing, so no removal rule sees it, and the row would go on reporting a healthy owner
+        // channel while every alert went elsewhere.
+        AuthorityTransitionException refusal = catchThrowableOfType(
+                () -> registry.register(USER, new AuthorityNotificationRegistry.Registration(OWN_INSTALL, "APNS",
+                        "attacker-token", "global.gua", "iPhone", null, null, null), SESSION, clock.instant()),
+                AuthorityTransitionException.class);
+
+        assertThat(refusal).isNotNull();
+        assertThat(refusal.getCode()).isEqualTo("authority_notification_destination_refused");
+        assertThat(registrationRepository.findByUserIdAndInstallationId(USER, OWN_INSTALL).orElseThrow()
+                .getTokenFingerprint()).isEqualTo(fingerprintBefore);
+    }
+
+    @Test
+    void theSameDestinationStillRefreshesAndASignedOneStillMoves() {
+        givenAnActiveAuthorityDevice();
+        registerOwnInstall();
+
+        // An ordinary re-registration of the same destination is a refresh and costs nothing.
+        registry.register(USER, new AuthorityNotificationRegistry.Registration(OWN_INSTALL, "APNS",
+                "apns-token-one", "global.gua", "iPhone", null, null, null), SESSION, clock.instant());
+        assertThat(registrationRepository.findByUserId(USER)).hasSize(1);
+
+        // A rotated token moves the row when a device of this account signs over this installation id.
+        String challenge = mintNotifyChallenge();
+        registry.register(USER, new AuthorityNotificationRegistry.Registration(OWN_INSTALL, "APNS",
+                "apns-token-rotated", "global.gua", "iPhone",
+                Base64.getUrlEncoder().withoutPadding().encodeToString(device.rawPublicKey()), challenge,
+                signBinding(OWN_INSTALL, challenge)), SESSION, clock.instant());
+
+        assertThat(registrationRepository.findByUserIdAndInstallationId(USER, OWN_INSTALL).orElseThrow()
+                .getTokenFingerprint())
+                .isEqualTo(AuthorityNotificationRegistry.fingerprint("apns-token-rotated"));
     }
 
     // --- Fixtures -----------------------------------------------------------

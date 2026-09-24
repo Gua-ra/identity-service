@@ -307,13 +307,15 @@ Each row is keyed on an **installation id** the client generates and keeps in th
 
 The table holds a live push destination beside a user id, which is a stronger link than anything else this service keeps, so: the token is never logged or returned (each row is named by a SHA-256 fingerprint of it), no IP and no user agent are stored, no accountId and no phone number are stored, retention is bounded by `last_seen_at`, and the alert names a device label, a sentence and a time and nothing else.
 
-**Removal has three tiers, and the asymmetry is the design.** From the install itself, naming its own installation id, with no extra factor, because the person holding that phone is the person the channel serves. From another install, with a step-up on a factor that is itself past the fresh-factor hold, plus a signature by an active unquarantined device key where the row carries one. From nowhere else: no admin path, no bulk delete, nothing reachable from a browser session. An attacker who has just completed a recovery therefore cannot quietly strip the channel, because the only factor they hold is the PIN that recovery minted seconds ago. Every accepted removal is announced to the registrations that remain.
+**Every removal pays the same price, whichever install it names.** A step-up on a factor that is itself past the fresh-factor hold, plus a signature by an active unquarantined device key where the row carries one. From nowhere else: no admin path, no bulk delete, nothing reachable from a browser session. An attacker who has just completed a recovery therefore cannot quietly strip the channel, because the only factor they hold is the PIN that recovery minted seconds ago. Every accepted removal is announced to the registrations that remain.
+
+There was a cheaper tier for an install removing its own registration, and it was decided by comparing two installation ids inside one request body, over an id `GET /account/security-notifications` hands to any bearer of the account. That is not authentication, so it is gone: it can return when an install is bound to server state a caller cannot assert. For the same reason an upsert may not move an existing row's push destination without that device signature, since repointing a row removes nothing and would otherwise pass every removal rule untouched.
 
 | Endpoint | What it does |
 | --- | --- |
 | `POST /account/security-notifications` | Registers or refreshes this install's destination, as an upsert on the installation id. Optionally binds a device authority key, and only with a signature by that key over a spent `NOTIFY` challenge. |
 | `GET /account/security-notifications` | The account's own registrations, named by token fingerprint, never by token. |
-| `POST /account/security-notifications/remove` | Removes one registration through whichever tier the caller can pass. |
+| `POST /account/security-notifications/remove` | Removes one registration, at the price every removal pays. |
 
 | Property | Env | Default | Effect |
 | --- | --- | --- | --- |
