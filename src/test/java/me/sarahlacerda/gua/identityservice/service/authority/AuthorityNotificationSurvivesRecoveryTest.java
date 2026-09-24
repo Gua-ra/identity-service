@@ -37,6 +37,7 @@ import me.sarahlacerda.gua.identityservice.repository.AccountGenesisRepository;
 import me.sarahlacerda.gua.identityservice.repository.AuthorityChallengeRepository;
 import me.sarahlacerda.gua.identityservice.repository.AuthorityDeviceRepository;
 import me.sarahlacerda.gua.identityservice.repository.AuthorityNotificationRegistrationRepository;
+import me.sarahlacerda.gua.identityservice.repository.AuthorityWebStepUpRepository;
 import me.sarahlacerda.gua.identityservice.repository.IdentityUserRepository;
 import me.sarahlacerda.gua.identityservice.repository.PasskeyCredentialRepository;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
@@ -145,8 +146,10 @@ class AuthorityNotificationSurvivesRecoveryTest {
         policy = new AuthorityPolicy(properties, userSecurityService);
         accounts = new AuthorityAccounts(genesisRepository);
         challenges = new AuthorityChallengeService(challengeRepository, policy);
+        // The web-sheet step-up is a real service over a mocked repository: this test never opens a sheet, so
+        // it has nothing to consume, and the native path is the one under test here.
         AuthorityStepUpService stepUps = new AuthorityStepUpService(passkeyService, userSecurityService, policy,
-                audit);
+                new AuthorityWebStepUpService(mock(AuthorityWebStepUpRepository.class), policy, clock), audit);
         registry = new AuthorityNotificationRegistry(registrationRepository, deviceRepository, accounts, challenges,
                 stepUps, policy);
 

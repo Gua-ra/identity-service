@@ -314,6 +314,131 @@ class AccountAuthorityGuardTest {
         assertThat(policy).contains("userSecurityService.recoveryCompletionHoldRemaining(userId)");
     }
 
+    /**
+     * The web step-up page has two arms and neither one is a phone code (ADM-009 decision 9).
+     *
+     * <p>This is the guard the new surface needs most. The page lives in {@code LoginFlowController}, beside
+     * the enrollment step-up, which does have an OTP arm, so the file-wide rules above cannot cover it: the
+     * same class legitimately holds {@code otpService} for signing in. So the rule is stated on the three
+     * method bodies and on the set of paths the class publishes under that prefix, which is what an added
+     * fourth arm would have to change.
+     *
+     * <p>Why it matters more here than at enrollment. The enrollment step-up may establish a login factor on
+     * an account that holds none; no authority record is accepted on the strength of a phone code at any step,
+     * in any combination. An OTP arm on this page would be the laundering path of decision 8 with a shorter
+     * route: a SIM swap, a code, a step-up, a rooted account.
+     */
+    @Test
+    void theAuthorityStepUpPageHasTwoArmsAndNeitherIsAPhoneCode() throws IOException {
+        String controller = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
+
+        // Exactly three mappings under the prefix, which is the passkey pair and the PIN.
+        assertThat(controller.split("@PostMapping\\(\"/authority/stepup", -1)).hasSize(4);
+        assertThat(controller).contains("@PostMapping(\"/authority/stepup/passkey/options\")");
+        assertThat(controller).contains("@PostMapping(\"/authority/stepup/passkey/verify\")");
+        assertThat(controller).contains("@PostMapping(\"/authority/stepup/pin\")");
+        assertThat(controller).doesNotContain("/authority/stepup/otp");
+
+        for (String method : new String[] {
+                "public ResponseEntity<PasskeyOptionsResponse> startAuthorityStepUpPasskey(",
+                "public ResponseEntity<LoginStateResponse> finishAuthorityStepUpPasskey(",
+                "public ResponseEntity<LoginStateResponse> submitAuthorityStepUpPin(",
+                "private void requireAuthorityStepUp(",
+                "private ResponseEntity<LoginStateResponse> acceptAuthorityStepUp(",
+                "private ResponseEntity<LoginStateResponse> completeAuthorityStepUp(" }) {
+            String body = methodBody(controller, method);
+            assertThat(body).as("in %s", method)
+                    .doesNotContain("otpService")
+                    .doesNotContain("accountReauthService")
+                    .doesNotContain("PHONE_OTP")
+                    .doesNotContain("recoveryAvailable");
+        }
+
+        // And the two factors the page may record are named in the two endpoints that record them, so a third
+        // value cannot arrive from anywhere else.
+        assertThat(methodBody(controller, "public ResponseEntity<LoginStateResponse> finishAuthorityStepUpPasskey("))
+                .contains("AuthFactor.PASSKEY");
+        assertThat(methodBody(controller, "public ResponseEntity<LoginStateResponse> submitAuthorityStepUpPin("))
+                .contains("AuthFactor.PIN");
+        // Stated a second time where the row is written, because that is the only place a future caller could
+        // reach with something else.
+        assertThat(methodBody(read(MAIN.resolve("service/authority/AuthorityWebStepUpService.java")),
+                "public Instant proved(String userId, String sessionHash, Purpose purpose"))
+                .contains("factor != AuthFactor.PASSKEY && factor != AuthFactor.PIN");
+    }
+
+    /**
+     * A web step-up is bound to the account, the acting session and the purpose, and spent once (ADM-009
+     * decision 4 step 2).
+     *
+     * <p>Each binding closes a different door, and the single use is what stops a sheet being run once and
+     * spent on every transition the account has. The repository is asserted on too: a finder by account alone
+     * would let a caller spend a proof another session produced.
+     */
+    @Test
+    void aWebStepUpIsBoundToTheAccountTheSessionAndThePurposeAndSpentOnce() throws IOException {
+        String service = read(MAIN.resolve("service/authority/AuthorityWebStepUpService.java"));
+        String repository = read(Path.of("src", "main", "java", "me", "sarahlacerda", "gua", "identityservice",
+                "repository", "AuthorityWebStepUpRepository.java"));
+
+        assertThat(repository).contains("findByUserIdAndSessionHashAndPurposeAndConsumedAtIsNull");
+        assertThat(repository).doesNotContain("findByUserId(");
+        assertThat(repository).doesNotContain("findByPurpose");
+
+        String consume = methodBody(service, "public Optional<Proved> consume(");
+        // Burned before the caller does anything with it, and in its own transaction, so no arrangement of
+        // later refusals can leave it spendable.
+        assertThat(consume).contains("setConsumedAt(now)");
+        assertThat(consume).contains("repository.save(stepUp)");
+        assertThat(consume.indexOf("setConsumedAt(now)")).isLessThan(consume.indexOf("return Optional.of("));
+        assertThat(service).contains("@Transactional(propagation = Propagation.REQUIRES_NEW)");
+
+        // The same life as the challenge, so a sheet left open is not a step-up an hour later.
+        assertThat(methodBody(service, "public Instant proved(String userId, String sessionHash, Purpose purpose"))
+                .contains("policy.challengeTtl()");
+    }
+
+    /**
+     * The sheet is consulted only for a request that produced no proof of its own, and only for a purpose that
+     * asks for a factor, opened only by a native session.
+     *
+     * <p>The ordering is what keeps the platforms that can sign their own assertions exactly as they were: a
+     * request carrying one never reaches the sheet at all. The native-session rule is decision 6 stated where
+     * it would otherwise be missed: a browser that could open one of these would be a browser arranging its
+     * own authority proof.
+     */
+    @Test
+    void theSheetIsConsultedOnlyForARequestThatProvedNothingAndOnlyForATransition() throws IOException {
+        String stepUps = read(MAIN.resolve("service/authority/AuthorityStepUpService.java"));
+        String webStepUps = read(MAIN.resolve("service/authority/AuthorityWebStepUpService.java"));
+        String policy = read(MAIN.resolve("service/authority/AuthorityPolicy.java"));
+        String authority = read(MAIN.resolve("service/authority/AccountAuthorityService.java"));
+
+        String scoped = methodBody(stepUps, "public Accepted accept(String userId, Purpose purpose");
+        int gate = scoped.indexOf("!presentedSomething(passkeyStepUpId, passkeyCredential, pin)");
+        assertThat(gate).isPositive();
+        assertThat(scoped.indexOf("webStepUps.consume(")).isGreaterThan(gate);
+        // And a proof the sheet recorded is still weighed against the purpose's own accepted set.
+        assertThat(scoped).contains("stepUp.accepts(proved.factor())");
+
+        // The set of purposes a sheet may be opened for is derived from the one accepted-set method rather
+        // than written out again, so it cannot drift away from it.
+        assertThat(methodBody(policy, "public boolean canOpenStepUpSheet("))
+                .contains("stepUpFor(purpose).required()");
+        assertThat(methodBody(webStepUps, "public void requireMayOpen("))
+                .contains("policy.requireEnabled()")
+                .contains("policy.requireNativeSession(clientId)")
+                .contains("policy.requireStepUpSheetPurpose(purpose)");
+        // The page re-asks the flag on every call, because a deployment can be switched off between minting a
+        // sheet and running it.
+        assertThat(methodBody(webStepUps, "public void requireOpen(")).contains("policy.requireEnabled()");
+
+        // The challenge passes the purpose and the session it was asked from, which is what makes the binding
+        // checkable at all.
+        assertThat(methodBody(authority, "public AuthorityChallengeService.Minted challenge("))
+                .contains("stepUps.accept(userId, purpose, sessionHash,");
+    }
+
     private static List<Path> authorityFiles() throws IOException {
         List<Path> files = new ArrayList<>();
         for (Path source : AUTHORITY_SOURCES) {
