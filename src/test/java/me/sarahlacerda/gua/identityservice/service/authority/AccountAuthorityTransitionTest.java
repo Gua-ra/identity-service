@@ -39,6 +39,7 @@ import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 import me.sarahlacerda.gua.identityservice.service.security.audit.LoggingSecurityAuditLogger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 /**
@@ -604,6 +605,44 @@ class AccountAuthorityTransitionTest {
         assertThat(recordRepository.findByAccountOrderBySeqAsc(account())).isEmpty();
     }
 
+    // --- Who is told, and about what -----------------------------------------
+
+    @Test
+    void everyNotificationNamesTheAccountHolderAndNotNobody() {
+        // The three raised outside the submitting request used to pass a null user id, and a notifier with no
+        // holder to name sends nothing. So the completion of every window, the cancellation of every
+        // transition and the extension decision 7 leaves an active device able to raise all reached nobody,
+        // which makes a window a delay rather than a control.
+        adopt();
+        assertThat(channel.sent).containsExactly("PENDING ADOPT_ROOT " + USER);
+
+        clock.advance(Duration.ofHours(73));
+        service.state(USER);
+        assertThat(channel.sent).contains("COMPLETED ADOPT_ROOT " + USER);
+
+        AccountAuthorityService.Submitted revocation = revokeFirstDeviceWithTheSecondGranted();
+        channel.sent.clear();
+        opposeAs(firstDevice, revocation.recordHash());
+        assertThat(channel.sent).containsExactly("CANCELLED DEVICE_REVOKE " + USER);
+
+        AccountAuthorityService.Submitted recovery = recoverWithTheCommittedKey();
+        channel.sent.clear();
+        opposeAs(firstDevice, recovery.recordHash());
+        assertThat(channel.sent).containsExactly("PENDING AUTHORITY_RECOVERY " + USER);
+    }
+
+    @Test
+    void anotificationWithNoAccountHolderIsLoudRatherThanSilent() {
+        AuthorityPushNotifier notifier = new AuthorityPushNotifier(
+                org.mockito.Mockito.mock(AuthorityNotificationRegistry.class), List.of(), policy, clock);
+
+        // Swallowed by AuthorityNotifications, so it still cannot roll back an accepted transition, but it is
+        // in the log rather than nowhere.
+        assertThatThrownBy(() -> notifier.notifyTransitionCompleted(null, "ADOPT_ROOT", "iPhone"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("no account holder");
+    }
+
     // --- Oppose, and the candidate step -------------------------------------
 
     @Test
@@ -770,6 +809,22 @@ class AccountAuthorityTransitionTest {
                 sign(firstDevice, AuthorityRecordType.DEVICE_REVOKE, challenge, bytes), challenge);
     }
 
+    /**
+     * A pending revocation of the first device, signed by the second, so the first device may object to it:
+     * the named device may veto its own removal where accepting it would leave the signer alone.
+     */
+    private AccountAuthorityService.Submitted revokeFirstDeviceWithTheSecondGranted() {
+        grantSecondDevice();
+        clock.advance(Duration.ofHours(73));
+        service.state(USER);
+        String challenge = mint(Purpose.REVOKE);
+        byte[] bytes = AuthorityRecords.revokeFor(reference, firstDevice.rawPublicKey(),
+                secondDevice.rawPublicKey(), AuthorityRecord.REASON_LOST, head().nextSeq(),
+                hexToBytes(head().getHeadHash()));
+        return service.revokeDevice(USER, Optional.of(NATIVE_CLIENT), SESSION, encode(bytes),
+                sign(secondDevice, AuthorityRecordType.DEVICE_REVOKE, challenge, bytes), challenge);
+    }
+
     /** The rank-0 record: an {@code AuthorityRecovery} authorized through account recovery. */
     private AccountAuthorityService.Submitted recoverThroughAccountRecovery() {
         String challenge = mint(Purpose.RECOVER);
@@ -897,6 +952,7 @@ class AccountAuthorityTransitionTest {
     private static final class StubChannel implements AuthorityNotifier {
 
         private boolean reaches = true;
+        private final List<String> sent = new java.util.ArrayList<>();
 
         @Override
         public boolean isOutOfBand() {
@@ -911,14 +967,17 @@ class AccountAuthorityTransitionTest {
         @Override
         public void notifyTransitionPending(String userId, String transition, String deviceLabel,
                 Instant effectiveAt) {
+            sent.add("PENDING " + transition + " " + userId);
         }
 
         @Override
         public void notifyTransitionCancelled(String userId, String transition, String deviceLabel) {
+            sent.add("CANCELLED " + transition + " " + userId);
         }
 
         @Override
         public void notifyTransitionCompleted(String userId, String transition, String deviceLabel) {
+            sent.add("COMPLETED " + transition + " " + userId);
         }
     }
 

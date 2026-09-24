@@ -82,8 +82,8 @@ public class AuthorityAccounts {
 
     private static Resolved resolved(AccountGenesisRecord row) {
         AccountId parsed = AccountId.parse(row.getAccountId());
-        return new Resolved(parsed.value(), parsed.rawBytes(), parsed.rootClass(), parsed.isGenesisRooted(),
-                row.getAuthorityKeyB64(), committedRecoveryKey(row));
+        return new Resolved(row.getUserId(), parsed.value(), parsed.rawBytes(), parsed.rootClass(),
+                parsed.isGenesisRooted(), row.getAuthorityKeyB64(), committedRecoveryKey(row));
     }
 
     /**
@@ -126,6 +126,10 @@ public class AuthorityAccounts {
     /**
      * The account, as the chain needs it.
      *
+     * @param userId      the authenticated user the account was resolved from. Carried here so the code that
+     *                    settles, extends or cancels a transition outside the submitting request still has an
+     *                    account holder to notify: the chain rows are keyed on the reference, and a
+     *                    notification needs the user
      * @param reference   the opaque key of every authority row for this account, which is the accountId's
      *                    canonical string form
      * @param rawReference the 34 bytes the record envelope carries
@@ -142,8 +146,8 @@ public class AuthorityAccounts {
      *                    by on a class 0x01 account, which is what L13.1 means by a genesis-committed
      *                    threshold
      */
-    public record Resolved(String reference, byte[] rawReference, byte rootClass, boolean genesisRooted,
-            String committedAuthorityKeyB64, String committedRecoveryKeyB64) {
+    public record Resolved(String userId, String reference, byte[] rawReference, byte rootClass,
+            boolean genesisRooted, String committedAuthorityKeyB64, String committedRecoveryKeyB64) {
 
         /** Defensive copy, so no caller can edit the bytes a comparison will be made against. */
         public byte[] bytes() {

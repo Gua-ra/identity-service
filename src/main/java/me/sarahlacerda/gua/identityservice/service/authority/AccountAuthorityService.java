@@ -762,7 +762,11 @@ public class AccountAuthorityService {
         head.setUpdatedAt(now);
         headRepository.save(head);
 
-        notifications.completed(null, decoded.type().name(), decoded.label());
+        // The account holder, not null. Everything raised outside the submitting request used to pass none,
+        // and the notifier drops a notification with no holder to name, so the completion of every window, the
+        // cancellation of every transition and the one thing decision 7 leaves an active device able to do
+        // against a rank-2 recovery all reached nobody.
+        notifications.completed(account.userId(), decoded.type().name(), decoded.label());
         log.info("Authority transition {} completed after its window", decoded.type());
     }
 
@@ -790,7 +794,7 @@ public class AccountAuthorityService {
         headRepository.save(head);
         pending.setEffectiveAt(extended);
         recordRepository.save(pending);
-        notifications.pending(null, decoded.type().name(), decoded.label(), extended);
+        notifications.pending(account.userId(), decoded.type().name(), decoded.label(), extended);
     }
 
     private void cancelPending(Resolved account, AuthorityChainHead head, AuthorityChainRecord pending,
@@ -810,7 +814,7 @@ public class AccountAuthorityService {
         headRepository.save(head);
 
         challenges.burnUnspent(account.reference(), purposeOf(decoded.type()), now);
-        notifications.cancelled(null, decoded.type().name(), decoded.label());
+        notifications.cancelled(account.userId(), decoded.type().name(), decoded.label());
         log.info("Authority transition {} cancelled: {}", decoded.type(), reason);
     }
 
