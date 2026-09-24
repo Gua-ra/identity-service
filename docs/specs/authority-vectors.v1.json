@@ -111,7 +111,8 @@
     "notes" : [
       "The artifact is the PRIVATE recovery authority key as a person takes it away: the prefix, a single space, then the base32 spelling of the 32 seed bytes in groups of four separated by single spaces. The prefix names the framework and the version, so a later framework's artifact cannot be mistaken for one of these.",
       "The server never sees an artifact, so nothing on the wire can catch a client that renders or reads it in another spelling. These vectors are the only thing that holds the clients to one format.",
-      "Whitespace between the groups is free-form on the way back in, because nobody retypes four-character groups exactly as they were printed. Case is not: the alphabet is lowercase and the decoder is case-sensitive, so an artifact copied in the case it was shown in is the artifact that comes back.",
+      "Whitespace between the groups is free-form on the way back in, because nobody retypes four-character groups exactly as they were printed, and so is case. The alphabet is a to z with 2 to 7, so folding an ASCII capital onto its lowercase names that letter and no other: reading either case admits no byte string a lowercase spelling could not already name. A renderer still writes lowercase, and only the reader forgives.",
+      "The fold is ASCII only, and the entry under spellings that carries a Kelvin sign is what holds it there. A character some Unicode case mapping would turn into an alphabet letter is refused rather than folded, so the door opens exactly as wide as the case of the printed alphabet and no wider. The accountId decoder is untouched by any of this: that one is a permanent identifier a signature covers, and ADM-001 L4 gives it one spelling.",
       "A conforming implementation renders each artifact below from the seed of the key it names and reads the same 32 bytes back out of it, and refuses every entry under rejections. The reason names the refusal in the Gua vocabulary; a platform that does not tell them apart still has to refuse."
     ],
     "prefix" : "gua-recovery-1",
@@ -121,6 +122,14 @@
       { "key" : "rfc8032-test1", "artifact" : "gua-recovery-1 tvq3 dhpp 7vng boue jl2j f3bm yrce trlj pmzg sglq howa ghfo p5qa" },
       { "key" : "rfc8032-test2", "artifact" : "gua-recovery-1 jtgq rgzi 76ln vhnw yndo yeko b5ny umm7 gwv2 mjg2 rt3o 2t5y u35q" },
       { "key" : "rfc8032-test3", "artifact" : "gua-recovery-1 ywvi 35b7 t6bx x3nx iqxt dxfx wftn hbjv a5xq ss4f zy5c 4c2e ld3q" }
+    ],
+    "spellingNotes" : [
+      "Spellings of an artifact above that a person plausibly types back, which no renderer produces. An entry naming a key must read back that key's 32 seed bytes; an entry naming a reason must be refused for it. Both halves matter: the accepting entries are what stop one port being case-sensitive while the other is not, and the refusing entry is what stops a port widening the fold past ASCII to get there."
+    ],
+    "spellings" : [
+      { "name" : "the whole artifact in uppercase, as it gets written on paper", "artifact" : "GUA-RECOVERY-1 TVQ3 DHPP 7VNG BOUE JL2J F3BM YRCE TRLJ PMZG SGLQ HOWA GHFO P5QA", "key" : "rfc8032-test1" },
+      { "name" : "mixed case, as a keyboard that capitalises each group leaves it", "artifact" : "Gua-recovery-1 Tvq3 Dhpp 7vng Boue Jl2j F3bm Yrce Trlj Pmzg Sglq Howa Ghfo P5qa", "key" : "rfc8032-test1" },
+      { "name" : "a Kelvin sign where the k belongs, which is not ASCII case", "artifact" : "gua-recovery-1 jtgq rgzi 76ln vhnw yndo ye\u212ao b5ny umm7 gwv2 mjg2 rt3o 2t5y u35q", "reason" : "bad_artifact" }
     ],
     "rejections" : [
       { "name" : "the 52 characters with no prefix", "artifact" : "tvq3dhpp7vngbouejl2jf3bmyrcetrljpmzgsglqhowaghfop5qa", "reason" : "bad_artifact_prefix" },
