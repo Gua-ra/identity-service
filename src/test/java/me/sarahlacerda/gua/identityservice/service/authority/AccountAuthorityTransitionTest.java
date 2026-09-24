@@ -86,7 +86,9 @@ class AccountAuthorityTransitionTest {
 
     private final TestEd25519.Pair firstDevice = TestEd25519.generate();
     private final TestEd25519.Pair secondDevice = TestEd25519.generate();
+    private final TestEd25519.Pair thirdDevice = TestEd25519.generate();
     private final TestEd25519.Pair recoveryKey = TestEd25519.generate();
+    private final TestEd25519.Pair replacementRecoveryKey = TestEd25519.generate();
 
     private IdentityServiceProperties properties;
     private AuthorityPolicy policy;
@@ -417,6 +419,71 @@ class AccountAuthorityTransitionTest {
                 .isEqualTo("authority_opposition_device_required");
     }
 
+    // --- The slot, the rank and the cooldown ---------------------------------
+
+    @Test
+    void theRankTwoRecordTakesAnOccupiedSlotRatherThanRefusingItself() {
+        rootTheAccount();
+        // L13.2's own pair: a recovery authorized through account recovery, outranked and cancelled by one
+        // signed by the key the chain committed for exactly this. Same magic, so the cooldown the cancellation
+        // writes is the cooldown the submission is then measured against.
+        AccountAuthorityService.Submitted weaker = recoverThroughAccountRecovery();
+        assertThat(weaker.pending()).isTrue();
+        assertThat(head().getPendingRank()).isEqualTo((short) 0);
+
+        AccountAuthorityService.Submitted stronger = recoverWithTheCommittedKey();
+
+        // The cooldown used to be read five lines after this very request wrote it, so the escape hatch
+        // refused itself with authority_cooldown and no higher-rank record could ever take an occupied slot.
+        assertThat(stronger.pending()).isTrue();
+        assertThat(head().getPendingRank()).isEqualTo((short) 2);
+        assertThat(recordRepository.findByAccountAndSeq(account(), weaker.seq()).orElseThrow().getState())
+                .isEqualTo(AuthorityChainRecord.State.CANCELLED);
+        assertThat(head().getCooldownMagic()).isEqualTo(AuthorityRecordType.AUTHORITY_RECOVERY.magic());
+    }
+
+    @Test
+    void theRecoveryKeyPathAlsoOutranksAPendingRevocationRatherThanWaitingForIt() {
+        rootTheAccount();
+        grantSecondDevice();
+        clock.advance(Duration.ofHours(73));
+        service.state(USER);
+        AccountAuthorityService.Submitted revocation = revokeSecondDevice();
+
+        AccountAuthorityService.Submitted recovery = recoverWithTheCommittedKey();
+
+        assertThat(recovery.pending()).isTrue();
+        assertThat(head().getPendingRank()).isEqualTo((short) 2);
+        assertThat(recordRepository.findByAccountAndSeq(account(), revocation.seq()).orElseThrow().getState())
+                .isEqualTo(AuthorityChainRecord.State.CANCELLED);
+    }
+
+    @Test
+    void theCooldownAnObjectionWritesRefusesThatShapeAndLeavesTheOthersAlone() {
+        rootTheAccount();
+        grantSecondDevice();
+        clock.advance(Duration.ofHours(73));
+        service.state(USER);
+        AccountAuthorityService.Submitted revocation = revokeSecondDevice();
+        opposeAsSecondDevice(revocation.recordHash());
+
+        // Same shape: refused for one window, which is the bound decision 4 states.
+        assertThat(refusalFrom(this::revokeSecondDevice)).isEqualTo("authority_cooldown");
+
+        // Another shape: untouched. An account-wide cooldown here was decision 3's rejected absolute freeze
+        // reached from the other side, where an intruder cycling a revocation froze everything the owner
+        // could do, one window at a time, by being objected to.
+        service.registerCandidate(USER, encode(thirdDevice.rawPublicKey()), "iPad");
+        String challenge = mint(Purpose.GRANT);
+        byte[] bytes = AuthorityRecords.grantFor(reference, thirdDevice.rawPublicKey(),
+                firstDevice.rawPublicKey(), "iPad", head().nextSeq(), hexToBytes(head().getHeadHash()));
+        AccountAuthorityService.Submitted grant = service.grantDevice(USER, Optional.of(NATIVE_CLIENT), SESSION,
+                encode(bytes), sign(firstDevice, AuthorityRecordType.DEVICE_GRANT, challenge, bytes), challenge);
+
+        assertThat(grant.pending()).isFalse();
+        assertThat(device(thirdDevice.rawPublicKey()).getState()).isEqualTo(AuthorityDevice.State.QUARANTINED);
+    }
+
     @Test
     void theReadEndpointReportsTheChainTheDevicesAndThePendingStep() {
         rootTheAccount();
@@ -617,6 +684,29 @@ class AccountAuthorityTransitionTest {
                 hexToBytes(head().getHeadHash()));
         return service.revokeDevice(USER, Optional.of(NATIVE_CLIENT), SESSION, encode(bytes),
                 sign(firstDevice, AuthorityRecordType.DEVICE_REVOKE, challenge, bytes), challenge);
+    }
+
+    /** The rank-0 record: an {@code AuthorityRecovery} authorized through account recovery. */
+    private AccountAuthorityService.Submitted recoverThroughAccountRecovery() {
+        String challenge = mint(Purpose.RECOVER);
+        byte[] bytes = AuthorityRecords.recoveryFor(reference, secondDevice.rawPublicKey(),
+                replacementRecoveryKey.rawPublicKey(), "iPad", AuthorityRecord.AUTHORIZATION_ACCOUNT_RECOVERY,
+                new byte[AuthorityRecord.KEY_LENGTH], head().nextSeq(), hexToBytes(head().getHeadHash()));
+        return service.recoverAuthority(USER, Optional.of(NATIVE_CLIENT), SESSION, encode(bytes),
+                sign(secondDevice, AuthorityRecordType.AUTHORITY_RECOVERY, challenge, bytes), challenge);
+    }
+
+    /**
+     * The rank-2 record: an {@code AuthorityRecovery} signed by the key the chain committed for exactly this,
+     * which no pending record and no device may block.
+     */
+    private AccountAuthorityService.Submitted recoverWithTheCommittedKey() {
+        String challenge = mint(Purpose.RECOVER);
+        byte[] bytes = AuthorityRecords.recoveryFor(reference, thirdDevice.rawPublicKey(),
+                replacementRecoveryKey.rawPublicKey(), "iPhone", AuthorityRecord.AUTHORIZATION_RECOVERY_KEY,
+                recoveryKey.rawPublicKey(), head().nextSeq(), hexToBytes(head().getHeadHash()));
+        return service.recoverAuthority(USER, Optional.of(NATIVE_CLIENT), SESSION, encode(bytes),
+                sign(recoveryKey, AuthorityRecordType.AUTHORITY_RECOVERY, challenge, bytes), challenge);
     }
 
     /**

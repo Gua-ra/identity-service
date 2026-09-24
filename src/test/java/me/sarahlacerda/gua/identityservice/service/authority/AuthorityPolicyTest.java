@@ -327,13 +327,33 @@ class AuthorityPolicyTest {
         AuthorityTransitionException backoff = catchThrowableOfType(
                 () -> policy.requireOutsideBackoff(now.plusSeconds(90), now), AuthorityTransitionException.class);
         AuthorityTransitionException cooldown = catchThrowableOfType(
-                () -> policy.requireOutsideCooldown(now.plusSeconds(30), now), AuthorityTransitionException.class);
+                () -> policy.requireOutsideCooldown(now.plusSeconds(30),
+                        AuthorityRecordType.ADOPT_ROOT.magic(), AuthorityRecordType.ADOPT_ROOT.magic(), now),
+                AuthorityTransitionException.class);
 
         assertThat(backoff.getCode()).isEqualTo("authority_backoff");
         assertThat(backoff.getRetryAfterSeconds()).isEqualTo(90L);
         assertThat(cooldown.getCode()).isEqualTo("authority_cooldown");
         policy.requireOutsideBackoff(null, now);
-        policy.requireOutsideCooldown(now.minusSeconds(1), now);
+        policy.requireOutsideCooldown(now.minusSeconds(1), AuthorityRecordType.ADOPT_ROOT.magic(),
+                AuthorityRecordType.ADOPT_ROOT.magic(), now);
+    }
+
+    @Test
+    void theCooldownRefusesTheShapeItWasWrittenForAndLeavesEveryOtherShapeAlone() {
+        Instant now = Instant.now();
+        Instant live = now.plusSeconds(30);
+
+        // Decision 3 rejected an absolute freeze, and one cooldown column with no shape beside it was that
+        // freeze reached from the other side: the owner's own objection would stop every other transition too.
+        assertThat(codeOf(() -> policy.requireOutsideCooldown(live, AuthorityRecordType.DEVICE_REVOKE.magic(),
+                AuthorityRecordType.DEVICE_REVOKE.magic(), now))).isEqualTo("authority_cooldown");
+        policy.requireOutsideCooldown(live, AuthorityRecordType.DEVICE_REVOKE.magic(),
+                AuthorityRecordType.DEVICE_GRANT.magic(), now);
+        policy.requireOutsideCooldown(live, AuthorityRecordType.DEVICE_REVOKE.magic(),
+                AuthorityRecordType.AUTHORITY_RECOVERY.magic(), now);
+        // A head that recorded no shape refuses nothing rather than everything.
+        policy.requireOutsideCooldown(live, null, AuthorityRecordType.DEVICE_REVOKE.magic(), now);
     }
 
     // --- Windows ------------------------------------------------------------

@@ -143,6 +143,8 @@ CREATE TABLE IF NOT EXISTS account_authority_head (
     pending_rank         SMALLINT,
     pending_effective_at TIMESTAMP WITH TIME ZONE,
     cooldown_until       TIMESTAMP WITH TIME ZONE,
+    -- V17
+    cooldown_magic       VARCHAR(4),
     updated_at           TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );
 
