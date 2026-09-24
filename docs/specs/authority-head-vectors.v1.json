@@ -1,0 +1,129 @@
+{
+  "encoding": "gua-account-authority-head.v1",
+  "leafType": "ACCOUNT_AUTHORITY",
+  "magic": "GUAH",
+  "decision": "https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-009-account-authority-adoption-and-device-lifecycle.md",
+  "notes": [
+    "The homeserver's roster membership key is the RFC 8032 section 7.1 TEST 3 Ed25519 key: a published test constant that must never sign anything real.",
+    "Ed25519 is deterministic, so the signature below is reproducible from the key and the preimage.",
+    "The signature preimage is the 4 magic bytes followed by the canonical bytes, and nothing else. There is no server challenge, because a head is a standing assertion by a homeserver about state it already holds rather than a fresh statement by a device.",
+    "The leaf's payload hash is the SHA-256 of the canonical bytes. That is the whole of what the ACCOUNT_AUTHORITY leaf commits: no field of this object appears in the log, and a verifier handed the envelope recomputes the payload hash from it.",
+    "headHash is the record hash of the AdoptRoot in authority-vectors.v1.json, so a client can check the two files against each other: the head this object publishes is the head that chain reaches.",
+    "An all-zero headHash and a headSeq below 1 are refused rather than encoded. Those are what an empty chain's head row holds, and an object asserting that an account holds no authority would be a non-membership claim with nothing to check it against."
+  ],
+  "keys": {
+    "rfc8032-test3": {
+      "seedHex": "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7",
+      "publicKeyHex": "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025"
+    }
+  },
+  "layout": [
+    { "offset": "0", "length": "4", "field": "magic, ASCII GUAH, and the signature domain" },
+    { "offset": "4", "length": "1", "field": "version = 0x01" },
+    { "offset": "5", "length": "1", "field": "suite = 0x01, Ed25519 with SHA-256" },
+    { "offset": "6", "length": "34", "field": "accountReference, exactly the 34 bytes the chain record envelope carries at offset 6" },
+    { "offset": "40", "length": "32", "field": "headHash, SHA-256 over the head record's canonical bytes" },
+    { "offset": "72", "length": "8", "field": "headSeq, unsigned, 1 or more" },
+    { "offset": "80", "length": "1", "field": "n, the length of homeserverId, 1 to 64" },
+    { "offset": "81", "length": "n", "field": "homeserverId, printable ASCII roster id, never the Matrix domain" },
+    { "offset": "81+n", "length": "8", "field": "issuedAt, epoch milliseconds, unsigned" },
+    { "offset": "89+n", "length": "8", "field": "notBefore, epoch milliseconds, unsigned" },
+    { "offset": "97+n", "length": "8", "field": "notAfter, epoch milliseconds, unsigned" }
+  ],
+  "account": {
+    "referenceHex": "0100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a8991"
+  },
+  "head": {
+    "name": "the settled head of the vectors chain at seq 1, published by hs-alpha",
+    "headHashHex": "98e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce68510",
+    "headSeq": 1,
+    "homeserverId": "hs-alpha",
+    "issuedAtMillis": 1790208000000,
+    "notBeforeMillis": 1790208000000,
+    "notAfterMillis": 1824768000000,
+    "length": 113,
+    "canonicalHex": "4755414801010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce6851000000000000000010868732d616c706861000001a0d0b64000000001a0d0b64000000001a8dca60000",
+    "recordB64": "R1VBSAEBAQC-RcsmBb82vr3mhIQaKPD9Q8aYUKPc5f7bppko7jqJkZjglgbaHzAhAEutvM-x8l7_WvtDZ4eFBlG5LRGM5oUQAAAAAAAAAAEIaHMtYWxwaGEAAAGg0LZAAAAAAaDQtkAAAAABqNymAAA",
+    "signaturePreimageHex": "475541484755414801010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce6851000000000000000010868732d616c706861000001a0d0b64000000001a0d0b64000000001a8dca60000",
+    "leafPayloadSha256Hex": "d3b463266d89ad6a4c5b19787da47755719299d432898d033ff47da1bbb7402b",
+    "verifyingKeyHex": "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+    "signatureB64": "mMdmM94bjyWuWDmKw1qd3FzD03EQlycujVisNrFjJiH1LJCEd2CJ1uJQ1VXSAj5GcN+sgtHbfpfJ9fq4z26pCQ=="
+  },
+  "rejections": [
+    {
+      "name": "an unknown magic",
+      "hex": "4755415a01010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce6851000000000000000010868732d616c706861000001a0d0b64000000001a0d0b64000000001a8dca60000",
+      "reason": "bad_magic"
+    },
+    {
+      "name": "an unknown version",
+      "hex": "4755414802010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce6851000000000000000010868732d616c706861000001a0d0b64000000001a0d0b64000000001a8dca60000",
+      "reason": "unknown_version"
+    },
+    {
+      "name": "an unknown suite",
+      "hex": "4755414801020100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce6851000000000000000010868732d616c706861000001a0d0b64000000001a0d0b64000000001a8dca60000",
+      "reason": "unknown_suite"
+    },
+    {
+      "name": "the all-zero head hash of an empty chain",
+      "hex": "4755414801010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a8991000000000000000000000000000000000000000000000000000000000000000000000000000000010868732d616c706861000001a0d0b64000000001a0d0b64000000001a8dca60000",
+      "reason": "empty_head_hash"
+    },
+    {
+      "name": "a head position of zero",
+      "hex": "4755414801010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce6851000000000000000000868732d616c706861000001a0d0b64000000001a0d0b64000000001a8dca60000",
+      "reason": "head_seq_out_of_range"
+    },
+    {
+      "name": "a head position with the top bit set",
+      "hex": "4755414801010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce6851080000000000000010868732d616c706861000001a0d0b64000000001a0d0b64000000001a8dca60000",
+      "reason": "head_seq_out_of_range"
+    },
+    {
+      "name": "a homeserver id length of zero",
+      "hex": "4755414801010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce6851000000000000000010068732d616c706861000001a0d0b64000000001a0d0b64000000001a8dca60000",
+      "reason": "bad_homeserver_id_length"
+    },
+    {
+      "name": "a homeserver id length over the 64-byte maximum",
+      "hex": "4755414801010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce6851000000000000000014168732d616c706861000001a0d0b64000000001a0d0b64000000001a8dca60000",
+      "reason": "bad_homeserver_id_length"
+    },
+    {
+      "name": "a length prefix that disagrees with the buffer",
+      "hex": "4755414801010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce6851000000000000000010968732d616c706861000001a0d0b64000000001a0d0b64000000001a8dca60000",
+      "reason": "wrong_length"
+    },
+    {
+      "name": "one trailing byte past the declared length",
+      "hex": "4755414801010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce6851000000000000000010868732d616c706861000001a0d0b64000000001a0d0b64000000001a8dca6000000",
+      "reason": "wrong_length"
+    },
+    {
+      "name": "one byte short",
+      "hex": "4755414801010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce6851000000000000000010868732d616c706861000001a0d0b64000000001a0d0b64000000001a8dca600",
+      "reason": "wrong_length"
+    },
+    {
+      "name": "a newline smuggled into the homeserver id",
+      "hex": "4755414801010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce685100000000000000001080a732d616c706861000001a0d0b64000000001a0d0b64000000001a8dca60000",
+      "reason": "bad_homeserver_id"
+    },
+    {
+      "name": "a notAfter equal to notBefore",
+      "hex": "4755414801010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce6851000000000000000010868732d616c706861000001a0d0b64000000001a0d0b64000000001a0d0b64000",
+      "reason": "inverted_window"
+    },
+    {
+      "name": "a window longer than 400 days",
+      "hex": "4755414801010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce6851000000000000000010868732d616c706861000001a0d0b64000000001a0d0b64000000001a8e1cc5c00",
+      "reason": "window_too_long"
+    },
+    {
+      "name": "an issuedAt with the top bit set",
+      "hex": "4755414801010100be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a899198e09606da1f3021004badbccfb1f25eff5afb436787850651b92d118ce6851000000000000000010868732d616c706861800001a0d0b64000000001a0d0b64000000001a8dca60000",
+      "reason": "timestamp_out_of_range"
+    }
+  ]
+}
