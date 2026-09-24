@@ -117,6 +117,42 @@ identity:
         private-key-pkcs8-base64: ${IDENTITY_AUTHORITY_FCM_PRIVATE_KEY:}
         token-uri: ${IDENTITY_AUTHORITY_FCM_TOKEN_URI:https://oauth2.googleapis.com/token}
         refresh-skew: ${IDENTITY_AUTHORITY_FCM_REFRESH_SKEW:PT5M}
+    # Publishing the settled chain head as the ACCOUNT_AUTHORITY leaf ADM-009 decision 12 reserves. A
+    # separate switch from identity.authority.enabled on purpose, so the chain can run for as long as it
+    # takes to validate while nothing is written to federation state. With this off no head is signed, no
+    # resolver is contacted and no row is written to account_authority_publication, and the chain behaves
+    # exactly as it does today. Decision 12 says the gap it names is a missing publication rather than a
+    # missing signature; this is the switch that closes it, one environment at a time.
+    #
+    # Turning it on is refused at startup unless the chain itself is on, the homeserver is named, this
+    # deployment holds that homeserver's roster membership key, the resolver is configured, and the two
+    # windows below are a pair the codec will encode (AuthorityPublicationStartupCheck).
+    #
+    # Rollback: set IDENTITY_AUTHORITY_PUBLICATION_ENABLED back to false. The table stays: the row is what
+    # makes a republish idempotent, and dropping it would make the next publication re-sign bytes the log
+    # already carries.
+    publication:
+      enabled: ${IDENTITY_AUTHORITY_PUBLICATION_ENABLED:false}
+      # Its own value rather than identity.placement.resolver-base-url, even though both point at the same
+      # service, so the two features stay independently deployable and one rollback cannot disable the
+      # other. Never identity.resolver.*: that namespace belonged to the removed directory-publishing
+      # client (ADM-001 L1b).
+      resolver-base-url: ${IDENTITY_AUTHORITY_PUBLICATION_RESOLVER_BASE_URL:}
+      # The federation roster id of the homeserver whose chains this deployment publishes. Named
+      # explicitly, never derived from a local routing row: the head is an assertion by the homeserver that
+      # stores the chain, and a roster id guessed from state that row is allowed to be stale about would go
+      # inside a signed object. Empty means publishing refuses to start.
+      homeserver-id: ${IDENTITY_AUTHORITY_PUBLICATION_HOMESERVER_ID:}
+      # Validity of a published head, capped at the 400 days the codec fixes, which is the same bound
+      # ADM-008 decision 7 puts on a placement record signed by the same key. It is what turns a homeserver
+      # that stops publishing into a visible stale state in the client rather than into silence; it does not
+      # make withholding detectable, which needs the non-membership proof ADM-005 owns.
+      head-validity: ${IDENTITY_AUTHORITY_PUBLICATION_HEAD_VALIDITY:P400D}
+      # Age at which a still-valid head is re-issued with a fresh window, so a long-quiet account's
+      # attestation never reaches its expiry. Checked on the same lazy path settlement runs on, never on a
+      # timer, so it costs one extra leaf per interval for an account with no transitions. Must be shorter
+      # than head-validity or startup refuses it.
+      republish-after: ${IDENTITY_AUTHORITY_PUBLICATION_REPUBLISH_AFTER:P300D}
   # Generation-1 placement records and the shadow comparison (ADM-008 Phase 4). Every flag is off by
   # default and the feature is inert until one is turned on: no scheduler is started, no record is
   # signed, no MAS is read and no new metric series appears. There is deliberately no flag that serves

@@ -633,6 +633,79 @@ public class IdentityServiceProperties {
         @Valid
         @NotNull
         private NotificationProperties notifications = new NotificationProperties();
+
+        /** Publishing the settled chain head to the transparency log (ADM-009 decision 12). */
+        @Valid
+        @NotNull
+        private final PublicationProperties publication = new PublicationProperties();
+    }
+
+    /**
+     * Publishing the settled authority chain head as the {@code ACCOUNT_AUTHORITY} leaf ADM-009
+     * decision 12 reserves.
+     *
+     * <p>A separate switch from {@code identity.authority.enabled}, deliberately, so the chain can run for
+     * as long as it takes to validate it while nothing is written to federation state. With this off the
+     * chain behaves exactly as it does today: no head object is signed, no resolver is contacted, and no
+     * publication row exists. Decision 12 says the gap is a missing publication rather than a missing
+     * signature, and this is the switch that closes it, one environment at a time.
+     *
+     * <p>Turning it on is refused at startup unless the homeserver it publishes under is named, this
+     * deployment holds that homeserver's roster membership key, and the resolver is configured:
+     * {@code AuthorityPublicationStartupCheck}. Rollback is turning it back off, with the table left in
+     * place.
+     */
+    @Getter
+    @Setter
+    public static class PublicationProperties {
+
+        /**
+         * Master switch. Off by default; while it is false nothing is signed and nothing is sent.
+         */
+        private boolean enabled = false;
+
+        /**
+         * Base URL of the gua-resolver that holds the published heads.
+         *
+         * <p>Its own value rather than {@code identity.placement.resolver-base-url}, even though both
+         * point at the same service, so the two features stay independently deployable and one rollback
+         * cannot silently disable the other. Never {@code identity.resolver.*}: that namespace belonged to
+         * the removed directory-publishing client (ADM-001 L1b).
+         */
+        private String resolverBaseUrl = "";
+
+        /**
+         * The federation roster id of the homeserver whose chains this deployment publishes.
+         *
+         * <p>Named explicitly rather than derived per account. The head is an assertion by the homeserver
+         * that stores the chain, and the only homeserver this deployment can honestly assert for is one
+         * whose membership key it holds; a value guessed from a local routing row would put a roster id
+         * inside a signed object on the strength of state that row is allowed to be stale about. Empty by
+         * default, and startup refuses publishing without it.
+         */
+        private String homeserverId = "";
+
+        /**
+         * Validity of a head object this service issues. Capped at the 400 days
+         * {@code AuthorityHeadRecordCodec.MAX_VALIDITY} fixes.
+         *
+         * <p>It is what turns a homeserver that stops publishing into a visible stale state in the client
+         * rather than into silence. It does not make withholding detectable, which needs the
+         * non-membership proof ADM-005 owns.
+         */
+        @NotNull
+        private Duration headValidity = Duration.ofDays(400);
+
+        /**
+         * Age at which a still-valid head is re-issued, so a long-quiet account's attestation never
+         * reaches its expiry.
+         *
+         * <p>Checked on the same lazy path settlement runs on, never on a timer, so an account with no
+         * transitions costs one extra leaf per interval and nothing in between. Shorter than
+         * {@link #headValidity} or startup refuses it.
+         */
+        @NotNull
+        private Duration republishAfter = Duration.ofDays(300);
     }
 
     /**
