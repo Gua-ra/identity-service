@@ -68,10 +68,23 @@ public class AuthorityApprovalService {
      *
      * <p>At most three live per account, and a code unique among them, because the code is what a reader
      * compares: two live approvals showing the same four characters would make the comparison meaningless.
+     *
+     * <p><b>The digest is derived here, from the action, and never taken from the caller.</b> The device
+     * describes the action to the reader from the action id and signs over the digest, so two independent
+     * caller-chosen values meant the sentence on the screen and the bytes in the signature were related by
+     * nothing at all. Today nothing can spend such a signature, because {@link #sign} verifies and stores
+     * nothing; the first consumer of one would inherit a signature over bytes a malicious page chose while
+     * the device showed a sentence that page also chose, which is a takeover at that point. The invariant is
+     * cheaper to hold now than to add later.
      */
-    public Started start(Resolved account, String actionId, String actionDigestB64, Instant now) {
+    public Started start(Resolved account, String actionId, Instant now) {
         policy.requireEnabled();
-        byte[] actionDigest = decode(actionDigestB64, AuthorityRecord.HASH_LENGTH, "an action digest");
+        if (!StringUtils.hasText(actionId)) {
+            throw new AuthorityTransitionException(HttpStatus.BAD_REQUEST, "authority_approval_invalid",
+                    "an approval names the action it is for");
+        }
+        String action = actionId.trim();
+        byte[] actionDigest = digestOf(action);
 
         List<Approval> live = live(account, now);
         if (live.size() >= policy.maxLiveApprovals()) {
@@ -89,7 +102,7 @@ public class AuthorityApprovalService {
         Instant expiresAt = now.plus(policy.approvalTtl());
 
         String approvalId = encode(id);
-        String value = String.join("|", account.reference(), approvalId, code, actionId == null ? "" : actionId,
+        String value = String.join("|", account.reference(), approvalId, code, action,
                 encode(actionDigest), encode(challenge), Long.toString(expiresAt.getEpochSecond()));
         redisTemplate.opsForValue().set(KEY_PREFIX + approvalId, value, policy.approvalTtl());
         redisTemplate.opsForSet().add(INDEX_PREFIX + account.reference(), approvalId);
@@ -179,6 +192,22 @@ public class AuthorityApprovalService {
             }
         }
         throw new IllegalStateException("could not mint a distinct approval code");
+    }
+
+    /**
+     * The canonical digest of an action: SHA-256 over the action id's UTF-8 bytes.
+     *
+     * <p>One derivation, on the server, so the sentence the device shows and the bytes it signs are the same
+     * action by construction rather than by two callers agreeing. A device that wants to check it recomputes
+     * it from the action id it was given.
+     */
+    static byte[] digestOf(String actionId) {
+        try {
+            return java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(actionId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (java.security.NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 unavailable in this JVM", ex);
+        }
     }
 
     private static AuthorityTransitionException refused() {

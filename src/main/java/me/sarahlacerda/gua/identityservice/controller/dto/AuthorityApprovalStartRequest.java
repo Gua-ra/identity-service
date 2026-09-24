@@ -8,19 +8,21 @@ import io.swagger.v3.oas.annotations.media.Schema;
 /**
  * Starts an approval for an authority-sensitive action a browser session wants (ADM-009 decision 6).
  *
- * <p>The digest is what makes the approval specific, and it is what the authority device describes in the
+ * <p>The action is what makes the approval specific, and it is what the authority device describes in the
  * reader's own words on a screen the page does not control. A malicious page can reach this endpoint; what it
  * cannot reach is the signature.
+ *
+ * <p>There is deliberately no {@code actionDigest} field. The digest the device signs over is derived from
+ * the action by the server, because two caller-chosen values would let the sentence shown to the reader and
+ * the bytes covered by the signature be different actions.
  */
 @Schema(description = "Start an approval a browser session cannot grant itself")
 public class AuthorityApprovalStartRequest {
 
-    @Schema(description = "Opaque action id, for the device to describe the action")
-    private String action;
-
     @NotBlank
-    @Schema(description = "SHA-256 of the exact action, base64url", requiredMode = Schema.RequiredMode.REQUIRED)
-    private String actionDigest;
+    @Schema(description = "Opaque action id, which the device describes to the reader and whose digest it "
+            + "signs over", requiredMode = Schema.RequiredMode.REQUIRED)
+    private String action;
 
     public String getAction() {
         return action;
@@ -28,13 +30,5 @@ public class AuthorityApprovalStartRequest {
 
     public void setAction(String action) {
         this.action = action;
-    }
-
-    public String getActionDigest() {
-        return actionDigest;
-    }
-
-    public void setActionDigest(String actionDigest) {
-        this.actionDigest = actionDigest;
     }
 }
