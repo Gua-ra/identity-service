@@ -459,6 +459,27 @@ class AccountAuthorityTransitionTest {
     }
 
     @Test
+    void anActiveDeviceExtendsARecoveryWindowOnceAndNotTwice() {
+        rootTheAccount();
+        AccountAuthorityService.Submitted recovery = recoverWithTheCommittedKey();
+        Instant firstEffectiveAt = head().getPendingEffectiveAt();
+
+        // Decision 7: an active key an intruder may hold is not allowed to be the veto of a recovery signed by
+        // the key the account committed for exactly this. It gets one extension and the notification.
+        opposeAs(firstDevice, recovery.recordHash());
+        Instant extended = head().getPendingEffectiveAt();
+        assertThat(extended).isEqualTo(firstEffectiveAt.plus(Duration.ofHours(72)));
+        assertThat(head().hasPending()).isTrue();
+        assertThat(head().isPendingExtended()).isTrue();
+
+        // And not a second one. Uncounted, the same objection postpones the recovery forever, which is the
+        // outcome L13.3 refuses to hand a possibly stolen device.
+        assertThat(refusalFrom(() -> opposeAs(firstDevice, recovery.recordHash())))
+                .isEqualTo("authority_extension_spent");
+        assertThat(head().getPendingEffectiveAt()).isEqualTo(extended);
+    }
+
+    @Test
     void theCooldownAnObjectionWritesRefusesThatShapeAndLeavesTheOthersAlone() {
         rootTheAccount();
         grantSecondDevice();

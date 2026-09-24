@@ -242,6 +242,23 @@ public class AuthorityPolicy {
         }
     }
 
+    /**
+     * Refuses a second extension of the same window (ADM-009 decision 7).
+     *
+     * <p>Decision 7 gives an active device exactly one thing against a recovery signed by the committed
+     * recovery authority key: the window is extended once and the notification raised, and nothing more. One
+     * is a bound, not a description of a single call, and nothing else here bounds it. An Oppose costs no
+     * factor and no backoff, and an extension changes nothing the staleness check looks at, so an uncounted
+     * extension is a veto by postponement for a holder of any active key: the same outcome L13.3 refuses to
+     * hand the possibly stolen device.
+     */
+    public void requireExtensionUnspent(boolean alreadyExtended) {
+        if (alreadyExtended) {
+            throw new AuthorityTransitionException(HttpStatus.CONFLICT, "authority_extension_spent",
+                    "This step has already been postponed once. It cannot be postponed again.");
+        }
+    }
+
     /** Whether this opposition, counted from one, has to present a factor. */
     public boolean oppositionNeedsStepUp(int oppositionsAlreadyMade) {
         return oppositionsAlreadyMade >= 1;

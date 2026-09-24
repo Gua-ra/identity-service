@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS account_authority_head (
     cooldown_until       TIMESTAMP WITH TIME ZONE,
     -- V17
     cooldown_magic       VARCHAR(4),
+    pending_extended     BOOLEAN     NOT NULL DEFAULT FALSE,
     updated_at           TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );
 

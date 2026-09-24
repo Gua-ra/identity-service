@@ -65,6 +65,18 @@ public class AuthorityChainHead {
     @Column(name = "pending_effective_at")
     private Instant pendingEffectiveAt;
 
+    /**
+     * Whether the pending record's window has already been extended once (ADM-009 decision 7).
+     *
+     * <p>Counted, because "extends the window once" is the whole of what an active device may do to a recovery
+     * signed by the committed recovery authority key. Uncounted, the same objection was re-submittable
+     * indefinitely: nothing an extension changes is part of the staleness check, an Oppose asks for no factor,
+     * and no backoff is charged for one, so a thief holding every device could postpone the owner's recovery
+     * forever, which is the outcome L13.3's refusal to make the active key the veto exists to prevent.
+     */
+    @Column(name = "pending_extended", nullable = false)
+    private boolean pendingExtended;
+
     @Column(name = "cooldown_until")
     private Instant cooldownUntil;
 
@@ -125,6 +137,7 @@ public class AuthorityChainHead {
         pendingMagic = magic;
         pendingRank = rank;
         pendingEffectiveAt = effectiveAt;
+        pendingExtended = false;
     }
 
     /** Opens the cooldown one cancelled record's shape owes, per ADM-009 decision 4's bounds. */
@@ -139,5 +152,6 @@ public class AuthorityChainHead {
         pendingMagic = null;
         pendingRank = null;
         pendingEffectiveAt = null;
+        pendingExtended = false;
     }
 }

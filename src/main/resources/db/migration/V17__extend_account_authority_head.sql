@@ -12,3 +12,11 @@
 -- each time, while the intruder who opened the cancelled record paid only their own doubling backoff.
 ALTER TABLE account_authority_head
     ADD COLUMN IF NOT EXISTS cooldown_magic VARCHAR(4);
+
+-- Whether the pending record's window has already been extended once (decision 7). An active device's
+-- opposition to a recovery signed by the committed recovery authority key extends the window once and raises
+-- the notification, and nothing more. Nothing counted the one, and nothing else bounds it: an Oppose costs no
+-- factor and no backoff, and no part of the staleness check changes when a window moves, so the same
+-- objection was re-submittable until the account was postponed out of its own recovery.
+ALTER TABLE account_authority_head
+    ADD COLUMN IF NOT EXISTS pending_extended BOOLEAN NOT NULL DEFAULT FALSE;

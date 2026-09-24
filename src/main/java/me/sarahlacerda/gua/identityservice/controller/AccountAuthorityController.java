@@ -188,7 +188,8 @@ public class AccountAuthorityController {
             @ApiResponse(responseCode = "403", description = "authority_signer_refused, "
                     + "authority_device_quarantined, authority_opposition_refused or "
                     + "authority_challenge_invalid", content = @Content),
-            @ApiResponse(responseCode = "409", description = "authority_opposition_stale or "
+            @ApiResponse(responseCode = "409", description = "authority_opposition_stale, "
+                    + "authority_extension_spent: this window has already been postponed once, or "
                     + "authority_account_mismatch", content = @Content),
             @ApiResponse(responseCode = "503", description = "authority_disabled", content = @Content)
     })
