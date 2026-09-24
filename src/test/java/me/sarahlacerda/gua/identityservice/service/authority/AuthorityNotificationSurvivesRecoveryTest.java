@@ -145,7 +145,8 @@ class AuthorityNotificationSurvivesRecoveryTest {
 
         policy = new AuthorityPolicy(properties, userSecurityService);
         accounts = new AuthorityAccounts(genesisRepository);
-        challenges = new AuthorityChallengeService(challengeRepository, policy);
+        challenges = new AuthorityChallengeService(challengeRepository, policy,
+                new AuthorityChallengeBurn(challengeRepository));
         // The web-sheet step-up is a real service over a mocked repository: this test never opens a sheet, so
         // it has nothing to consume, and the native path is the one under test here.
         AuthorityStepUpService stepUps = new AuthorityStepUpService(passkeyService, userSecurityService, policy,

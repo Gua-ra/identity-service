@@ -40,7 +40,8 @@ class AuthorityChallengeServiceTest {
         repository = new InMemoryChallenges();
         IdentityServiceProperties properties = new IdentityServiceProperties();
         properties.getAuthority().setEnabled(true);
-        challenges = new AuthorityChallengeService(repository, new AuthorityPolicy(properties, null));
+        challenges = new AuthorityChallengeService(repository, new AuthorityPolicy(properties, null),
+                new AuthorityChallengeBurn(repository));
         now = Instant.parse("2026-09-19T12:00:00Z");
     }
 
