@@ -57,6 +57,21 @@ class PlacementRecordsNotServedGuardTest {
             "PlacementShadowReconciler", "PlacementAccountScanner", "PlacementShadowResult",
             "service.placement");
 
+    /**
+     * The one name a file outside this package may reach for, and it is not a record.
+     *
+     * <p>{@code RosterMembershipKeys} holds and parses a homeserver's roster membership signing key. Two
+     * features sign with that key: a generation-1 placement record (ADM-008 decision 7) and a published
+     * authority chain head (ADM-009 decision 12). It lives beside the configuration it reads and beside
+     * {@code FederationIds}, which the mapping guard below requires to have exactly one implementation, so a
+     * second copy of either would be the drift both guards exist to prevent.
+     *
+     * <p>It is a key, not a record, and reaching it says nothing about where an account lives. The
+     * routing-and-login half of this guard is deliberately not relaxed: those files may not name it either,
+     * which {@link #theOnlySharedNameIsAKeyAndTheRoutingFilesStillCannotReachIt()} pins.
+     */
+    private static final String SHARED_KEY_HOLDER = "RosterMembershipKeys";
+
     @Test
     void noRoutingOrLoginPathFileReachesAPlacementRecord() throws IOException {
         List<String> offenders = new ArrayList<>();
@@ -168,6 +183,10 @@ class PlacementRecordsNotServedGuardTest {
                 continue;
             }
             for (String line : codeLines(file)) {
+                if (line.contains(SHARED_KEY_HOLDER)) {
+                    // The shared signing key, not a record. See SHARED_KEY_HOLDER.
+                    continue;
+                }
                 for (String type : PLACEMENT_RECORD_TYPES) {
                     if (line.contains(type)) {
                         offenders.add(file.getFileName() + ": " + line);
@@ -179,6 +198,33 @@ class PlacementRecordsNotServedGuardTest {
         // The named-file guard above catches a rename or a deletion but cannot catch a routing file
         // nobody has written yet. This one holds for every file that will ever be added.
         assertThat(offenders).isEmpty();
+    }
+
+    @Test
+    void theOnlySharedNameIsAKeyAndTheRoutingFilesStillCannotReachIt() throws IOException {
+        List<String> routingOffenders = new ArrayList<>();
+        List<String> reachers = new ArrayList<>();
+        for (Path file : mainSources()) {
+            String name = file.getFileName().toString();
+            String path = file.toString();
+            boolean ownsTheTypes = path.contains("service" + java.io.File.separator + "placement");
+            for (String line : codeLines(file)) {
+                if (!line.contains(SHARED_KEY_HOLDER)) {
+                    continue;
+                }
+                if (ROUTING_AND_LOGIN_PATH.contains(name)) {
+                    routingOffenders.add(name + ": " + line);
+                }
+                if (!ownsTheTypes) {
+                    reachers.add(name);
+                }
+            }
+        }
+
+        // The exemption above is one name wide. Nothing that decides where an account lives may reach even
+        // that, and the files that do reach it are named here so a third one is a deliberate decision.
+        assertThat(routingOffenders).isEmpty();
+        assertThat(reachers).containsOnly("AuthorityHeadSigner.java");
     }
 
     @Test
