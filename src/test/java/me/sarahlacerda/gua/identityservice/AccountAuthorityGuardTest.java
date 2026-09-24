@@ -9,6 +9,13 @@ import java.util.List;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockFilterChain;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.security.core.context.SecurityContextHolder;
+
+import me.sarahlacerda.gua.identityservice.security.OidcAccessTokenAuthenticationFilter;
+import me.sarahlacerda.gua.identityservice.security.OidcAccessTokenValidator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -446,6 +453,61 @@ class AccountAuthorityGuardTest {
         // checkable at all.
         assertThat(methodBody(authority, "public AuthorityChallengeService.Minted challenge("))
                 .contains("stepUps.accept(userId, purpose, sessionHash,");
+    }
+
+    /**
+     * A caller with a login-session cookie and no access token cannot reach an authority endpoint at all.
+     *
+     * <p>This is the guard the native-session rule leans on, and it has to be here rather than in
+     * {@code AuthorityPolicy}, because the policy cannot see it. The rule there can only read the client id
+     * from the verified audience of a token, and both apps authenticate with homeserver-issued tokens that
+     * name no client of ours: it therefore cannot distinguish an app from a page, and its javadoc says so.
+     *
+     * <p>What does distinguish them is this: every authority endpoint is bearer-only.
+     * {@code OidcAccessTokenAuthenticationFilter} answers 401 to a request with no
+     * {@code Authorization: Bearer} header and puts nothing in the security context, and the web step-up sheet
+     * holds a Redis login session and its double-submit CSRF cookie under {@code /login/**} rather than an
+     * access token. So the page that runs the sheet cannot call the chain, whatever
+     * {@code identity.authority.native-client-ids} holds, and no authority path is in the open lists that
+     * would let it try.
+     */
+    @Test
+    void aCookieAuthenticatedCallerCannotReachAnAuthorityEndpoint() throws Exception {
+        OidcAccessTokenValidator validator = org.mockito.Mockito.mock(OidcAccessTokenValidator.class);
+        OidcAccessTokenAuthenticationFilter filter =
+                new OidcAccessTokenAuthenticationFilter(validator, List.of());
+
+        for (String path : new String[] { "/account/authority/adopt", "/account/authority/oppose",
+                "/account/authority/oppose/record", "/account/authority/device/grant",
+                "/account/authority/device/revoke", "/account/authority/recover",
+                "/account/authority/challenge", "/account/security-notifications",
+                "/account/security-notifications/remove" }) {
+            MockHttpServletRequest request = new MockHttpServletRequest("POST", path);
+            // Exactly what the sheet holds: the login session cookie and the CSRF token it double-submits.
+            request.setCookies(new jakarta.servlet.http.Cookie("gua_login_session", "a-live-login-session"));
+            request.addHeader("X-CSRF-Token", "a-live-csrf-token");
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            MockFilterChain chain = new MockFilterChain();
+
+            filter.doFilter(request, response, chain);
+
+            assertThat(response.getStatus()).as("%s", path).isEqualTo(401);
+            assertThat(chain.getRequest()).as("%s reached the handler", path).isNull();
+            assertThat(SecurityContextHolder.getContext().getAuthentication()).as("%s", path).isNull();
+            org.mockito.Mockito.verifyNoInteractions(validator);
+        }
+        SecurityContextHolder.clearContext();
+
+        // And no authority path is let past that filter, or past authorization, by the open lists. The one
+        // cookie-bearing surface is /login/**, which is where the sheet lives and which holds no chain
+        // endpoint.
+        String security = read(Path.of("src", "main", "java", "me", "sarahlacerda", "gua", "identityservice",
+                "config", "SecurityConfig.java"));
+        for (String list : new String[] { "OPEN_POST_ENDPOINTS", "RETIRED_POST_ENDPOINTS", "OPEN_GET_ENDPOINTS" }) {
+            String body = security.substring(security.indexOf(list), security.indexOf(";", security.indexOf(list)));
+            assertThat(body).as("%s", list).doesNotContain("/account/authority")
+                    .doesNotContain("/account/security-notifications");
+        }
     }
 
     private static List<Path> authorityFiles() throws IOException {

@@ -97,35 +97,56 @@ public class AuthorityPolicy {
     // --- The native-session rule ---------------------------------------------
 
     /**
-     * Refuses a transition submitted by anything but the native app (ADM-009 decision 4 step 1).
+     * Refuses a caller that is not one of this deployment's native clients, as far as a token can say
+     * (ADM-009 decision 4 step 1).
      *
-     * <p>The authority key lives in the platform keychain or keystore, and the web profile step runs inside
-     * an {@code ASWebAuthenticationSession} or a Chrome Custom Tab with no channel to the native signer.
-     * That is ADM-008:143, stated here as a rule rather than discovered again at the endpoint.
+     * <h2>What this rule proves</h2>
      *
-     * <p>The client id comes from the verified audience of the access token, never from the forwarded
-     * downstream-client marker: that marker is client-asserted, and the beta gate that uses it says so.
-     * With {@code identity.authority.native-client-ids} empty every caller is refused, which is the safe
-     * direction: a deployment that has not said which client is its app has not earned the right to have
-     * one of them root an account.
+     * <p>That the caller presented a bearer access token this service accepted, and that where the token
+     * names a registered client of ours, that client is listed in
+     * {@code identity.authority.native-client-ids}. The client id comes from the verified audience of the
+     * token, never from the forwarded downstream-client marker: that marker is client-asserted, and the beta
+     * gate that uses it says so.
+     *
+     * <p>Being bearer-only is the part that keeps the web sheet out. Every endpoint here is reached through
+     * {@code OidcAccessTokenAuthenticationFilter}, which answers 401 to any request without an
+     * {@code Authorization: Bearer} header, and the sheet holds a Redis login session and its double-submit
+     * CSRF cookie under {@code /login/**} rather than an access token. So no page that has only that session
+     * can reach an authority endpoint at all, whatever this list holds, which is what
+     * {@code AccountAuthorityGuardTest} pins.
+     *
+     * <h2>What it does not prove</h2>
+     *
+     * <p>That the caller is the native app. A token this service did not mint carries no client of ours at
+     * all: both apps authenticate with MAS-issued tokens, which {@code OidcAccessTokenValidator} validates
+     * through the homeserver's whoami and turns into a principal with a null client id. Refusing an absent
+     * client id therefore refused every real phone on every deployment, whatever the list held, and made the
+     * whole feature unreachable rather than native-only. An absent client id is accepted here and the
+     * allowlist is an additional constraint where a client id exists.
+     *
+     * <p>What actually keeps authority out of a browser is not this rule. It is that an authority record is
+     * signed by a key in the platform keychain or keystore, generated there, non-synced, with no channel to
+     * a page (ADM-008:143), and that a web session's only reach into the chain is to create a pending
+     * approval an authority device then signs on a screen the page does not control (decision 6).
      */
     public void requireNativeSession(Optional<String> clientId) {
-        List<String> native_ = authority().getNativeClientIds();
-        if (clientId.isEmpty() || !native_.contains(clientId.get())) {
+        if (!mayHoldAuthority(clientId)) {
             throw new AuthorityTransitionException(HttpStatus.FORBIDDEN, "authority_native_session_required",
                     "This step must be taken in the app.");
         }
     }
 
     /**
-     * The browser holds no authority, ever (ADM-009 decision 6).
+     * Whether a token naming this client may act on the chain (ADM-009 decision 6).
      *
-     * <p>Stated as its own method so the rule has a name a reader can find. There is no flag that lets a
-     * web session sign an authority record, and a web session's only reach into the chain is to create a
-     * pending approval an authority device then signs on a screen the page does not control.
+     * <p>The same question {@link #requireNativeSession(Optional)} refuses on, so the two cannot drift. True
+     * when the token named no client of ours, which is every homeserver-issued token and therefore both apps,
+     * and true when it named one this deployment lists as a native client. False for any other registered
+     * client of ours, which is where a web client of this service would be.
      */
     public boolean mayHoldAuthority(Optional<String> clientId) {
-        return clientId.filter(authority().getNativeClientIds()::contains).isPresent();
+        List<String> native_ = authority().getNativeClientIds();
+        return clientId.isEmpty() || native_.contains(clientId.get());
     }
 
     // --- The step-up ----------------------------------------------------------
