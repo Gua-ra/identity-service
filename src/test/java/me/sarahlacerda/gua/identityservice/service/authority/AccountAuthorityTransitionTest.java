@@ -95,6 +95,7 @@ class AccountAuthorityTransitionTest {
     private AuthorityPolicy policy;
     private AuthorityChallengeService challenges;
     private AuthorityStepUpService stepUps;
+    private me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditLogger auditLogger;
     private AccountAuthorityService service;
     private AuthorityAccounts accounts;
     private MutableClock clock;
@@ -120,11 +121,14 @@ class AccountAuthorityTransitionTest {
         // Mocked, and never asked for anything the other classes cover: what this class needs from it is
         // whether an opposition was asked to present a factor at all.
         stepUps = org.mockito.Mockito.mock(AuthorityStepUpService.class);
+        // A spy rather than a mock: the real logger's behaviour is wanted, and what is asserted is which
+        // entry an accepted transition writes.
+        auditLogger = org.mockito.Mockito.spy(new LoggingSecurityAuditLogger());
         channel = new StubChannel();
         backoff = new NoBackoff(policy);
         service = new AccountAuthorityService(policy, accounts, challenges, stepUps, headRepository, recordRepository,
                 deviceRepository, candidateRepository, new AuthorityNotifications(List.of(channel)),
-                backoff, AuthorityHeadPublisherFixtures.off(properties), new LoggingSecurityAuditLogger(),
+                backoff, AuthorityHeadPublisherFixtures.off(properties), auditLogger,
                 clock);
 
         BootstrapGenesis genesis = BootstrapGenesisCodec.mint();
@@ -1091,5 +1095,23 @@ class AccountAuthorityTransitionTest {
             charged.add(authorizingKeyB64);
             return now;
         }
+    }
+
+    @Test
+    void anAcceptedAdoptionIsAuditedAsAcceptedRatherThanAsAFailedStepUp() {
+        AccountAuthorityService.Submitted submitted = adopt();
+
+        // It used to be reported through reauthFailed, so the audit trail said "Reauth/step-up failed" at
+        // WARN for every accepted transition. That inverts the one record a security review reads.
+        org.mockito.Mockito.verify(auditLogger).authorityTransitionAccepted(
+                org.mockito.ArgumentMatchers.eq(USER),
+                org.mockito.ArgumentMatchers.eq("ADOPT_ROOT"),
+                org.mockito.ArgumentMatchers.eq(submitted.seq()),
+                org.mockito.ArgumentMatchers.eq(true),
+                org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verify(auditLogger, org.mockito.Mockito.never())
+                .reauthFailed(org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.contains("_ACCEPTED"),
+                        org.mockito.ArgumentMatchers.any());
     }
 }
