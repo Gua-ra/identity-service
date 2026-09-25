@@ -160,9 +160,7 @@ public class AuthorityApnsTransport implements AuthorityPushTransport {
         }
         ApnsProperties apns = apns();
         try {
-            byte[] pkcs8 = Base64.getDecoder().decode(apns.getPrivateKeyPkcs8Base64().replaceAll("\\s", ""));
-            ECPrivateKey key = (ECPrivateKey) KeyFactory.getInstance("EC")
-                    .generatePrivate(new PKCS8EncodedKeySpec(pkcs8));
+            ECPrivateKey key = (ECPrivateKey) AuthorityPushKeys.load("EC", apns.getPrivateKeyPkcs8Base64());
             SignedJWT jwt = new SignedJWT(
                     new JWSHeader.Builder(JWSAlgorithm.ES256)
                             .keyID(apns.getKeyId())

@@ -45,6 +45,39 @@ class AuthorityNotificationGateTest {
     }
 
     @Test
+    void aTransportWhoseKeyDoesNotLoadRefusesToStart() throws Exception {
+        // The failure this rule exists for. A key stored as base64 of its PEM file rather than of its DER
+        // left both transports counting as channels: the deployment started, the first ADOPT_ROOT went
+        // pending, and the send failed with the window already running. Configured has to mean signable.
+        AuthorityProperties authority = enabledWithApnsKey("bm90LWEta2V5");
+
+        assertThatThrownBy(() -> AuthorityNotificationGate.validate(authority, true))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("apns.private-key-pkcs8-base64")
+                .hasMessageContaining("cannot sign announces nothing");
+    }
+
+    @Test
+    void aTransportWhoseKeyIsThePemFileStarts() throws Exception {
+        java.security.KeyPair pair = java.security.KeyPairGenerator.getInstance("EC").generateKeyPair();
+        StringBuilder pem = new StringBuilder("-----BEGIN PRIVATE KEY-----\n")
+                .append(java.util.Base64.getMimeEncoder().encodeToString(pair.getPrivate().getEncoded()))
+                .append("\n-----END PRIVATE KEY-----\n");
+        String configured = java.util.Base64.getEncoder()
+                .encodeToString(pem.toString().getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+
+        AuthorityNotificationGate.validate(enabledWithApnsKey(configured), true);
+    }
+
+    private static AuthorityProperties enabledWithApnsKey(String configured) {
+        AuthorityProperties authority = new AuthorityProperties();
+        authority.setEnabled(true);
+        authority.getNotifications().getApns().setBaseUrl("https://api.push.apple.com");
+        authority.getNotifications().getApns().setPrivateKeyPkcs8Base64(configured);
+        return authority;
+    }
+
+    @Test
     void theShippedNotifierIsNotSuchAChannelAndSaysSo() {
         assertThat(new LoggedAuthorityNotifier().isOutOfBand()).isFalse();
     }
