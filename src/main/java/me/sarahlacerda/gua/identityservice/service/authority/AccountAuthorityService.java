@@ -618,7 +618,7 @@ public class AccountAuthorityService {
             // empty. The notification names the device label and the time the transition will complete.
             notifications.pending(userId, record.type().name(), record.label(), effectiveAt);
         }
-        auditLogger.reauthFailed(userId, "AUTHORITY_" + purpose + "_ACCEPTED", null);
+        auditLogger.authorityTransitionAccepted(userId, record.type().name(), seq, !immediate, effectiveAt);
         log.info("Authority transition {} accepted at seq {} (pending={})", record.type(), seq, !immediate);
 
         return new Submitted(seq, !immediate, effectiveAt.getEpochSecond(), record.hashHex());
