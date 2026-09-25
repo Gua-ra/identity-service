@@ -128,7 +128,8 @@ public class AuthorityApnsTransport implements AuthorityPushTransport {
     /** The alert, and nothing else: no room, no message, no phone number, no account identifier. */
     private static String payload(String title, String body) {
         return "{\"aps\":{\"alert\":{\"title\":" + json(title) + ",\"body\":" + json(body)
-                + "},\"sound\":\"default\",\"interruption-level\":\"time-sensitive\"}}";
+                + "},\"sound\":\"default\",\"interruption-level\":\"time-sensitive\"},\""
+                + AuthorityPushTransport.ALERT_MARKER + "\":\"1\"}";
     }
 
     private static String json(String value) {

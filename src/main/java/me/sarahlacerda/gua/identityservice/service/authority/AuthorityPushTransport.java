@@ -12,6 +12,19 @@ import me.sarahlacerda.gua.identityservice.domain.AuthorityNotificationRegistrat
  */
 public interface AuthorityPushTransport {
 
+    /**
+     * The key both transports put in the payload beside the alert, so a client can tell one of these from a
+     * room notification and show it itself.
+     *
+     * <p>It exists because the alert was invisible in the case it matters most. Both push services hand a
+     * message to a foregrounded app rather than to the notification tray, and both clients route what they
+     * receive through a handler that expects a Matrix push and discards anything else. So an owner looking
+     * at their phone, which is exactly who a "something is asking for authority over your account" alert is
+     * for, saw nothing at all. Seen on a real device on dev: the message arrived two seconds after the
+     * transition was accepted and was dropped as "Invalid data received".
+     */
+    String ALERT_MARKER = "gua_authority_alert";
+
     /** Which registrations this transport addresses. */
     Platform platform();
 
