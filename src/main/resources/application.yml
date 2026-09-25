@@ -70,10 +70,11 @@ identity:
   # holder is never told it is running.
   authority:
     enabled: ${IDENTITY_AUTHORITY_ENABLED:false}
-    # Adoption outside dev waits on ADM-002 Q6 (ADM-009 gate 3): under framework 0x01 the recovery
-    # authority key shares the device store with the key it would veto. Dev sets this true and treats
+    # Whether an adoption may run here at all. Off everywhere by default and on in dev only: adoption
+    # outside dev waits on ADM-002 Q6 (ADM-009 gate 3), because under framework 0x01 the recovery
+    # authority key shares the device store with the key it would veto. Dev turns this on and treats
     # the accounts it roots as disposable.
-    production-adoption: ${IDENTITY_AUTHORITY_PRODUCTION_ADOPTION:false}
+    adoption-permitted: ${IDENTITY_AUTHORITY_ADOPTION_PERMITTED:false}
     # The opposition window, which is also the quarantine a granted device serves. Startup refuses
     # anything under PT24H without allow-short-windows-for-testing.
     opposition-window: ${IDENTITY_AUTHORITY_OPPOSITION_WINDOW:PT72H}

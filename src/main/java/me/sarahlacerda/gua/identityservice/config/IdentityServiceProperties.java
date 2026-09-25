@@ -557,14 +557,14 @@ public class IdentityServiceProperties {
         private boolean enabled = false;
 
         /**
-         * Whether adoption may run outside dev.
+         * Whether an adoption may run on this deployment at all.
          *
-         * <p>Off by default, which ADM-009 gate 3 requires: production adoption stays refused until
+         * <p>Off by default, which ADM-009 gate 3 requires: adoption stays refused until
          * ADM-002 Q6 answers the independence question, because under framework 0x01 the recovery
          * authority key shares the device store with the key it would veto. Dev may adopt behind this
          * flag and treats those accounts as disposable.
          */
-        private boolean productionAdoption = false;
+        private boolean adoptionPermitted = false;
 
         /**
          * The opposition window of ADM-009 decision 4, which is also the quarantine of decision 5.

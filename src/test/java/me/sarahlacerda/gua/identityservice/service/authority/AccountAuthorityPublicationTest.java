@@ -141,7 +141,7 @@ class AccountAuthorityPublicationTest {
         clock = new MutableClock(Instant.parse("2026-09-24T12:00:00Z"));
         properties = new IdentityServiceProperties();
         properties.getAuthority().setEnabled(true);
-        properties.getAuthority().setProductionAdoption(true);
+        properties.getAuthority().setAdoptionPermitted(true);
         properties.getAuthority().getNativeClientIds().add(NATIVE_CLIENT);
         HomeserverConfig homeserver = new HomeserverConfig();
         homeserver.setId("primary");

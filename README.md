@@ -289,7 +289,7 @@ Two prerequisites ship with it, because the feature is incoherent without them. 
 | Property | Env | Default | Effect |
 | --- | --- | --- | --- |
 | `identity.authority.enabled` | `IDENTITY_AUTHORITY_ENABLED` | `false` | Master switch. Off: every endpoint answers `503` and no row exists. |
-| `identity.authority.production-adoption` | `IDENTITY_AUTHORITY_PRODUCTION_ADOPTION` | `false` | Allows adoption at all. Off outside dev: under framework `0x01` the recovery key shares the device store with the key it would veto, so this waits on ADM-002 Q6. |
+| `identity.authority.adoption-permitted` | `IDENTITY_AUTHORITY_ADOPTION_PERMITTED` | `false` | Allows adoption at all. Off outside dev: under framework `0x01` the recovery key shares the device store with the key it would veto, so this waits on ADM-002 Q6. |
 | `identity.authority.opposition-window` | `IDENTITY_AUTHORITY_OPPOSITION_WINDOW` | `PT72H` | The opposition window, and the quarantine a granted device serves. |
 | `identity.authority.recovery-window` | `IDENTITY_AUTHORITY_RECOVERY_WINDOW` | `P7D` | ADM-002 D1's delay for framework `0x01`, deliberately not the adoption window. |
 | `identity.authority.challenge-ttl` | `IDENTITY_AUTHORITY_CHALLENGE_TTL` | `PT15M` | How long a challenge, and therefore its step-up, stays spendable. |
@@ -324,7 +324,8 @@ There was a cheaper tier for an install removing its own registration, and it wa
 | `identity.authority.notifications.enabled` | `IDENTITY_AUTHORITY_NOTIFICATIONS_ENABLED` | `false` | The channel's own switch, separate from the chain's, because turning it on means this service starts holding two push credentials it has never held. |
 | `identity.authority.notifications.registration-life` | `IDENTITY_AUTHORITY_NOTIFICATIONS_REGISTRATION_LIFE` | `P180D` | How long a registration counts as a channel with nothing heard from it. Far past any window on purpose. |
 | `identity.authority.notifications.failure-limit` | `IDENTITY_AUTHORITY_NOTIFICATIONS_FAILURE_LIMIT` | `3` | Consecutive permanent transport failures that retire a destination. |
-| `identity.authority.notifications.apns.*` | `IDENTITY_AUTHORITY_APNS_*` | empty | Base URL, key id, team id, the p8 and the app-id-to-topic map. Empty means this transport is not configured. |
+| `identity.authority.notifications.apns.*` | `IDENTITY_AUTHORITY_APNS_*` | empty | Base URL, key id, team id and the p8. Empty means this transport is not configured. |
+| `identity.authority.notifications.apns.topics` | `IDENTITY_AUTHORITY_NOTIFICATIONS_APNS_TOPICS_<APP_ID>` | empty | Maps the app id the client sends to the APNs topic. A map has no placeholder to name its own variable, so the key comes from the variable name itself: `..._TOPICS_GLOBAL_GUA_DEV_IOS_PROD=global.gua.dev` becomes `global.gua.dev.ios.prod -> global.gua.dev`. An unmapped app id is sent as the topic verbatim, which Apple refuses, so `AuthorityEnvironmentBindingTest` pins the name. |
 | `identity.authority.notifications.fcm.*` | `IDENTITY_AUTHORITY_FCM_*` | empty | Base URL, project, service-account email and key, and the token endpoint. Empty means this transport is not configured. |
 
 Two implementation decisions worth stating. APNs is spoken over the JDK's own `HttpClient` because APNs refuses HTTP/1.1 and that client negotiates HTTP/2 by configuration rather than by hope. The FCM bearer is minted with the nimbus library already on this classpath rather than by adding a Google dependency, and it is cached to the expiry the exchange itself stated less a skew; `AuthorityFcmBearerTest` walks a clock across that boundary, because a cache that never refreshes and one that refreshes per send look identical until a token expires in production.
