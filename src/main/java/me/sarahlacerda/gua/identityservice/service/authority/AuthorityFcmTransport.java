@@ -97,6 +97,12 @@ public class AuthorityFcmTransport implements AuthorityPushTransport {
     private static String payload(String token, String title, String body) {
         return "{\"message\":{\"token\":" + json(token)
                 + ",\"notification\":{\"title\":" + json(title) + ",\"body\":" + json(body) + "}"
+                // The marker is what lets a client tell this apart from a Matrix push and show it itself.
+                // Without it the alert is invisible in the one case it matters most: FCM hands a message to
+                // a foregrounded app instead of the tray, and the app's own handler discards anything that
+                // is not a room notification.
+                + ",\"data\":{\"" + AuthorityPushTransport.ALERT_MARKER + "\":\"1\""
+                + ",\"title\":" + json(title) + ",\"body\":" + json(body) + "}"
                 + ",\"android\":{\"priority\":\"HIGH\"}}}";
     }
 
