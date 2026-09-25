@@ -107,7 +107,7 @@ class AccountAuthorityTransitionTest {
         clock = new MutableClock(Instant.parse("2026-09-19T12:00:00Z"));
         properties = new IdentityServiceProperties();
         properties.getAuthority().setEnabled(true);
-        properties.getAuthority().setProductionAdoption(true);
+        properties.getAuthority().setAdoptionPermitted(true);
         properties.getAuthority().getNativeClientIds().add(NATIVE_CLIENT);
 
         // Mocked, and answering "nothing is held", because the two holds have their own unit tests and this

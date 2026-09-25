@@ -60,7 +60,7 @@ class AuthorityPolicyTest {
         assertThat(codeOf(() -> policy.requireAdoptionPermitted()))
                 .isEqualTo("authority_adoption_not_permitted");
 
-        properties.getAuthority().setProductionAdoption(true);
+        properties.getAuthority().setAdoptionPermitted(true);
 
         assertThat(policy.isEnabled()).isTrue();
     }
