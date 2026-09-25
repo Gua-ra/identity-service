@@ -34,7 +34,7 @@ import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
  *
  * <h2>What it owns</h2>
  * <ol>
- * <li>The master switch, and the production-adoption gate.</li>
+ * <li>The master switch, and the adoption-permitted gate.</li>
  * <li>The native-session rule: a session still inside the web view cannot start a transition.</li>
  * <li>The step-up scope and its 15-minute age, which the challenge TTL enforces by construction.</li>
  * <li>The fresh-factor hold on the factor actually presented, and the refusal while the account's last
@@ -88,7 +88,7 @@ public class AuthorityPolicy {
      * it would veto, so an account rooted today cannot be told it has an independent way back.
      */
     public void requireAdoptionPermitted() {
-        if (!authority().isProductionAdoption()) {
+        if (!authority().isAdoptionPermitted()) {
             throw new AuthorityTransitionException(HttpStatus.FORBIDDEN, "authority_adoption_not_permitted",
                     "Adoption is not permitted on this deployment.");
         }
