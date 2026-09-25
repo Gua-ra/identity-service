@@ -109,9 +109,7 @@ public class AuthorityFcmBearer {
 
     private static String assertion(FcmProperties fcm, Instant now) {
         try {
-            byte[] pkcs8 = Base64.getDecoder().decode(fcm.getPrivateKeyPkcs8Base64().replaceAll("\\s", ""));
-            RSAPrivateKey key = (RSAPrivateKey) KeyFactory.getInstance("RSA")
-                    .generatePrivate(new PKCS8EncodedKeySpec(pkcs8));
+            RSAPrivateKey key = (RSAPrivateKey) AuthorityPushKeys.load("RSA", fcm.getPrivateKeyPkcs8Base64());
             SignedJWT jwt = new SignedJWT(
                     new JWSHeader.Builder(JWSAlgorithm.RS256).build(),
                     new JWTClaimsSet.Builder()

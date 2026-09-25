@@ -10,7 +10,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
+import org.springframework.util.StringUtils;
+
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.AuthorityProperties;
+import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.NotificationProperties;
 
 /**
  * Refuses to start a deployment that has the authority chain switched on without the things every window
@@ -70,6 +73,7 @@ public class AuthorityNotificationGate {
                     + "be announced on a channel that is neither the account's phone number nor a session "
                     + "an account recovery revokes, and a log line is not a channel. Refusing to start.");
         }
+        requireLoadableKeys(authority);
         if (authority.getChallengeTtl().compareTo(MAX_CHALLENGE_TTL) > 0) {
             throw new IllegalStateException("identity.authority.challenge-ttl (" + authority.getChallengeTtl()
                     + ") must be at most " + MAX_CHALLENGE_TTL + ". ADM-009 decision 4 step 2 wants a step-up "
@@ -93,4 +97,39 @@ public class AuthorityNotificationGate {
                 + "Shorter windows are for dev only and need "
                 + "identity.authority.allow-short-windows-for-testing=true.");
     }
+    /**
+     * Refuses a transport whose signing key cannot be loaded, at startup rather than at the first alert.
+     *
+     * <p>"Configured" is what the gate above counts, and a credential that does not parse is configured by
+     * that test and useless by every other one. Dev found this the hard way: a key stored as base64 of its
+     * PEM file rather than of its DER left both transports counting as channels, the deployment started,
+     * the first ADOPT_ROOT went pending, and the send failed with the window already running. An alert
+     * nobody can receive is the failure gate 2 exists to prevent, so the key is loaded here, once, while
+     * there is still someone watching a deployment.
+     *
+     * <p>Neither the key nor any part of it reaches the message.
+     */
+    private static void requireLoadableKeys(AuthorityProperties authority) {
+        NotificationProperties notifications = authority.getNotifications();
+        if (StringUtils.hasText(notifications.getApns().getBaseUrl())) {
+            require("EC", notifications.getApns().getPrivateKeyPkcs8Base64(),
+                    "identity.authority.notifications.apns.private-key-pkcs8-base64");
+        }
+        if (StringUtils.hasText(notifications.getFcm().getBaseUrl())) {
+            require("RSA", notifications.getFcm().getPrivateKeyPkcs8Base64(),
+                    "identity.authority.notifications.fcm.private-key-pkcs8-base64");
+        }
+    }
+
+    private static void require(String algorithm, String configured, String property) {
+        try {
+            AuthorityPushKeys.load(algorithm, configured);
+        } catch (RuntimeException ex) {
+            throw new IllegalStateException(property + " does not load as a " + algorithm
+                    + " key (" + ex.getMessage() + "). That transport has a base URL, so it counts as a "
+                    + "channel for ADM-009 gate 2, and a channel that cannot sign announces nothing. "
+                    + "Refusing to start.", ex);
+        }
+    }
+
 }
