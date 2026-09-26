@@ -204,7 +204,12 @@ public class AuthorityAccounts {
             @Schema(description = "The reserved position") long seq,
             @Schema(description = "When it completes if nobody objects") long effectiveAtEpochSeconds,
             @Schema(description = "SHA-256 hex of the pending record, which an opposition names")
-            String recordHash) {
+            String recordHash,
+            @Schema(description = "SHA-256 hex of the record before it, which an Oppose signs over. An "
+                    + "objection takes no slot, so it stands at the opposed record's own seq and prevHash and "
+                    + "is checked against both; this is the only place a device that did not build that record "
+                    + "can learn this value, because placing it made its hash the head")
+            String prevHash) {
     }
 
     /** The five states of ADM-009 decision 10. A statement about keys, not about chain length. */

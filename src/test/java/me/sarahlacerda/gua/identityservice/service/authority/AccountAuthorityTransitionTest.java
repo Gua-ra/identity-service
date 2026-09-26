@@ -743,6 +743,37 @@ class AccountAuthorityTransitionTest {
     }
 
     @Test
+    void aSecondDeviceCanBuildItsObjectionFromTheReadEndpointAlone() {
+        rootTheAccount();
+        grantSecondDevice();
+        clock.advance(Duration.ofHours(73));
+        service.state(USER);
+
+        AccountAuthorityService.Submitted revocation = revokeSecondDevice();
+
+        // Everything below comes from the read endpoint and nothing from the repository, which is the whole
+        // point of this test. The other opposition tests reach into recordRepository for the pending record's
+        // prevHash, and a real second device has no such access: it did not build that record, and placing it
+        // made its own hash the head, so the prevHash an Oppose is checked against is not recoverable from
+        // headHash either. While the response carried no prevHash, "an active device may oppose" was
+        // answerable only by the device that had just acted, which inverts decisions 5 and 7.
+        AuthorityAccounts.AuthorityStateResponse state = service.state(USER);
+        AuthorityAccounts.PendingView pending = state.pending();
+        assertThat(pending).isNotNull();
+        assertThat(pending.recordHash()).isEqualTo(revocation.recordHash());
+        assertThat(pending.prevHash()).isNotNull();
+
+        String challenge = mint(Purpose.OPPOSE);
+        byte[] bytes = AuthorityRecords.opposeFor(reference, hexToBytes(pending.recordHash()),
+                secondDevice.rawPublicKey(), pending.seq(), hexToBytes(pending.prevHash()));
+        service.opposeWithRecord(USER, Optional.of(NATIVE_CLIENT), SESSION, encode(bytes),
+                sign(secondDevice, AuthorityRecordType.OPPOSE, challenge, bytes), challenge);
+
+        assertThat(head().hasPending()).isFalse();
+        assertThat(device(secondDevice.rawPublicKey()).getState()).isEqualTo(AuthorityDevice.State.ACTIVE);
+    }
+
+    @Test
     void anOpposeTakesNoSlotSoTheChainDoesNotMoveOn() {
         rootTheAccount();
         grantSecondDevice();

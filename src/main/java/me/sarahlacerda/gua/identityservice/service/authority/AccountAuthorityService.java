@@ -753,8 +753,17 @@ public class AccountAuthorityService {
 
         PendingView pending = null;
         if (head.hasPending()) {
+            // prevHash comes from the stored record rather than from the head, because the head no longer
+            // holds it: placing the pending record made its own hash the head hash. Without this field the
+            // objection path is unbuildable by the one device it is for. opposeWithRecord checks an Oppose's
+            // seq and prevHash against the opposed record's own, the device that submitted the record knows
+            // them because it built them, and every other device can only read this response. So "an active
+            // device may oppose" was answerable only by the submitter, which inverts decisions 5 and 7: the
+            // device that must be able to say no is precisely the one that did not act.
+            AuthorityChainRecord pendingRecord = requirePending(account, head);
             pending = new PendingView(typeOfMagic(head.getPendingMagic()).name(), head.getPendingSeq(),
-                    head.getPendingEffectiveAt().getEpochSecond(), head.getPendingHash());
+                    head.getPendingEffectiveAt().getEpochSecond(), head.getPendingHash(),
+                    pendingRecord.getPrevHash());
         }
 
         return new AuthorityStateResponse(account.reference(), account.className(),
