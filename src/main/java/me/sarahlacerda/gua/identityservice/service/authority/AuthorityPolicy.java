@@ -243,7 +243,16 @@ public class AuthorityPolicy {
         return authority().getNotifications().getRegistrationLife();
     }
 
-    /** How many consecutive permanent transport failures retire a registration. */
+    /**
+     * How many consecutive failed dispatches retire a registration.
+     *
+     * <p>Not only the permanent ones. A transport that says the destination is gone reaches this limit in one
+     * step; every other failure, including a transient one, counts as one, so this many in a row retires the
+     * row and gate 2 then refuses the account's transitions until an app registers again, which both clients
+     * do on every session start. That is the fail-closed direction on purpose, because the alternative is
+     * running a window whose holder is never told, but it does mean a long outage on one transport costs the
+     * account its channel until an app next starts.
+     */
     public int registrationFailureLimit() {
         return authority().getNotifications().getFailureLimit();
     }
