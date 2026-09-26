@@ -97,7 +97,18 @@ public class AuthorityWebStepUpService {
         policy.requireStepUpSheetPurpose(purpose);
     }
 
-    /** {@link #proved} for the page, which carries the purpose as the name the session was stamped with. */
+    /**
+     * {@link #proved} for the page, which carries the purpose as the name the session was stamped with.
+     *
+     * <p>Annotated in its own right, and that is not redundant. This overload is the only entry point the
+     * hosted sheet has, and the call below is a self-invocation: it reaches the other {@code proved} directly
+     * rather than through the proxy, so the annotation there does not apply and the transaction has to start
+     * here or nowhere. Without it the write path's {@code deleteExpired} throws
+     * {@code InvalidDataAccessApiUsageException: Executing an update/delete query}, the sheet answers 500, and
+     * the page reports a generic passkey failure for a ceremony that in fact verified. Pinned by
+     * {@code AuthorityWebStepUpTransactionTest}, which is the only shape of test that can see it.
+     */
+    @Transactional
     public Instant proved(String userId, String sessionHash, String purposeName, AuthFactor factor,
             Instant factorCreatedAt) {
         return proved(userId, sessionHash, purposeOrRefuse(purposeName), factor, factorCreatedAt);
