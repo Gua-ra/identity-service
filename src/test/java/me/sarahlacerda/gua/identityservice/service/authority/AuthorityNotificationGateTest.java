@@ -58,6 +58,36 @@ class AuthorityNotificationGateTest {
     }
 
     @Test
+    void aStartThatLoadsAKeySaysSo() throws Exception {
+        // The one fact an operator cannot read off the manifest. "IDENTITY_AUTHORITY_APNS_PRIVATE_KEY
+        // is set" and "that value is a key this service can sign with" are different, and only the
+        // second one is a channel. A startup that proves the second silently leaves them guessing.
+        ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(AuthorityNotificationGate.class);
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        ch.qos.logback.core.AppenderBase<ch.qos.logback.classic.spi.ILoggingEvent> capture =
+                new ch.qos.logback.core.AppenderBase<>() {
+                    @Override
+                    protected void append(ch.qos.logback.classic.spi.ILoggingEvent event) {
+                        lines.add(event.getFormattedMessage());
+                    }
+                };
+        capture.start();
+        logger.addAppender(capture);
+        try {
+            java.security.KeyPair pair = java.security.KeyPairGenerator.getInstance("EC").generateKeyPair();
+            String der = java.util.Base64.getEncoder().encodeToString(pair.getPrivate().getEncoded());
+            AuthorityNotificationGate.validate(enabledWithApnsKey(der), true);
+        } finally {
+            logger.detachAppender(capture);
+        }
+
+        assertThat(lines).anySatisfy(line -> assertThat(line)
+                .contains("apns.private-key-pkcs8-base64")
+                .contains("loaded as a EC key"));
+    }
+
+    @Test
     void aTransportWhoseKeyIsThePemFileStarts() throws Exception {
         java.security.KeyPair pair = java.security.KeyPairGenerator.getInstance("EC").generateKeyPair();
         StringBuilder pem = new StringBuilder("-----BEGIN PRIVATE KEY-----\n")

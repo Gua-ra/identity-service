@@ -124,6 +124,11 @@ public class AuthorityNotificationGate {
     private static void require(String algorithm, String configured, String property) {
         try {
             AuthorityPushKeys.load(algorithm, configured);
+            // Said out loud, because "the variable is set" and "the credential parses" are different
+            // facts and only the second one is a channel. A deployment that starts silently leaves an
+            // operator reading environment variables to guess at the one that matters, and the gate
+            // is the only place that knows. The property name, never its value.
+            log.info("The account authority push credential at {} loaded as a {} key.", property, algorithm);
         } catch (RuntimeException ex) {
             throw new IllegalStateException(property + " does not load as a " + algorithm
                     + " key (" + ex.getMessage() + "). That transport has a base URL, so it counts as a "
