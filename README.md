@@ -239,11 +239,11 @@ An account's authority is an append-only chain of signed records, and the chain 
 
 **Everything here ships disabled.** With `identity.authority.enabled` off, every `/account/authority` endpoint answers `503 authority_disabled`, no row is written to any authority table, and no existing login, recovery, factor or genesis path behaves differently. `AuthorityFlagsOffTest` checks that the refusal happens before the account is resolved, before a challenge is minted and before any repository is touched.
 
-**Adoption does not change the accountId.** An accountId is permanent, and its class byte is inside the hashed prefix, so adoption leaves `account_genesis` exactly as it is. The class byte records **how the id was derived**, never whether the account holds authority today: after adoption a class `0x00` account holds authority its id does not commit, and a verifier that needs to know reads the chain. The cost is accepted and real, and it is why new accounts still need a genesis: an adopted account's authority is not self-certifying from its id, and until the reserved log leaf exists it is an assertion by that account's homeserver.
+**Adoption does not change the accountId.** An accountId is permanent, and its class byte is inside the hashed prefix, so adoption leaves `account_genesis` exactly as it is. The class byte records **how the id was derived**, never whether the account holds authority today: after adoption a class `0x00` account holds authority its id does not commit, and a verifier that needs to know reads the chain. The cost is accepted and real, and it is why new accounts still need a genesis: an adopted account's authority is not self-certifying from its id. The `ACCOUNT_AUTHORITY` leaf decision 12 reserved is now built (see [Publishing the settled head](#publishing-the-settled-head)), and it narrows that to a reader who checks inclusion rather than removing it, because the key that publishes and the service that stores the chain are still one trust domain.
 
 **One envelope, five records.** Fixed layout, big-endian, no delimiters: magic (4, and the signature domain), version, suite, the 34 raw accountId bytes, `prevHash` (32), `seq` (8), then a body fixed per type. `GUAA` AdoptRoot (177 bytes), `GUAD` DeviceGrant (161), `GUAX` DeviceRevoke (145), `GUAR` AuthorityRecovery (209), `GUAO` Oppose (144). The decoder refuses an unknown magic, version, suite, framework, reason, authorization or flag, a wrong length, a `seq` below 1, an all-zero key, a key that fails Ed25519 point decoding, a recovery key equal to a device key in the same record, and a label with a non-zero byte after its first zero, each with a stable rule token in the shape `AccountGenesisCodec` established. The all-zero rule is separate from point decoding because the all-zero encoding decodes to a valid low-order point.
 
-`authorizingKey` names the key whose signature authorizes a record, **inside the bytes that are hashed**, so a future log leaf commits who authorized each transition and not only that someone did. `AuthorityRecovery.authorization` is `0x01` for the committed recovery authority key or `0x02` for the account-recovery path; under `0x02`, and only then, `authorizingKey` is all zero, and the decoder enforces that pairing in both directions.
+`authorizingKey` names the key whose signature authorizes a record, **inside the bytes that are hashed**, so the log leaf commits who authorized each transition and not only that someone did. `AuthorityRecovery.authorization` is `0x01` for the committed recovery authority key or `0x02` for the account-recovery path; under `0x02`, and only then, `authorizingKey` is all zero, and the decoder enforces that pairing in both directions.
 
 **One preimage rule, for every type.** A record is verified against `magic || the 32 bytes of the server challenge minted for that transition || the canonical bytes`. The magic is the signature domain, so no record can be replayed as another type; the accountId is inside the canonical bytes, so none can be replayed into another account; and the challenge is inside every signature, so no record is precomputable on other hardware, transferable to another party, or resubmittable after it was opposed. Challenges are minted against the account **and** the acting stepped-up session, are single use, and are burned on refusal as well as on acceptance. The burn commits in a transaction of its own, because every refusal after the spend throws out of the caller's, and a burn that rolled back with it would let one step-up pay for every attempt inside the challenge's life. Only their SHA-256 is stored.
 
@@ -299,6 +299,10 @@ Two prerequisites ship with it, because the feature is incoherent without them. 
 | `identity.authority.allow-short-windows-for-testing` | `IDENTITY_AUTHORITY_ALLOW_SHORT_WINDOWS_FOR_TESTING` | `false` | Lifts the 24-hour floor on both windows. Dev only. |
 | `identity.authority.native-client-ids` | `IDENTITY_AUTHORITY_NATIVE_CLIENT_IDS` | empty | Client ids of ours whose tokens may act on the chain, read from the token's verified audience. A token that names no client of ours, which is every homeserver-issued token and therefore both apps, is not refused by this list: see "What holds that, and what does not" above. |
 
+| `identity.authority.publication.enabled` | `IDENTITY_AUTHORITY_PUBLICATION_ENABLED` | `false` | Publishes a settled head to the resolver's transparency log. Independent of the master switch, and with the master switch off no head is signed whatever this says. |
+| `identity.authority.publication.resolver-base-url` | `IDENTITY_AUTHORITY_PUBLICATION_RESOLVER_BASE_URL` | empty | Its own value rather than `identity.placement.resolver-base-url`, so the two features stay independently deployable and one rollback cannot disable the other. |
+| `identity.authority.publication.homeserver-id` | `IDENTITY_AUTHORITY_PUBLICATION_HOMESERVER_ID` | empty | The federation roster id of the homeserver whose chains this deployment publishes, named rather than derived: a roster id guessed from a row allowed to be stale would go inside a signed object. Empty means publishing refuses to start. |
+
 **Startup refuses `enabled=true`** while no out-of-band notification channel is wired, which is ADM-009 gate 2. Every window here is theatre without a channel that survives both a SIM swap and the session revocation a recovery performs. Startup also refuses a window under 24 hours without the testing switch, and a challenge TTL over 15 minutes.
 
 #### The security notification channel
@@ -319,11 +323,38 @@ There was a cheaper tier for an install removing its own registration, and it wa
 | `GET /account/security-notifications` | The account's own registrations, named by token fingerprint, never by token. |
 | `POST /account/security-notifications/remove` | Removes one registration, at the price every removal pays. |
 
+#### Publishing the settled head
+
+`identity.authority.publication.enabled`, off by default and independent of the master switch: with the
+master switch off no head is signed whatever this one says. When both are on, a settled head is published
+to the resolver's transparency log as the `ACCOUNT_AUTHORITY` leaf ADM-009 decision 12 reserves.
+
+**What is published is a head, not a chain.** `gua-account-authority-head.v1`, magic `GUAH`, a fixed-layout
+byte string carrying the 34 raw accountId bytes, the head hash, its `seq` and the suite. The leaf commits the
+SHA-256 of those bytes, so the log holds a commitment and not an account's device history. An empty chain is
+refused rather than published as a zero head.
+
+**Settled only, and forward only.** A head is published on the two moments it moves, acceptance of an
+immediate record and completion of a window, and nothing schedules a sweep. A pending record is never
+published, so a cancelled record never reaches the log at all, and a `seq` below the one already published is
+refused rather than rewriting history. A byte-identical republish is answered `ALREADY_PUBLISHED` rather than
+written twice.
+
+**What it buys, and what it does not.** A head can no longer be invented for a reader who checks inclusion
+against a signed checkpoint. It does not make a class `0x00` authority chain independently trustworthy against
+a malicious homeserver, because the publishing key is the chain-storing homeserver's own roster membership key
+and one deployment holds every homeserver's membership key: publisher and chain-storer are one trust domain.
+ADM-009 revision 7 says this in decision 12 rather than implying the leaf closes O9. The independent
+verification a client would need, the trust anchor it would check against, and non-equivocation and
+non-membership are ADM-005 and O10, not this service.
+
+No deployment has this switch on, so nothing has been published from here.
+
 | Property | Env | Default | Effect |
 | --- | --- | --- | --- |
 | `identity.authority.notifications.enabled` | `IDENTITY_AUTHORITY_NOTIFICATIONS_ENABLED` | `false` | The channel's own switch, separate from the chain's, because turning it on means this service starts holding two push credentials it has never held. |
 | `identity.authority.notifications.registration-life` | `IDENTITY_AUTHORITY_NOTIFICATIONS_REGISTRATION_LIFE` | `P180D` | How long a registration counts as a channel with nothing heard from it. Far past any window on purpose. |
-| `identity.authority.notifications.failure-limit` | `IDENTITY_AUTHORITY_NOTIFICATIONS_FAILURE_LIMIT` | `3` | Consecutive permanent transport failures that retire a destination. |
+| `identity.authority.notifications.failure-limit` | `IDENTITY_AUTHORITY_NOTIFICATIONS_FAILURE_LIMIT` | `3` | Consecutive failed dispatches that retire a destination. A transport saying the destination is gone (FCM `404`/`UNREGISTERED`, APNs `410`) reaches the limit in one step; any other failure, including a transient one, counts as one. So an account whose only destination fails this many times in a row has no live channel, and gate 2 then refuses its transitions until the app registers again, which it does on every session start. That is deliberately fail-closed: the alternative is running a window whose holder is never told. |
 | `identity.authority.notifications.apns.*` | `IDENTITY_AUTHORITY_APNS_*` | empty | Base URL, key id, team id and the p8. Empty means this transport is not configured. |
 | `identity.authority.notifications.apns.topics` | `IDENTITY_AUTHORITY_NOTIFICATIONS_APNS_TOPICS_<APP_ID>` | empty | Maps the app id the client sends to the APNs topic. A map has no placeholder to name its own variable, so the key comes from the variable name itself: `..._TOPICS_GLOBAL_GUA_DEV_IOS_PROD=global.gua.dev` becomes `global.gua.dev.ios.prod -> global.gua.dev`. An unmapped app id is sent as the topic verbatim, which Apple refuses, so `AuthorityEnvironmentBindingTest` pins the name. |
 | `identity.authority.notifications.fcm.*` | `IDENTITY_AUTHORITY_FCM_*` | empty | Base URL, project, service-account email and key, and the token endpoint. Empty means this transport is not configured. |
