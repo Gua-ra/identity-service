@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import io.swagger.v3.oas.annotations.Operation;
@@ -27,8 +28,11 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
+import me.sarahlacerda.gua.identityservice.controller.dto.AuthorityStepUpStartRequest;
+import me.sarahlacerda.gua.identityservice.controller.dto.AuthorityStepUpStartResponse;
 import me.sarahlacerda.gua.identityservice.controller.dto.FactorEnrollStartRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PasskeyEnrollStartResponse;
+import me.sarahlacerda.gua.identityservice.controller.dto.PasskeyRemoveRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PasskeyStepUpStartResponse;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeCompleteRequest;
 import me.sarahlacerda.gua.identityservice.controller.dto.PinChangeStartRequest;
@@ -52,8 +56,10 @@ import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryServi
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryState;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactor;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy;
+import me.sarahlacerda.gua.identityservice.service.security.PasskeyRemovalService;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.PinChangeService;
+import me.sarahlacerda.gua.identityservice.service.authority.AuthorityWebStepUpService;
 import me.sarahlacerda.gua.identityservice.service.security.ReauthOperation;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 
@@ -76,6 +82,8 @@ public class SecurityController {
     private final AccountLocalpartResolver accountLocalparts;
     private final PinChangeService pinChangeService;
     private final AccountRecoveryService accountRecoveryService;
+    private final PasskeyRemovalService passkeyRemovalService;
+    private final AuthorityWebStepUpService authorityWebStepUps;
 
     @GetMapping("/pin/status")
     @Operation(summary = "Check the authenticated user's two-step verification state", description = "Returns hasPin=true once the user has configured a security PIN (drives the 'set up two-step verification' nudge), and how long the fresh-2FA hold on the account's PIN still has to run before that PIN can change the phone number. Read it when about to offer the PIN, not as 'can I change my number now': it is silent about the separate 24h phone-change cooldown, and it does not describe the passkey path, which carries its own hold on the age of the asserted credential and is refused the same way. It also reports which factors the account has REGISTERED, which one to offer first, and which ones a phone change accepts in precedence order, so a client offers the right factor instead of hardcoding the rule. Registration is server truth; whether a registered passkey is usable on this device is not reported and is never accepted as an input. Finally it reports whether a delayed account recovery is live on the account (accountRecoveryPending), with when it can be finished and when it expires, so every signed-in app can show a banner and offer POST /security/recovery/cancel, and the two configured waits (accountRecoveryDormancySeconds, accountRecoveryWaitSeconds), which are reported whether or not a recovery is live because they are configuration rather than episode state: a client that states them itself is right only on a deployment left at the defaults.", security = @SecurityRequirement(name = "oidcAccessToken"))
@@ -179,6 +187,26 @@ public class SecurityController {
         return ResponseEntity.noContent().build();
     }
 
+    @PostMapping("/passkey/credentials/{credentialId}/remove")
+    @Operation(summary = "Remove one passkey credential", description = "Removes the named credential after a step-up: a user-verifying passkey assertion, or the account PIN. Until this existed the only way to remove a credential was to remove them all, so an owner locking a thief out of a stolen device had to wipe every credential and register a new one, which put their own remaining factor inside the fresh-2FA hold. The account's last factor is refused (409 factor_required): the way to be rid of every credential is still the delayed recovery, which assumes they are lost. A credential id that is not this account's is answered the same way as one that does not exist, so this cannot be used to ask whose a credential is.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "Removed, or there was nothing with that id"),
+            @ApiResponse(responseCode = "400", description = "invalid_pin or invalid_request", content = @Content),
+            @ApiResponse(responseCode = "401", description = "Caller not authenticated", content = @Content),
+            @ApiResponse(responseCode = "403", description = "step_up_required, or the assertion resolves to another account", content = @Content),
+            @ApiResponse(responseCode = "409", description = "factor_required: that is the account's last factor", content = @Content),
+            @ApiResponse(responseCode = "429", description = "pin_locked", content = @Content)
+    })
+    public ResponseEntity<Void> removePasskeyCredential(@PathVariable String credentialId,
+            @RequestBody(required = false) @Valid PasskeyRemoveRequest request,
+            @Parameter(hidden = true) HttpServletRequest servletRequest) {
+        String userId = authenticatedUserAccessor.requireCurrentUserId();
+        PasskeyRemoveRequest body = request == null ? new PasskeyRemoveRequest() : request;
+        passkeyRemovalService.remove(userId, credentialId, body.getPasskeyStepUpId(), body.getPasskeyCredential(),
+                body.getPin(), servletRequest.getRemoteAddr());
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping({ "/pin/reset", "/pin/reset/complete" })
     @Operation(summary = "Retired: unauthenticated PIN reset", description = "Always 410 endpoint_retired. The unauthenticated reset shared the recovery episode but not its rules (it could reset a PIN on an account whose passkey was still in use). Recovery now runs inside the interactive login, from the PIN or passkey step after an OTP: POST /login/recovery/start and /login/recovery/complete.", security = {})
     @ApiResponses({
@@ -249,6 +277,75 @@ public class SecurityController {
                 startFactorEnrollment(userId, LoginSession.EnrollTarget.PASSKEY, requestedRedirectUri(request))));
     }
 
+    @PostMapping("/authority/step-up/start")
+    @Operation(summary = "Start the web step-up one authority transition is scoped to",
+            description = "The same handoff POST /security/passkey/enroll/start uses, carrying an authority "
+                    + "purpose instead of a factor to add: it builds a login session pinned to the "
+                    + "authenticated user, stamped with that purpose and with the hash of this access token, "
+                    + "and returns a one-time URL the client opens in a web sheet. The page runs a "
+                    + "user-verifying passkey assertion, or asks for the account PIN, and on success the "
+                    + "session records a step-up this account may spend once at POST /account/authority/"
+                    + "challenge for that purpose. It exists because the assertion cannot be produced natively "
+                    + "on every platform, and a passkey-only account must never be told to add a PIN to gain "
+                    + "authority. No code is sent to the account's number at any step of it. The body carries "
+                    + "the purpose and at most the app-scheme redirect this build answers.",
+            security = @SecurityRequirement(name = "oidcAccessToken"))
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Step-up session created; open the returned "
+                    + "stepUpUrl in a web sheet"),
+            @ApiResponse(responseCode = "400", description = "invalid_redirect_uri: the named redirect is not "
+                    + "one this deployment allows. Retry once with no redirectUri to take the deployment's "
+                    + "default.", content = @Content),
+            @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content),
+            @ApiResponse(responseCode = "403", description = "authority_native_session_required: the browser "
+                    + "holds no authority and may not open one of these", content = @Content),
+            @ApiResponse(responseCode = "409", description = "authority_step_up_purpose_refused for a purpose "
+                    + "that asks for no factor, or authority_step_up_unavailable when the account holds "
+                    + "neither a passkey this deployment can assert nor a PIN", content = @Content),
+            @ApiResponse(responseCode = "503", description = "authority_disabled", content = @Content)
+    })
+    public ResponseEntity<AuthorityStepUpStartResponse> startAuthorityStepUp(
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "The transition being "
+                    + "confirmed, and optionally the app-scheme redirect this build answers", required = true,
+                    content = @Content(schema = @Schema(implementation = AuthorityStepUpStartRequest.class)))
+            @RequestBody @Valid AuthorityStepUpStartRequest request,
+            @Parameter(hidden = true) HttpServletRequest servletRequest) {
+        String userId = authenticatedUserAccessor.requireCurrentUserId();
+        // The flag, the native-session rule and the purpose, all before any account state is read: whether
+        // this caller may open a sheet at all is a fact about the request.
+        authorityWebStepUps.requireMayOpen(authenticatedUserAccessor.currentClientId(), request.getPurpose());
+        requireAFactorTheSheetCanRun(userId);
+
+        LoginSession session = handoffSession(userId, request.getRedirectUri());
+        session.setPhase(Phase.AUTHORITY_STEP_UP);
+        session.setAuthorityPurpose(request.getPurpose().name());
+        // Bound to the token that asked, so the proof is not spendable by another session of this account.
+        session.setAuthoritySessionHash(
+                AuthorityWebStepUpService.sessionHash(servletRequest.getHeader("Authorization")));
+        return ResponseEntity.ok(new AuthorityStepUpStartResponse(openHandoff(session)));
+    }
+
+    /**
+     * Refuses to open an authority step-up whose page would have nothing to ask for.
+     *
+     * <p>Two proofs reach that page and there is no third: a passkey assertion, and the account PIN. An
+     * account that holds neither cannot confirm an authority transition at all, which is ADM-009 decision 4's
+     * own answer rather than a gap here: adoption needs a step-up, so nobody can root that account either,
+     * and decision 9 forbids the code that would otherwise stand in. Saying so at the entry point is the
+     * honest answer, where opening the sheet would put a person in front of a page whose every button is
+     * already refused.
+     *
+     * <p>Deliberately not the enrollment precheck. That one counts an account holding no factor as provable,
+     * because enrollment may confirm it with its own number and a code sent to it. No authority step reads a
+     * code, so that branch does not exist here.
+     */
+    private void requireAFactorTheSheetCanRun(String userId) {
+        if (!authFactorPolicy.passkeyRegistered(userId) && !authFactorPolicy.pinRegistered(userId)) {
+            throw new LoginFlowException(HttpStatus.CONFLICT, "authority_step_up_unavailable",
+                    "Add a passkey or a PIN to this account first.");
+        }
+    }
+
     /**
      * The one thing an enrollment body may carry, and the only value either endpoint reads off
      * the request. The body itself is optional, so a client that sends none, which is every
@@ -257,6 +354,7 @@ public class SecurityController {
     private static String requestedRedirectUri(FactorEnrollStartRequest request) {
         return request == null ? null : request.getRedirectUri();
     }
+
 
     /**
      * Builds the enrollment session both entry points hand out, and returns the one-time URL
@@ -277,37 +375,56 @@ public class SecurityController {
      */
     private String startFactorEnrollment(String userId, LoginSession.EnrollTarget target,
             String requestedRedirectUri) {
-        // Resolved first, before any account state is read: whether a redirect is one this
-        // deployment allows is a fact about the request alone, so a refused one stops here
-        // rather than being carried on an object that is about to be filled in.
-        String redirectUri = enrollRedirectUri(requestedRedirectUri);
-
         requireAProofThisDeploymentCanRun(userId);
 
-        // Same localpart source as login (ADM-001 S6). An enrollment session never issues
-        // an authorization code, but it must not carry a value login would refuse.
-        List<DirectoryEntry> entries = directoryService.findByUserId(userId);
-        String preferredUsername = accountLocalparts.forExistingAccount(userId, entries);
-
-        LoginSession session = new LoginSession();
-        session.setUserId(userId);
+        LoginSession session = handoffSession(userId, requestedRedirectUri);
         // Mark this as an enrollment (not an OIDC login): there is no authorize request,
         // so completion redirects back to the app scheme instead of issuing an authorization
         // code (which would NPE on the absent client id).
         session.setEnroll(true);
         session.setEnrollTarget(target);
+        session.setPhase(Phase.ENROLL_STEP_UP);
+        return openHandoff(session);
+    }
+
+    /**
+     * The session both handoffs share: pinned to the authenticated subject, carrying no OIDC request, and
+     * addressed at one app scheme this deployment allows.
+     *
+     * <p>Extracted rather than copied because the two callers differ in three lines and agree on everything
+     * that matters: which subject, which redirects are allowed, and that neither may ever issue an
+     * authorization code. A second copy of this is a second place for the allowlist to be forgotten.
+     *
+     * <p>The caller sets the phase, because the phase is the whole of what the two are for.
+     */
+    private LoginSession handoffSession(String userId, String requestedRedirectUri) {
+        // Resolved first, before any account state is read: whether a redirect is one this
+        // deployment allows is a fact about the request alone, so a refused one stops here
+        // rather than being carried on an object that is about to be filled in.
+        String redirectUri = enrollRedirectUri(requestedRedirectUri);
+
+        // Same localpart source as login (ADM-001 S6). Neither of these sessions issues
+        // an authorization code, but neither may carry a value login would refuse.
+        List<DirectoryEntry> entries = directoryService.findByUserId(userId);
+        String preferredUsername = accountLocalparts.forExistingAccount(userId, entries);
+
+        LoginSession session = new LoginSession();
+        session.setUserId(userId);
         // Pin the session to the authenticated subject. This forces the LOGIN-ONLY
-        // contract in LoginFlowController so the enroll flow can never degrade into an
-        // open signup/login even though the user is dropped straight into enrollment.
+        // contract in LoginFlowController so neither handoff can degrade into an
+        // open signup/login even though the user is dropped straight into a step.
         session.setReauthUserId(userId);
         session.setDisplayName(displayNameFor(entries, preferredUsername));
         session.setPreferredUsername(preferredUsername);
-        // An app scheme this deployment allows; only echoed back if enrollment reaches
+        // An app scheme this deployment allows; only echoed back if the sheet reaches
         // completion, and never reachable as an open login (reauthUserId is set above).
         session.setRedirectUri(redirectUri);
-        session.setPhase(Phase.ENROLL_STEP_UP);
         session.setCsrfToken(loginSessionService.newToken());
+        return session;
+    }
 
+    /** Stores the session and returns the one-time URL that opens it in a web view. */
+    private String openHandoff(LoginSession session) {
         String sessionId = loginSessionService.create(session);
         String enrollToken = loginSessionService.createEnrollToken(sessionId,
                 loginProperties.getEnroll().getTokenTtl());

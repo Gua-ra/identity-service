@@ -247,6 +247,53 @@ public class UserSecurityService {
         }
     }
 
+    /**
+     * When the account's current PIN came into being, so a caller that accepted the PIN as a step-up can
+     * weigh the hold on the credential it actually presented. Empty for an account with no PIN and for one
+     * with no row.
+     */
+    @Transactional(readOnly = true)
+    public Optional<Instant> pinSetAt(String userId) {
+        return repository.findByUserId(userId).map(IdentityUser::getPinSetAt);
+    }
+
+    /**
+     * The same hold, readable by a caller that already knows when the credential it accepted came into
+     * being. A public seam over the one implementation below rather than a second copy of the arithmetic.
+     *
+     * @return seconds still to run, {@code 0} when nothing is held
+     */
+    @Transactional(readOnly = true)
+    public long freshFactorHoldRemaining(Instant factorCreatedAt) {
+        return freshFactorHoldRemainingSeconds(factorCreatedAt);
+    }
+
+    /**
+     * Seconds still to run on the hold measured from the account's last completed recovery; {@code 0} when
+     * no recovery has completed or its stamp predates the window.
+     *
+     * <p>Stated on the account rather than on the session deliberately. A recovery deletes every stored
+     * second factor, sets a caller-chosen PIN and revokes the account's sessions in one transaction, so a
+     * caller who completed one simply signs in again and presents a factor that looks established; a rule
+     * written about the session's own completing factor would never fire. Read by the account authority
+     * chain and by nothing that existed before this column.
+     */
+    @Transactional(readOnly = true)
+    public long recoveryCompletionHoldRemaining(String userId) {
+        return repository.findByUserId(userId)
+                .map(user -> freshFactorHoldRemainingSeconds(user.getRecoveryCompletedAt()))
+                .orElse(0L);
+    }
+
+    /**
+     * Stamps a completed recovery. Called inside the completing transaction under the row lock, so the
+     * stamp is atomic with the PIN the recovery set and cannot be left behind by a rollback.
+     */
+    public void recordRecoveryCompleted(IdentityUser user, Instant now) {
+        user.setRecoveryCompletedAt(now);
+        repository.save(user);
+    }
+
     private long pinHoldRemainingSeconds(IdentityUser user) {
         if (!user.hasPin()) {
             return 0L;

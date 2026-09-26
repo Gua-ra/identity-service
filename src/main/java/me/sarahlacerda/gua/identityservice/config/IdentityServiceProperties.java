@@ -34,6 +34,7 @@ public class IdentityServiceProperties {
     private final RateLimitProperties rateLimits = new RateLimitProperties();
     private final GenesisProperties genesis = new GenesisProperties();
     private final PlacementProperties placement = new PlacementProperties();
+    private final AuthorityProperties authority = new AuthorityProperties();
 
     @Getter
     @Setter
@@ -532,5 +533,304 @@ public class IdentityServiceProperties {
             @Min(1)
             private int batchSize = 500;
         }
+    }
+
+    /**
+     * The account authority chain, adoption and the device lifecycle (ADM-009). Every flag defaults to
+     * off or empty, so a deployment that sets none of them behaves exactly as it did before this feature
+     * existed: every authority endpoint answers 503, no row is written to any authority table, and no
+     * existing login, recovery, factor or genesis path changes.
+     *
+     * <p>Turning {@code enabled} on is refused at startup while no out-of-band notification channel is
+     * wired, which is ADM-009 gate 2. Every window in that record is theatre without a channel that
+     * survives both a SIM swap and the session revocation a recovery performs, because the account holder
+     * is never told the window is running.
+     */
+    @Getter
+    @Setter
+    public static class AuthorityProperties {
+
+        /**
+         * Master switch. While it is false the whole feature is inert: the endpoints answer 503
+         * {@code authority_disabled}, no challenge is minted and no chain row exists.
+         */
+        private boolean enabled = false;
+
+        /**
+         * Whether an adoption may run on this deployment at all.
+         *
+         * <p>Off by default, which ADM-009 gate 3 requires: adoption stays refused until
+         * ADM-002 Q6 answers the independence question, because under framework 0x01 the recovery
+         * authority key shares the device store with the key it would veto. Dev may adopt behind this
+         * flag and treats those accounts as disposable.
+         */
+        private boolean adoptionPermitted = false;
+
+        /**
+         * The opposition window of ADM-009 decision 4, which is also the quarantine of decision 5.
+         *
+         * <p>The window is the whole security of an adoption (ADM-001 O9), so startup refuses anything
+         * under 24 hours without {@link #allowShortWindowsForTesting}. It runs on service time until
+         * witnesses exist (ADM-002 R8).
+         */
+        @NotNull
+        private Duration oppositionWindow = Duration.ofHours(72);
+
+        /**
+         * The wait an {@code AuthorityRecovery} signed by the committed recovery authority key runs,
+         * which is ADM-002 D1's delta-r for framework 0x01 and deliberately not the adoption window.
+         */
+        @NotNull
+        private Duration recoveryWindow = Duration.ofDays(7);
+
+        /**
+         * How long a minted challenge, and therefore the step-up that minted it, stays spendable. At or
+         * under 15 minutes by ADM-009 decision 4 step 4; a larger value is clamped at startup.
+         */
+        @NotNull
+        private Duration challengeTtl = Duration.ofMinutes(15);
+
+        /** How long a browser-started approval stays signable (ADM-009 decision 6). */
+        @NotNull
+        private Duration approvalTtl = Duration.ofMinutes(10);
+
+        /** How many approvals one account may hold at once (ADM-009 decision 6). */
+        @Min(1)
+        private int maxLiveApprovals = 3;
+
+        /**
+         * Lifts the 24-hour floor on the windows above, for a dev deployment where a human walks a
+         * transition through. Nothing else may set it.
+         */
+        private boolean allowShortWindowsForTesting = false;
+
+        /**
+         * The registered OIDC client ids whose access tokens count as a native session.
+         *
+         * <p>ADM-009 decision 4 step 1: a session still inside the web view cannot start adoption, which
+         * is the ADM-008:143 problem stated as a rule. The value is compared against the client the token
+         * was accepted on, which comes from the verified audience, never from anything the caller sends
+         * alongside it. The forwarded downstream-client marker is deliberately not used: it is
+         * client-asserted, and the existing beta gate says so in as many words.
+         *
+         * <p>Empty by default, so with no configuration every native-only endpoint refuses. That is the
+         * safe direction: a deployment that has not said which client is its app has not earned the right
+         * to have one of them root an account.
+         */
+        @NotNull
+        private List<String> nativeClientIds = new ArrayList<>();
+
+        /**
+         * How long a candidate device key stays grantable (ADM-009 decision 5, revision 4).
+         *
+         * <p>Short, because a candidate is a step in a ceremony two people are performing right now. One left
+         * lying around is a key over which a grant could later be signed without anybody comparing anything.
+         */
+        @NotNull
+        private Duration candidateLife = Duration.ofMinutes(10);
+
+        /** The out-of-band channel of gate 2. Off by default, which is why gate 2 still blocks. */
+        @Valid
+        @NotNull
+        private NotificationProperties notifications = new NotificationProperties();
+
+        /** Publishing the settled chain head to the transparency log (ADM-009 decision 12). */
+        @Valid
+        @NotNull
+        private final PublicationProperties publication = new PublicationProperties();
+    }
+
+    /**
+     * Publishing the settled authority chain head as the {@code ACCOUNT_AUTHORITY} leaf ADM-009
+     * decision 12 reserves.
+     *
+     * <p>A separate switch from {@code identity.authority.enabled}, deliberately, so the chain can run for
+     * as long as it takes to validate it while nothing is written to federation state. With this off the
+     * chain behaves exactly as it does today: no head object is signed, no resolver is contacted, and no
+     * publication row exists. Decision 12 says the gap is a missing publication rather than a missing
+     * signature, and this is the switch that closes it, one environment at a time.
+     *
+     * <p>Turning it on is refused at startup unless the homeserver it publishes under is named, this
+     * deployment holds that homeserver's roster membership key, and the resolver is configured:
+     * {@code AuthorityPublicationStartupCheck}. Rollback is turning it back off, with the table left in
+     * place.
+     */
+    @Getter
+    @Setter
+    public static class PublicationProperties {
+
+        /**
+         * Master switch. Off by default; while it is false nothing is signed and nothing is sent.
+         */
+        private boolean enabled = false;
+
+        /**
+         * Base URL of the gua-resolver that holds the published heads.
+         *
+         * <p>Its own value rather than {@code identity.placement.resolver-base-url}, even though both
+         * point at the same service, so the two features stay independently deployable and one rollback
+         * cannot silently disable the other. Never {@code identity.resolver.*}: that namespace belonged to
+         * the removed directory-publishing client (ADM-001 L1b).
+         */
+        private String resolverBaseUrl = "";
+
+        /**
+         * The federation roster id of the homeserver whose chains this deployment publishes.
+         *
+         * <p>Named explicitly rather than derived per account. The head is an assertion by the homeserver
+         * that stores the chain, and the only homeserver this deployment can honestly assert for is one
+         * whose membership key it holds; a value guessed from a local routing row would put a roster id
+         * inside a signed object on the strength of state that row is allowed to be stale about. Empty by
+         * default, and startup refuses publishing without it.
+         */
+        private String homeserverId = "";
+
+        /**
+         * Validity of a head object this service issues. Capped at the 400 days
+         * {@code AuthorityHeadRecordCodec.MAX_VALIDITY} fixes.
+         *
+         * <p>It is what turns a homeserver that stops publishing into a visible stale state in the client
+         * rather than into silence. It does not make withholding detectable, which needs the
+         * non-membership proof ADM-005 owns.
+         */
+        @NotNull
+        private Duration headValidity = Duration.ofDays(400);
+
+        /**
+         * Age at which a still-valid head is re-issued, so a long-quiet account's attestation never
+         * reaches its expiry.
+         *
+         * <p>Checked on the same lazy path settlement runs on, never on a timer, so an account with no
+         * transitions costs one extra leaf per interval and nothing in between. Shorter than
+         * {@link #headValidity} or startup refuses it.
+         */
+        @NotNull
+        private Duration republishAfter = Duration.ofDays(300);
+
+        /**
+         * How long an unacknowledged head waits before it is retried.
+         *
+         * <p>The catch-up rides the lazy path the account holder's own reads take, so a resolver that cannot
+         * be reached would otherwise put a socket timeout in front of every one of those reads. This is the
+         * only thing that bounds retries; there is no queue and no scheduler, and a head still unsent when
+         * the next transition happens is sent then.
+         */
+        @NotNull
+        private Duration retryAfter = Duration.ofMinutes(5);
+    }
+
+    /**
+     * The security-notification channel ADM-009 gate 2 requires, and the two transports that carry it.
+     *
+     * <p>Off by default, and that is not a formality: with no transport configured
+     * {@code AuthorityPushNotifier.isOutOfBand()} answers false, so a deployment that turns
+     * {@code identity.authority.enabled} on without configuring one still fails to start. Turning the
+     * feature on and turning a channel on are deliberately two decisions, because the credentials below are
+     * two secrets this service has never held.
+     */
+    @Getter
+    @Setter
+    public static class NotificationProperties {
+
+        /**
+         * Master switch for the channel. While it is false no registration is accepted, nothing is sent,
+         * and no credential is read, so a half-configured deployment holds no push secrets at all.
+         */
+        private boolean enabled = false;
+
+        /**
+         * How long a registration counts as a channel with nothing heard from it.
+         *
+         * <p>Far past any window, because the row's job is to survive a recovery and be there when a window
+         * opens weeks later. It bounds retention rather than liveness.
+         */
+        @NotNull
+        private Duration registrationLife = Duration.ofDays(180);
+
+        /**
+         * How many consecutive permanent transport failures retire a registration.
+         *
+         * <p>A destination the transport says is gone must stop counting as a channel, or gate 2 passes on
+         * a promise nobody can keep.
+         */
+        @Min(1)
+        private int failureLimit = 3;
+
+        @Valid
+        @NotNull
+        private ApnsProperties apns = new ApnsProperties();
+
+        @Valid
+        @NotNull
+        private FcmProperties fcm = new FcmProperties();
+    }
+
+    /**
+     * Apple's own push service, spoken directly.
+     *
+     * <p>Directly rather than through the Matrix push gateway, because that gateway's only exposed path
+     * takes a Matrix event notification keyed on a pushkey this service never sees, it is unauthenticated,
+     * and it runs in one namespace only. Routing a security alert through it would mean forging a
+     * notification and making the channel only as trustworthy as an endpoint that takes anyone's POST.
+     */
+    @Getter
+    @Setter
+    public static class ApnsProperties {
+
+        /** Empty means this transport is not configured, which is the default. */
+        private String baseUrl = "";
+
+        /** The ES256 signing key id of the p8, which becomes the JWT's kid. */
+        private String keyId = "";
+
+        /** The Apple team id, which becomes the JWT's iss. */
+        private String teamId = "";
+
+        /** The PKCS#8 body of the p8, base64. Never logged, and absent by default. */
+        private String privateKeyPkcs8Base64 = "";
+
+        /**
+         * Maps the app id the client already sends to the APNs topic.
+         *
+         * <p>One key addresses every topic of the team, so the map exists to pick the topic and not a
+         * credential, and it is the same constant the Matrix pusher uses so the two cannot drift.
+         */
+        @NotNull
+        private Map<String, String> topics = new LinkedHashMap<>();
+
+        /** How long a minted provider token is reused before another is signed. Apple's cap is an hour. */
+        @NotNull
+        private Duration tokenLife = Duration.ofMinutes(50);
+    }
+
+    /**
+     * Firebase Cloud Messaging v1, with the bearer minted here rather than by a Google library.
+     *
+     * <p>The nimbus library is already on this classpath for the OIDC work, so the service-account
+     * assertion and its exchange cost no new dependency, no new transitive tree and no new credential
+     * loading path. The token is cached to its own expiry.
+     */
+    @Getter
+    @Setter
+    public static class FcmProperties {
+
+        /** Empty means this transport is not configured, which is the default. */
+        private String baseUrl = "";
+
+        /** The Firebase project the messages are sent into. */
+        private String projectId = "";
+
+        /** The service account's client_email, which is the assertion's iss and sub. */
+        private String clientEmail = "";
+
+        /** The PKCS#8 body of the service account's RSA key, base64. Never logged. */
+        private String privateKeyPkcs8Base64 = "";
+
+        /** Where the assertion is exchanged for a bearer. */
+        private String tokenUri = "https://oauth2.googleapis.com/token";
+
+        /** Refreshed this long before the bearer's own expiry, so a send never races the exchange. */
+        @NotNull
+        private Duration refreshSkew = Duration.ofMinutes(5);
     }
 }

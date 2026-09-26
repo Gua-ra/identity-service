@@ -55,6 +55,16 @@ public class IdentityUser {
     @Column(name = "last_phone_change_at")
     private Instant lastPhoneChangeAt;
 
+    /**
+     * When an account recovery last completed.
+     *
+     * <p>Needed because no existing column can answer it: pin_reset_requested_at is cleared on completion,
+     * and pin_set_at cannot tell a recovery from an ordinary PIN change. Nothing that existed before this
+     * column reads it.
+     */
+    @Column(name = "recovery_completed_at")
+    private Instant recoveryCompletedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

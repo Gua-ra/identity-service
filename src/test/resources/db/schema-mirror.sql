@@ -53,7 +53,9 @@ CREATE TABLE IF NOT EXISTS identity_users (
     -- V3
     last_pin_change_at TIMESTAMP WITH TIME ZONE,
     -- V10
-    last_phone_change_at TIMESTAMP WITH TIME ZONE
+    last_phone_change_at TIMESTAMP WITH TIME ZONE,
+    -- V13
+    recovery_completed_at TIMESTAMP WITH TIME ZONE
 );
 
 CREATE TABLE IF NOT EXISTS trusted_devices (
@@ -110,3 +112,164 @@ CREATE INDEX IF NOT EXISTS idx_account_genesis_expires_at
 
 CREATE INDEX IF NOT EXISTS idx_account_genesis_attach_handle
     ON account_genesis (attach_handle_hash);
+
+-- V13
+CREATE TABLE IF NOT EXISTS account_authority_record (
+    account_id          VARCHAR(64) NOT NULL,
+    seq                 BIGINT      NOT NULL,
+    magic               VARCHAR(4)  NOT NULL,
+    record_b64          TEXT        NOT NULL,
+    record_hash         VARCHAR(64) NOT NULL,
+    prev_hash           VARCHAR(64) NOT NULL,
+    signature_b64       TEXT        NOT NULL,
+    authorizing_key_b64 TEXT        NOT NULL,
+    state               VARCHAR(16) NOT NULL,
+    effective_at        TIMESTAMP WITH TIME ZONE,
+    created_at          TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    settled_at          TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (account_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_authority_record_hash
+    ON account_authority_record (record_hash);
+
+CREATE TABLE IF NOT EXISTS account_authority_head (
+    account_id           VARCHAR(64) PRIMARY KEY,
+    head_hash            VARCHAR(64) NOT NULL,
+    head_seq             BIGINT      NOT NULL,
+    pending_seq          BIGINT,
+    pending_hash         VARCHAR(64),
+    pending_magic        VARCHAR(4),
+    pending_rank         SMALLINT,
+    pending_effective_at TIMESTAMP WITH TIME ZONE,
+    cooldown_until       TIMESTAMP WITH TIME ZONE,
+    -- V17
+    cooldown_magic       VARCHAR(4),
+    pending_extended     BOOLEAN     NOT NULL DEFAULT FALSE,
+    cancelled_count      INTEGER     NOT NULL DEFAULT 0,
+    updated_at           TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS account_authority_device (
+    id               UUID        PRIMARY KEY,
+    account_id       VARCHAR(64) NOT NULL,
+    device_key_b64   TEXT        NOT NULL,
+    label            TEXT,
+    flags            SMALLINT    NOT NULL DEFAULT 0,
+    granted_seq      BIGINT      NOT NULL,
+    revoked_seq      BIGINT,
+    quarantine_until TIMESTAMP WITH TIME ZONE,
+    state            VARCHAR(16) NOT NULL,
+    created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_account_authority_device_key
+    ON account_authority_device (account_id, device_key_b64);
+
+CREATE INDEX IF NOT EXISTS idx_account_authority_device_account
+    ON account_authority_device (account_id);
+
+CREATE TABLE IF NOT EXISTS account_authority_challenge (
+    id             UUID        PRIMARY KEY,
+    account_id     VARCHAR(64) NOT NULL,
+    session_hash   VARCHAR(64) NOT NULL,
+    purpose        VARCHAR(16) NOT NULL,
+    challenge_hash VARCHAR(64) NOT NULL UNIQUE,
+    factor         VARCHAR(16) NOT NULL,
+    factor_created_at TIMESTAMP WITH TIME ZONE,
+    expires_at     TIMESTAMP WITH TIME ZONE NOT NULL,
+    spent_at       TIMESTAMP WITH TIME ZONE,
+    created_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_authority_challenge_expires
+    ON account_authority_challenge (expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_account_authority_challenge_account
+    ON account_authority_challenge (account_id);
+
+-- V14
+CREATE TABLE IF NOT EXISTS security_notification_device (
+    id                      UUID        PRIMARY KEY,
+    user_id                 TEXT        NOT NULL,
+    installation_id         TEXT        NOT NULL,
+    platform                TEXT        NOT NULL,
+    app_id                  TEXT        NOT NULL,
+    token                   TEXT        NOT NULL,
+    token_fingerprint       TEXT        NOT NULL,
+    device_label            TEXT,
+    authority_device_key_b64 TEXT,
+    created_at              TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    last_seen_at            TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    consecutive_failures    INT         NOT NULL DEFAULT 0,
+    last_failure_at         TIMESTAMP WITH TIME ZONE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_security_notification_device_install
+    ON security_notification_device (user_id, installation_id);
+
+CREATE INDEX IF NOT EXISTS idx_security_notification_device_user
+    ON security_notification_device (user_id);
+
+-- V14 (continued): a challenge minted for a purpose with no factor has none to record.
+ALTER TABLE account_authority_challenge
+    ALTER COLUMN factor DROP NOT NULL;
+
+-- V15
+CREATE TABLE IF NOT EXISTS account_authority_candidate (
+    id             UUID        PRIMARY KEY,
+    account_id     VARCHAR(64) NOT NULL,
+    device_key_b64 TEXT        NOT NULL,
+    fingerprint    VARCHAR(16) NOT NULL,
+    label          TEXT,
+    created_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    expires_at     TIMESTAMP WITH TIME ZONE NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_account_authority_candidate_key
+    ON account_authority_candidate (account_id, device_key_b64);
+
+CREATE INDEX IF NOT EXISTS idx_account_authority_candidate_account
+    ON account_authority_candidate (account_id);
+
+CREATE INDEX IF NOT EXISTS idx_account_authority_candidate_expires
+    ON account_authority_candidate (expires_at);
+
+-- V16
+CREATE TABLE IF NOT EXISTS account_authority_web_step_up (
+    id                UUID        PRIMARY KEY,
+    user_id           TEXT        NOT NULL,
+    session_hash      VARCHAR(64) NOT NULL,
+    purpose           VARCHAR(16) NOT NULL,
+    factor            VARCHAR(16) NOT NULL,
+    factor_created_at TIMESTAMP WITH TIME ZONE,
+    expires_at        TIMESTAMP WITH TIME ZONE NOT NULL,
+    consumed_at       TIMESTAMP WITH TIME ZONE,
+    created_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_authority_web_step_up_lookup
+    ON account_authority_web_step_up (user_id, purpose);
+
+CREATE INDEX IF NOT EXISTS idx_account_authority_web_step_up_expires
+    ON account_authority_web_step_up (expires_at);
+
+-- V18
+CREATE TABLE IF NOT EXISTS account_authority_publication (
+    account_id     VARCHAR(64) NOT NULL PRIMARY KEY,
+    head_seq       BIGINT      NOT NULL,
+    head_hash      VARCHAR(64) NOT NULL,
+    homeserver_id  VARCHAR(64) NOT NULL,
+    record_b64     TEXT        NOT NULL,
+    signature_b64  TEXT        NOT NULL,
+    payload_hash   VARCHAR(64) NOT NULL,
+    issued_at      TIMESTAMP WITH TIME ZONE NOT NULL,
+    not_after      TIMESTAMP WITH TIME ZONE NOT NULL,
+    signed_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    confirmed_at   TIMESTAMP WITH TIME ZONE,
+    attempts       INTEGER     NOT NULL DEFAULT 0,
+    last_attempt_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_authority_publication_unconfirmed
+    ON account_authority_publication (confirmed_at);

@@ -62,6 +62,103 @@ identity:
       # and resumable, so it is safe to leave on.
       enabled: ${IDENTITY_GENESIS_BOOTSTRAP_BACKFILL_ENABLED:false}
       batch-size: ${IDENTITY_GENESIS_BOOTSTRAP_BACKFILL_BATCH_SIZE:500}
+  # The account authority chain, adoption and the device lifecycle (ADM-009). Every flag is off or
+  # empty by default and the whole feature is inert: every /account/authority endpoint answers 503, no
+  # challenge is minted, no chain row is written, and no existing login, recovery, factor or genesis
+  # path behaves differently. Turning enabled on is refused at startup while no out-of-band
+  # notification channel is wired (ADM-009 gate 2), because every window here is theatre if the account
+  # holder is never told it is running.
+  authority:
+    enabled: ${IDENTITY_AUTHORITY_ENABLED:false}
+    # Whether an adoption may run here at all. Off everywhere by default and on in dev only: adoption
+    # outside dev waits on ADM-002 Q6 (ADM-009 gate 3), because under framework 0x01 the recovery
+    # authority key shares the device store with the key it would veto. Dev turns this on and treats
+    # the accounts it roots as disposable.
+    adoption-permitted: ${IDENTITY_AUTHORITY_ADOPTION_PERMITTED:false}
+    # The opposition window, which is also the quarantine a granted device serves. Startup refuses
+    # anything under PT24H without allow-short-windows-for-testing.
+    opposition-window: ${IDENTITY_AUTHORITY_OPPOSITION_WINDOW:PT72H}
+    # ADM-002 D1's delta-r for framework 0x01, and deliberately not the adoption window.
+    recovery-window: ${IDENTITY_AUTHORITY_RECOVERY_WINDOW:P7D}
+    # At or under PT15M by ADM-009 decision 4 step 4. A larger value is clamped at startup.
+    challenge-ttl: ${IDENTITY_AUTHORITY_CHALLENGE_TTL:PT15M}
+    approval-ttl: ${IDENTITY_AUTHORITY_APPROVAL_TTL:PT10M}
+    max-live-approvals: ${IDENTITY_AUTHORITY_MAX_LIVE_APPROVALS:3}
+    # How long a new device's offered key stays grantable. Short on purpose: it is a step in a ceremony
+    # two people are performing right now.
+    candidate-life: ${IDENTITY_AUTHORITY_CANDIDATE_LIFE:PT10M}
+    allow-short-windows-for-testing: ${IDENTITY_AUTHORITY_ALLOW_SHORT_WINDOWS_FOR_TESTING:false}
+    # Registered client ids whose tokens count as a native session (ADM-009 decision 4 step 1). Read
+    # from the token's verified audience, never from the client-asserted downstream marker. Empty means
+    # no client may root an account, which is the safe direction.
+    native-client-ids: ${IDENTITY_AUTHORITY_NATIVE_CLIENT_IDS:}
+    # The out-of-band channel of ADM-009 gate 2. Off by default, and separately from the chain itself,
+    # because turning it on means this service starts holding two push credentials it has never held.
+    # With it off no registration is accepted, nothing is sent, and no credential is read, so a
+    # deployment that switches identity.authority.enabled on without configuring a transport still
+    # fails to start rather than running windows nobody is told about.
+    notifications:
+      enabled: ${IDENTITY_AUTHORITY_NOTIFICATIONS_ENABLED:false}
+      # Far past any window: the row's job is to still be there when a window opens weeks later.
+      registration-life: ${IDENTITY_AUTHORITY_NOTIFICATIONS_REGISTRATION_LIFE:P180D}
+      failure-limit: ${IDENTITY_AUTHORITY_NOTIFICATIONS_FAILURE_LIMIT:3}
+      apns:
+        # Empty means this transport is not configured, which is the default.
+        base-url: ${IDENTITY_AUTHORITY_APNS_BASE_URL:}
+        key-id: ${IDENTITY_AUTHORITY_APNS_KEY_ID:}
+        team-id: ${IDENTITY_AUTHORITY_APNS_TEAM_ID:}
+        private-key-pkcs8-base64: ${IDENTITY_AUTHORITY_APNS_PRIVATE_KEY:}
+        # One key addresses every topic of the team, so this map picks the topic and not a credential.
+        topics: {}
+        token-life: ${IDENTITY_AUTHORITY_APNS_TOKEN_LIFE:PT50M}
+      fcm:
+        base-url: ${IDENTITY_AUTHORITY_FCM_BASE_URL:}
+        project-id: ${IDENTITY_AUTHORITY_FCM_PROJECT_ID:}
+        client-email: ${IDENTITY_AUTHORITY_FCM_CLIENT_EMAIL:}
+        private-key-pkcs8-base64: ${IDENTITY_AUTHORITY_FCM_PRIVATE_KEY:}
+        token-uri: ${IDENTITY_AUTHORITY_FCM_TOKEN_URI:https://oauth2.googleapis.com/token}
+        refresh-skew: ${IDENTITY_AUTHORITY_FCM_REFRESH_SKEW:PT5M}
+    # Publishing the settled chain head as the ACCOUNT_AUTHORITY leaf ADM-009 decision 12 reserves. A
+    # separate switch from identity.authority.enabled on purpose, so the chain can run for as long as it
+    # takes to validate while nothing is written to federation state. With this off no head is signed, no
+    # resolver is contacted and no row is written to account_authority_publication, and the chain behaves
+    # exactly as it does today. Decision 12 says the gap it names is a missing publication rather than a
+    # missing signature; this is the switch that closes it, one environment at a time.
+    #
+    # Turning it on is refused at startup unless the chain itself is on, the homeserver is named, this
+    # deployment holds that homeserver's roster membership key, the resolver is configured, and the two
+    # windows below are a pair the codec will encode (AuthorityPublicationStartupCheck).
+    #
+    # Rollback: set IDENTITY_AUTHORITY_PUBLICATION_ENABLED back to false. The table stays: the row is what
+    # makes a republish idempotent, and dropping it would make the next publication re-sign bytes the log
+    # already carries.
+    publication:
+      enabled: ${IDENTITY_AUTHORITY_PUBLICATION_ENABLED:false}
+      # Its own value rather than identity.placement.resolver-base-url, even though both point at the same
+      # service, so the two features stay independently deployable and one rollback cannot disable the
+      # other. Never identity.resolver.*: that namespace belonged to the removed directory-publishing
+      # client (ADM-001 L1b).
+      resolver-base-url: ${IDENTITY_AUTHORITY_PUBLICATION_RESOLVER_BASE_URL:}
+      # The federation roster id of the homeserver whose chains this deployment publishes. Named
+      # explicitly, never derived from a local routing row: the head is an assertion by the homeserver that
+      # stores the chain, and a roster id guessed from state that row is allowed to be stale about would go
+      # inside a signed object. Empty means publishing refuses to start.
+      homeserver-id: ${IDENTITY_AUTHORITY_PUBLICATION_HOMESERVER_ID:}
+      # Validity of a published head, capped at the 400 days the codec fixes, which is the same bound
+      # ADM-008 decision 7 puts on a placement record signed by the same key. It is what turns a homeserver
+      # that stops publishing into a visible stale state in the client rather than into silence; it does not
+      # make withholding detectable, which needs the non-membership proof ADM-005 owns.
+      head-validity: ${IDENTITY_AUTHORITY_PUBLICATION_HEAD_VALIDITY:P400D}
+      # Age at which a still-valid head is re-issued with a fresh window, so a long-quiet account's
+      # attestation never reaches its expiry. Checked on the same lazy path settlement runs on, never on a
+      # timer, so it costs one extra leaf per interval for an account with no transitions. Must be shorter
+      # than head-validity or startup refuses it.
+      republish-after: ${IDENTITY_AUTHORITY_PUBLICATION_REPUBLISH_AFTER:P300D}
+      # How long an unacknowledged head waits before it is retried. The catch-up rides the lazy path the
+      # account holder's own reads take, so a resolver that cannot be reached would otherwise put a socket
+      # timeout in front of every one of those reads. This is the only thing that bounds retries: there is no
+      # queue and no scheduler, and a head still unsent when the next transition happens is sent then.
+      retry-after: ${IDENTITY_AUTHORITY_PUBLICATION_RETRY_AFTER:PT5M}
   # Generation-1 placement records and the shadow comparison (ADM-008 Phase 4). Every flag is off by
   # default and the feature is inert until one is turned on: no scheduler is started, no record is
   # signed, no MAS is read and no new metric series appears. There is deliberately no flag that serves
@@ -121,6 +218,15 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_GENESIS_LIMIT:10}
         refresh-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_GENESIS_REFRESH:PT1M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_ACCOUNT_GENESIS_TIMEOUT:PT0S}
+      # Bearer-gated, and each call either mints a server challenge or takes the head row lock, so
+      # they are bounded per caller the way the credential checks are. The whole family is one rule:
+      # an unlisted authority path would fall under default-config, which is far too loose for a
+      # transition that moves an account's authority.
+      - path: /account/authority/**
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_AUTHORITY_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_AUTHORITY_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_ACCOUNT_AUTHORITY_TIMEOUT:PT0S}
       - path: /signup/complete
         methods: [POST]
         limit-for-period: ${IDENTITY_RATE_LIMIT_SIGNUP_COMPLETE_LIMIT:10}
@@ -183,6 +289,31 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PASSKEY_VERIFY_LIMIT:20}
         refresh-period: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PASSKEY_VERIFY_REFRESH:PT1M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_ENROLL_STEPUP_PASSKEY_VERIFY_TIMEOUT:PT0S}
+      # The authority step-up: where a signed-in user confirms one authority transition on a page that
+      # can run the ceremony. Same budgets as the enrollment step-up above, and deliberately no OTP
+      # entries, because that page has no arm that sends a code.
+      - path: /login/authority/stepup/pin
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PIN_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PIN_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PIN_TIMEOUT:PT0S}
+      - path: /login/authority/stepup/passkey/options
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PASSKEY_OPTIONS_LIMIT:20}
+        refresh-period: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PASSKEY_OPTIONS_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PASSKEY_OPTIONS_TIMEOUT:PT0S}
+      - path: /login/authority/stepup/passkey/verify
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PASSKEY_VERIFY_LIMIT:20}
+        refresh-period: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PASSKEY_VERIFY_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_AUTHORITY_STEPUP_PASSKEY_VERIFY_TIMEOUT:PT0S}
+      # Minting the sheet itself. Bearer-gated, and each call writes a login session, so it is bounded
+      # per caller like the other /security starts rather than left to the throughput default.
+      - path: /security/authority/step-up/start
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_AUTHORITY_STEP_UP_START_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_AUTHORITY_STEP_UP_START_REFRESH:PT5M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_AUTHORITY_STEP_UP_START_TIMEOUT:PT0S}
       # Re-authentication. Both calls check a number against the account's own binding, and
       # verify checks a code on top, so they are credential checks and need the same shape of
       # budget as the step-up pair above rather than the throughput default. The per-account
