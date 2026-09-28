@@ -52,6 +52,8 @@ class IdentityOrchestrationServiceTest {
         @Mock
         private UserSecurityService userSecurityService;
         @Mock
+        private me.sarahlacerda.gua.identityservice.service.security.PasskeyService passkeyService;
+        @Mock
         private TrustedDeviceService trustedDeviceService;
         @Mock
         private DeviceNotificationService deviceNotificationService;
@@ -76,6 +78,7 @@ class IdentityOrchestrationServiceTest {
                                 phoneNumberHasher,
                                 new PhoneNumberMasker(),
                                 userSecurityService,
+                                passkeyService,
                                 trustedDeviceService,
                                 deviceNotificationService,
                                 usernamePolicy,
@@ -340,5 +343,48 @@ class IdentityOrchestrationServiceTest {
                 verify(pinChallengeService, never()).consume(any());
                 verify(matrixProvisioningService, never()).ensureSessionForUser(any(), any(), any(),
                                 any(Boolean.class));
+        }
+
+        @Test
+        void verifyOtpAndSignInRefusesAPasskeyOnlyAccountAndMintsNoSession() {
+                // This endpoint is permitAll and mints a real Matrix session, and there is no browser on it, so
+                // no assertion can be taken. For an account whose only strong factor is a passkey the correct
+                // answer is to refuse and send the caller to a client that can run the ceremony. Otherwise
+                // phone plus SMS code alone yields a working Matrix session.
+                String phone = "+12025550123";
+                DeviceMetadata metadata = DeviceMetadata.builder().build();
+                when(phoneNumberHasher.digest(phone)).thenReturn("digest");
+                DirectoryEntry entry = DirectoryEntry.builder()
+                                .phoneDigest("digest").userId("@alice:gua.global").build();
+                when(directoryService.findByDigest("digest")).thenReturn(java.util.Optional.of(entry));
+                when(userSecurityService.hasPin("@alice:gua.global")).thenReturn(false);
+                when(passkeyService.hasPasskey("@alice:gua.global")).thenReturn(true);
+
+                org.assertj.core.api.Assertions
+                                .assertThatThrownBy(() -> service.verifyOtpAndSignIn(phone, "123456", null, metadata))
+                                .isInstanceOf(me.sarahlacerda.gua.identityservice.exception.LoginFlowException.class)
+                                .hasMessageContaining("passkey");
+
+                org.mockito.Mockito.verifyNoInteractions(matrixProvisioningService);
+        }
+
+        @Test
+        void verifyOtpAndSignInIsUnchangedForAnAccountThatAlsoHoldsAPin() {
+                // Both existing production accounts hold a PIN, so the delta for them on this path is zero:
+                // the PIN challenge is issued exactly as before and the passkey is never consulted.
+                String phone = "+12025550123";
+                DeviceMetadata metadata = DeviceMetadata.builder().build();
+                when(phoneNumberHasher.digest(phone)).thenReturn("digest");
+                DirectoryEntry entry = DirectoryEntry.builder()
+                                .phoneDigest("digest").userId("@alice:gua.global").build();
+                when(directoryService.findByDigest("digest")).thenReturn(java.util.Optional.of(entry));
+                when(userSecurityService.hasPin("@alice:gua.global")).thenReturn(true);
+                when(pinChallengeService.issue("@alice:gua.global", phone)).thenReturn("challenge");
+
+                var result = service.verifyOtpAndSignIn(phone, "123456", null, metadata);
+
+                org.assertj.core.api.Assertions.assertThat(result).isNotNull();
+                org.mockito.Mockito.verify(passkeyService, org.mockito.Mockito.never())
+                                .hasPasskey(org.mockito.ArgumentMatchers.anyString());
         }
 }

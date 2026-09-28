@@ -33,6 +33,17 @@ public class LoginSession {
         OTP_SENT,
         /** Returning user with two-step verification; awaiting the PIN. */
         PIN_REQUIRED,
+        /**
+         * Returning account that holds a passkey and no PIN; awaiting the assertion.
+         *
+         * <p>Without this phase the OTP alone finished such a login: routeExistingUser fell through to
+         * advanceToPasskeySetup, which completes straight away for an account that already holds a passkey,
+         * so the strong factor was never asserted. Phone possession is exactly what a SIM swap buys, so a
+         * registered passkey has to be presented.
+         *
+         * <p>The name is load-bearing. The sign-in app already renders a step for this exact string.
+         */
+        PASSKEY_REQUIRED,
         /** New user; awaiting username + display name. */
         PROFILE_REQUIRED,
         /** New user; offered to set an account PIN (two-step verification). */

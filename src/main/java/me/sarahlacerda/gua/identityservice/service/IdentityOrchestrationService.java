@@ -11,15 +11,18 @@ import lombok.RequiredArgsConstructor;
 import me.sarahlacerda.gua.identityservice.client.matrix.MatrixAdminClient;
 import me.sarahlacerda.gua.identityservice.domain.MatrixSession;
 import me.sarahlacerda.gua.identityservice.domain.VerifyOtpResult;
+import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneAlreadyLinkedException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.service.routing.ResolverDirectoryClient;
 import me.sarahlacerda.gua.identityservice.service.security.DeviceNotificationService;
+import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService.DeviceMetadata;
@@ -37,6 +40,7 @@ public class IdentityOrchestrationService {
     private final PhoneNumberHasher phoneNumberHasher;
     private final PhoneNumberMasker phoneNumberMasker;
     private final UserSecurityService userSecurityService;
+    private final PasskeyService passkeyService;
     private final TrustedDeviceService trustedDeviceService;
     private final DeviceNotificationService deviceNotificationService;
     private final UsernamePolicy usernamePolicy;
@@ -66,6 +70,16 @@ public class IdentityOrchestrationService {
 
         final DirectoryEntry entry = existingEntry.get();
         final String userId = entry.getUserId();
+
+        // The same gap as the interactive flow had, on a surface where it is worse. This endpoint is
+        // permitAll and mints a real Matrix session, and there is no browser here, so no assertion can be
+        // taken: the only correct answer for an account whose sole strong factor is a passkey is to refuse
+        // and send the caller to a client that can run the ceremony. The !hasPin conjunct keeps the delta
+        // for every account that also holds a PIN at exactly zero.
+        if (!userSecurityService.hasPin(userId) && passkeyService.hasPasskey(userId)) {
+            throw new LoginFlowException(HttpStatus.FORBIDDEN, "passkey_required",
+                    "This account signs in with a passkey. Update Gua to sign in.");
+        }
 
         if (userSecurityService.hasPin(userId)) {
             if (!StringUtils.hasText(providedPin)) {

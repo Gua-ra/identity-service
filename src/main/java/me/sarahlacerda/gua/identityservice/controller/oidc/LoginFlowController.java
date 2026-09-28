@@ -238,6 +238,23 @@ public class LoginFlowController {
             loginSessionService.save(sessionId, session);
             return ResponseEntity.ok(state(session, null));
         }
+        // An account whose only strong factor is a passkey must present it. Until this branch existed the
+        // method fell through to advanceToPasskeySetup, which completes the login for an account that
+        // already holds a passkey, so phone plus SMS code finished the sign-in and the passkey was never
+        // asserted. A SIM swap buys exactly that phone.
+        //
+        // It belongs HERE and not in advanceToPasskeySetup, which is also reached from submitPin and
+        // submitPinSetup: putting it there would demand a passkey AFTER a correct PIN and would break every
+        // account that holds both.
+        //
+        // Deliberately not gated on passkeyService.isEnabled(). The stored credential is what makes this
+        // account passkey-only, so a deployment that switches passkeys off must not thereby turn it back
+        // into an account an SMS code alone can finish.
+        if (passkeyService.hasPasskey(userId)) {
+            session.setPhase(Phase.PASSKEY_REQUIRED);
+            loginSessionService.save(sessionId, session);
+            return ResponseEntity.ok(state(session, null));
+        }
         return advanceToPasskeySetup(sessionId, session);
     }
 
@@ -385,8 +402,11 @@ public class LoginFlowController {
             @RequestHeader(value = CSRF_HEADER, required = false) String csrf) {
         LoginSession session = requireSession(sessionId);
         requireCsrf(session, csrf);
-        // Offered at the very start of the flow ("sign in with a passkey"), before OTP.
-        requirePhase(session, Phase.PHONE, Phase.OTP_SENT);
+        // Offered at the very start of the flow ("sign in with a passkey"), before OTP, and now also at
+        // PASSKEY_REQUIRED, which is the step that asks for this very assertion. Without it the step's own
+        // button answers 409 unexpected_step, which the sign-in app treats as "refresh and re-read", so the
+        // user loops back onto the same screen for ever.
+        requirePhase(session, Phase.PHONE, Phase.OTP_SENT, Phase.PASSKEY_REQUIRED);
 
         return ResponseEntity.ok(new PasskeyOptionsResponse(passkeyService.startAuthentication(sessionId)));
     }
@@ -399,7 +419,7 @@ public class LoginFlowController {
             @RequestBody @Valid PasskeyCredentialRequest request) {
         LoginSession session = requireSession(sessionId);
         requireCsrf(session, csrf);
-        requirePhase(session, Phase.PHONE, Phase.OTP_SENT);
+        requirePhase(session, Phase.PHONE, Phase.OTP_SENT, Phase.PASSKEY_REQUIRED);
 
         PasskeyService.PasskeyAuthentication auth = passkeyService.finishAuthentication(sessionId, request.credential());
         String userId = auth.userId();
@@ -419,6 +439,15 @@ public class LoginFlowController {
         // On a re-authentication the asserted credential must belong to the existing subject.
         if (session.getReauthUserId() != null && !session.getReauthUserId().equals(userId)) {
             throw reauthMismatch();
+        }
+
+        // And at PASSKEY_REQUIRED the subject is ALREADY resolved, by an OTP this session verified, while
+        // reauthUserId is null. Without this check any valid passkey of any account would be accepted here
+        // and complete() would then issue an authorization code pairing the asserter's subject with the
+        // phone number the victim just proved. The factor must belong to the account being signed in.
+        if (StringUtils.hasText(session.getUserId()) && !session.getUserId().equals(userId)) {
+            throw new LoginFlowException(HttpStatus.FORBIDDEN, "passkey_user_mismatch",
+                    "This passkey belongs to a different account.");
         }
 
         session.setUserId(userId);
@@ -556,7 +585,16 @@ public class LoginFlowController {
                 session.getPhoneHint(),
                 session.getCsrfToken(),
                 session.isNewUser(),
-                redirectUrl);
+                redirectUrl,
+                // Only at the new step, and only ever as an explicit answer. The deployed sign-in app offers
+                // the ceremony at PASSKEY_REQUIRED only on `passkeysEnabled === true`; a silent server leaves
+                // its button and its recovery link undefined, which is a screen with no way out. So the phase
+                // and this field ship together or neither ships.
+                //
+                // Null elsewhere on purpose: @JsonInclude(NON_NULL) then omits it, so every other phase keeps
+                // its exact current wire shape, and the phone and OTP steps do not gain a field that would
+                // say whether an account holds a passkey.
+                session.getPhase() == Phase.PASSKEY_REQUIRED ? passkeyService.isEnabled() : null);
     }
 
     /**
@@ -625,6 +663,8 @@ public class LoginFlowController {
             String phoneHint,
             String csrfToken,
             boolean newUser,
-            String redirectUrl) {
+            String redirectUrl,
+            /** Whether this deployment can run a passkey ceremony. Sent at PASSKEY_REQUIRED and nowhere else. */
+            Boolean passkeysEnabled) {
     }
 }

@@ -3,6 +3,7 @@ package me.sarahlacerda.gua.identityservice.controller;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -252,6 +253,95 @@ class LoginFlowControllerTest {
                 .content("{\"code\":\"123456\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"));
+    }
+
+    @Test
+    void aPasskeyOnlyAccountIsAskedForTheAssertionInsteadOfBeingSignedInByTheCodeAlone() throws Exception {
+        // The gap this hotfix closes. Before it, a returning account with a passkey and no PIN fell through
+        // to PASSKEY_SETUP, which completes the login for an account that already holds a passkey, so phone
+        // plus SMS code finished the sign-in and the strong factor was never presented.
+        LoginSession session = session(Phase.OTP_SENT);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").displayName("Alice").build();
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
+        when(userSecurityService.hasPin("u1")).thenReturn(false);
+        when(passkeyService.hasPasskey("u1")).thenReturn(true);
+        when(passkeyService.isEnabled()).thenReturn(true);
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PASSKEY_REQUIRED"))
+                // Load-bearing, not cosmetic: the deployed sign-in app offers the ceremony at this step only
+                // on an explicit true, and without it renders a screen whose passkey button and recovery link
+                // are both undefined. Shipping the phase without this field would lock the account out rather
+                // than protect it.
+                .andExpect(jsonPath("$.passkeysEnabled").value(true))
+                .andExpect(jsonPath("$.redirectUrl").doesNotExist());
+    }
+
+    @Test
+    void thePasskeyStepIsNotGatedOnTheDeploymentFlagSoTurningPasskeysOffCannotReopenTheGap() throws Exception {
+        // A deployment that switches passkeys off must not thereby turn a passkey-only account back into one
+        // an SMS code alone can finish. The step still stands; what changes is only what the page can offer.
+        LoginSession session = session(Phase.OTP_SENT);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").displayName("Alice").build();
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
+        when(userSecurityService.hasPin("u1")).thenReturn(false);
+        when(passkeyService.hasPasskey("u1")).thenReturn(true);
+        when(passkeyService.isEnabled()).thenReturn(false);
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PASSKEY_REQUIRED"))
+                .andExpect(jsonPath("$.passkeysEnabled").value(false));
+    }
+
+    @Test
+    void anAccountHoldingBothFactorsStillTakesThePinStepAndIsUnaffected() throws Exception {
+        // Both existing production accounts hold a PIN and a passkey. The PIN branch is evaluated first, so
+        // their step does not change and they never meet the new phase.
+        LoginSession session = session(Phase.OTP_SENT);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").displayName("Alice").build();
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
+        when(userSecurityService.hasPin("u1")).thenReturn(true);
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_REQUIRED"))
+                // The field is sent at the new phase and nowhere else, so every other step keeps its exact
+                // current wire shape and no step gains a hint about whether an account holds a passkey.
+                .andExpect(jsonPath("$.passkeysEnabled").doesNotExist());
+        verify(passkeyService, never()).hasPasskey(anyString());
+    }
+
+    @Test
+    void thePinStepIsRefusedAtThePasskeyStepSoTheCodeAloneStillCannotFinish() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PASSKEY_REQUIRED)));
+
+        mockMvc.perform(post("/login/pin")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pin\":\"123456\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("unexpected_step"));
     }
 
     @Test
@@ -582,6 +672,54 @@ class LoginFlowControllerTest {
                 .content("{}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.publicKey.challenge").value("abc"));
+    }
+
+    @Test
+    void anotherAccountsPasskeyCannotSatisfyThePasskeyStep() throws Exception {
+        // The subject at PASSKEY_REQUIRED is already resolved, by an OTP this session verified, and
+        // reauthUserId is null, so the pre-existing re-auth guard does not cover this step. Without the new
+        // check any valid passkey of any account would be accepted and complete() would then issue an
+        // authorization code pairing the asserter's subject with the phone number the victim just proved.
+        LoginSession session = session(Phase.PASSKEY_REQUIRED);
+        session.setUserId("@victim:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@attacker:dev.local"));
+        DirectoryEntry entry = DirectoryEntry.builder()
+                .phoneDigest("digest").userId("@attacker:dev.local").username("attacker").build();
+        when(directoryService.findByUserId("@attacker:dev.local")).thenReturn(List.of(entry));
+
+        mockMvc.perform(post("/login/passkey/auth/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("passkey_user_mismatch"));
+
+        // Nothing is issued.
+        verify(authorizationService, never()).issueCode(any(), any(), any());
+    }
+
+    @Test
+    void theOwnersPasskeySatisfiesThePasskeyStepAndCompletes() throws Exception {
+        LoginSession session = session(Phase.PASSKEY_REQUIRED);
+        session.setUserId("@alice:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local"));
+        DirectoryEntry entry = DirectoryEntry.builder()
+                .phoneDigest("digest").userId("@alice:dev.local").username("alice").displayName("Alice").build();
+        when(directoryService.findByUserId("@alice:dev.local")).thenReturn(List.of(entry));
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        mockMvc.perform(post("/login/passkey/auth/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
     }
 
     @Test
