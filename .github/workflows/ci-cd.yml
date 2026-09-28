@@ -1,15 +1,32 @@
 name: CI/CD
 
+# THIS IS THE PRODUCTION HOTFIX BRANCH. It is based on the commit production is running, not on main,
+# and it carries one narrow security fix. The only reason this workflow differs from the one that
+# shipped with that commit is BUILD PROVENANCE: production is now promoted rather than pushed, and
+# promote-prod.yml on main will only promote a digest that carries a Sigstore attestation binding it
+# to its source commit. Without the attest step below this branch could build an artifact that
+# nothing is allowed to deploy.
+#
+# So the delta here is deliberately four additions and one deletion, and NOTHING else:
+#   + signing permissions on the build job
+#   + an id on the push step, so its digest can be read
+#   + the attest step
+#   + a `none` dispatch target, which is how this branch publishes without deploying
+#   - the deploy-prod job and the `prod` dispatch option, which are the old push-to-production path
+#
+# No application code, no schema and nothing from main comes with it. Verified by tree hash: the
+# whole tree excluding .github is bit-identical to the tree before this change.
+
 on:
   push:
     branches: ["main"]
   workflow_dispatch:
     inputs:
       environment:
-        description: "Target environment for manual deploy"
+        description: "Where to deploy after building. `none` builds, tests, publishes and signs only."
         type: choice
-        options: [dev, prod]
-        default: dev
+        options: [none, dev]
+        default: none
 
 permissions:
   contents: read
@@ -21,8 +38,18 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Narrower than the workflow default, plus the two the signing step needs. A job-level block
+    # REPLACES the default, so contents and packages are restated or checkout and the push break.
+    # `id-token: write` mints the OIDC token Sigstore signs with, which is what makes the certificate
+    # carry GitHub's own claims about this run rather than anything this file asserts.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     outputs:
       ref: ${{ steps.ref.outputs.ref }}
+      digest: ${{ steps.digest.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -47,6 +74,7 @@ jobs:
             type=sha,format=long
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/main' }}
       - uses: docker/build-push-action@v6
+        id: push
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -55,6 +83,41 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # A digest we cannot read is a published artifact with no evidence, so refuse it here rather
+      # than let it reach the registry unsigned.
+      - name: Require a usable digest from the push
+        id: digest
+        env:
+          PUSHED: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$PUSHED" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::build-push-action reported no usable digest ('${PUSHED}')."
+            exit 1
+          fi
+          echo "digest=$PUSHED" >> "$GITHUB_OUTPUT"
+
+      # THE RECORD PROMOTION REQUIRES. Signs a statement, through Sigstore, whose certificate is
+      # minted from this run's OIDC token, so the source repository, the workflow file that signed and
+      # the commit all come from GitHub rather than from this file. promote-prod.yml checks exactly
+      # those certificate fields and refuses a digest that carries no such signature.
+      #
+      # `subject-name` must resolve to exactly the IMAGE above, because promotion asserts the signed
+      # subject name equals it. `subject-digest` is the index digest, which is the same object the
+      # sha-<commit> tag resolves to and the same one kubelet reports back, so the signed subject and
+      # the deployed bytes are one object rather than a per-architecture child.
+      #
+      # It stays in a job written inline in THIS file on purpose: the certificate names the workflow
+      # file the signing job is defined in, and promotion pins that filename. Factoring it into a
+      # called workflow would make every artifact from this branch unpromotable.
+      #
+      # Pinned to a commit rather than a tag, because this step is what production trusts.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: false
 
   # AUTOMATIC on merge to main; also manually dispatchable (environment=dev) to
   # roll any branch onto dev for QA.
@@ -75,37 +138,17 @@ jobs:
           sudo k3s kubectl -n gua set image deployment/identity-service identity-service="$IMG"
           sudo k3s kubectl -n gua rollout status deployment/identity-service --timeout=180s
 
-  # APPROVAL GATE: fires on every merge to main and on workflow_dispatch with
-  # environment=prod. A merge deploys dev automatically (deploy-dev above) and also
-  # stages this prod deployment, which pauses until a maintainer approves the
-  # `production` GitHub Environment (required reviewer).
-  deploy-prod:
-    needs: build
-    if: >-
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod')
-    # The prod runner's actual label. `prod` matches NOTHING: the only registered runners are
-    # emolga-dev (self-hosted,Linux,X64,dev) and identity-service-deploy-runner-prod
-    # (self-hosted,Linux,X64,identity-service-incluster-prod). With an unmatchable label this job
-    # could never be scheduled at all, which is the real reason production has sat on an August
-    # image while runs queued: every prod deploy failed in about three seconds with zero steps,
-    # before the environment gate was ever consulted.
-    runs-on: [self-hosted, identity-service-incluster-prod]
-    environment: production
-    steps:
-      - name: Roll out ${{ needs.build.outputs.ref }} to prod
-        run: |
-          IMG="${{ needs.build.outputs.ref }}"
-          # ns gua-prod, and NOT ns gua. This job was a copy of deploy-dev with only the runner label
-          # and the environment changed, so it still pointed at the dev namespace: an approved
-          # production deploy silently re-rolled DEV and production never received the build. That is
-          # why prod has sat on an August image while runs queued for approval. gua-resolver had the
-          # identical bug and its workflow records the same fix.
-          #
-          # Plain kubectl, not `sudo k3s kubectl`. The dev runner is a host-level runner where k3s'
-          # bundled kubectl and the node kubeconfig are the right answer; this one is a POD
-          # (deployment/identity-service-deploy-runner-prod in ns gua-prod) whose ServiceAccount
-          # identity-service-deployer-prod is granted deployments get+patch in that namespace, so it
-          # authenticates as itself and there is no k3s binary to sudo.
-          kubectl -n gua-prod set image deployment/identity-service identity-service="$IMG"
-          kubectl -n gua-prod rollout status deployment/identity-service --timeout=180s
+  # There is deliberately no deploy-prod job on this branch any more.
+  #
+  # Production is promoted, not pushed. promote-prod.yml on main takes a source commit, requires its
+  # artifact to already exist AND to carry a verifiable build-provenance attestation for that exact
+  # commit, resolves the immutable digest and deploys THAT behind the production environment's
+  # approval, after printing the rollback baseline for the approver.
+  #
+  # The job that stood here was reachable from this branch: a push build uses the workflow file of the
+  # pushed ref, but `workflow_dispatch --ref hotfix/... -f environment=prod` evaluates THIS copy. So
+  # while it existed, this branch carried a route into ns gua-prod that skipped digest pinning,
+  # attestation verification, the settled-rollout check and the rollback inspection. Removing it means
+  # the only way this hotfix reaches production is the promotion workflow.
+  #
+  # deploy-dev is kept: rolling the hotfix onto dev for QA is still useful, and it is opt-in only.
