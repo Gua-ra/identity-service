@@ -1,7 +1,6 @@
 package me.sarahlacerda.gua.identityservice.service.security;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -126,14 +125,19 @@ public class PasskeyService implements CredentialRepository {
      */
     @Transactional
     public boolean removeCredential(String userId, String credentialId, boolean accountHoldsAnotherFactor) {
+        // By principal, both times. Keyed on the MXID, as this was, an owner whose Matrix identity had changed
+        // since registration could not remove their own credential, because the audit column still held the old
+        // id; and the last-factor guard counted rows by that same stale key, so it would have permitted removing
+        // the account's only factor while believing it had found none.
+        PasskeyPrincipals.Principal principal = requirePrincipal(userId);
         Optional<PasskeyCredential> credential = repository.findByCredentialId(credentialId)
-                .filter(row -> row.getUserId().equals(userId));
+                .filter(row -> principal.text().equals(row.getAccountPrincipal()));
         if (credential.isEmpty()) {
             // Same answer for another account's credential and for one that does not exist, so this cannot be
             // used to ask whose a credential is.
             return false;
         }
-        if (!accountHoldsAnotherFactor && repository.findByUserId(userId).size() <= 1) {
+        if (!accountHoldsAnotherFactor && repository.findByAccountPrincipal(principal.text()).size() <= 1) {
             throw new LoginFlowException(HttpStatus.CONFLICT, "factor_required",
                     "Set up another way to confirm it is you before removing this one.");
         }
@@ -341,6 +345,28 @@ public class PasskeyService implements CredentialRepository {
         }
 
         try {
+            // BEFORE the ceremony, because the library refuses first otherwise. A credential registered under
+            // the old model replays an MXID's own bytes as its user handle, and those bytes can never name a
+            // principal: 34 bytes are required and the first must be the format version, while an MXID begins
+            // with '@'. The Yubico flow resolves a username from the handle while building its Step6 and
+            // asserts that it resolved, before any signature is touched, so a handle naming no principal is
+            // answered generically from the catch below and this branch was unreachable for exactly the rows
+            // it describes.
+            //
+            // This reads NOTHING. It is a decision about the shape of a value the caller itself submitted, so
+            // it can carry a distinct code on an unauthenticated path without becoming an oracle: it cannot
+            // say whether an account or a credential exists, because it never asks. It also keeps working
+            // after the row is deleted, which is the retirement policy, where a row-keyed check would leave
+            // the holder with nothing but a generic dead end.
+            //
+            // Inside the try on purpose: the finally burns the single-use challenge, and a refusal that
+            // skipped it would turn one attempt into a retry window until the TTL ran out.
+            Optional<byte[]> replayedHandle = replayedHandleBytes(credential);
+            if (replayedHandle.isPresent() && principals.fromHandleBytes(replayedHandle.get()).isEmpty()) {
+                throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_credential_retired",
+                        "This passkey cannot be used any more. Sign in another way and add it again.");
+            }
+
             AssertionResult result = runAssertion(stored, credential);
 
             if (!result.isSuccess()) {
@@ -359,6 +385,35 @@ public class PasskeyService implements CredentialRepository {
             PasskeyCredential saved = repository.findByCredentialId(result.getCredentialId().getBase64Url())
                     .orElseThrow(() -> new LoginFlowException(HttpStatus.UNAUTHORIZED,
                             "passkey_authentication_failed", "Unknown passkey."));
+
+            // A row with no principal names no account. It cannot reach here on the sign-in path, because the
+            // guard above already answered its holder actionably, so this is the backstop rather than the
+            // message.
+            String principalText = saved.getAccountPrincipal();
+            if (!StringUtils.hasText(principalText)) {
+                throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_authentication_failed",
+                        "Passkey sign-in was not accepted.");
+            }
+
+            // The handle is the ownership claim, so it is checked now rather than merely stored. Two things
+            // have to hold: the row's OWN handle has to be this principal's bytes, and a handle the
+            // authenticator replayed has to name the same principal. Neither held before, and a row whose
+            // handle carried some other bytes signed in: the row is found by CREDENTIAL ID, and the replayed
+            // handle only ever reaches the library, which compares it to this same column and therefore
+            // cannot notice the column disagreeing with the principal beside it.
+            //
+            // Not read from AssertionResult.getUserHandle(). That returns the handle of the RegisteredCredential
+            // this service handed the library out of this very row, so comparing it to the row proves nothing.
+            if (!namesPrincipal(storedHandleBytes(saved), principalText)) {
+                throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_authentication_failed",
+                        "Passkey sign-in was not accepted.");
+            }
+            if (replayedHandle.isPresent() && !namesPrincipal(replayedHandle.get(), principalText)) {
+                throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_authentication_failed",
+                        "Passkey sign-in was not accepted.");
+            }
+
+            // After the checks, so a refused assertion does not leave its counter and last-used stamp behind.
             saved.setSignatureCount(result.getSignatureCount());
             saved.setBackupEligible(result.isBackupEligible());
             saved.setBackupState(result.isBackedUp());
@@ -366,14 +421,7 @@ public class PasskeyService implements CredentialRepository {
 
             // The credential names a principal; the principal names whatever Matrix identity the account has
             // NOW. Reading saved.getUserId() here is what tied a credential to the identity it happened to be
-            // registered under. A row with no principal predates the stable model: its handle is an MXID's own
-            // bytes, which no principal can match, so it is refused and its holder re-enrols rather than being
-            // resolved by a guess.
-            String principalText = saved.getAccountPrincipal();
-            if (principalText == null || principalText.isBlank()) {
-                throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_credential_retired",
-                        "This passkey was set up under an older format. Please sign in another way and add it again.");
-            }
+            // registered under.
             String currentUserId = principals.currentUserId(principalText)
                     .orElseThrow(() -> new LoginFlowException(HttpStatus.UNAUTHORIZED,
                             "passkey_authentication_failed", "Unknown passkey."));
@@ -536,9 +584,56 @@ public class PasskeyService implements CredentialRepository {
                         "This account is not ready for passkeys yet. Please try again shortly."));
     }
 
-    @Deprecated(forRemoval = true)
-    private ByteArray userHandleFor(String userId) {
-        return new ByteArray(userId.getBytes(StandardCharsets.UTF_8));
+    /**
+     * Whether these handle bytes name the same principal the row names.
+     *
+     * <p>Through {@link PasskeyPrincipals#fromHandleBytes(byte[])}, which is the seam: this class compares two
+     * opaque principal texts and never names the identifier underneath. Anything unparseable is empty and
+     * therefore false, so the answer is always "prove it names this principal" and never "prove it does not".
+     */
+    private boolean namesPrincipal(byte[] handleBytes, String principalText) {
+        return principals.fromHandleBytes(handleBytes)
+                .map(PasskeyPrincipals.Principal::text)
+                .filter(principalText::equals)
+                .isPresent();
+    }
+
+    /**
+     * The handle the row stores, or no bytes at all when the column is not even base64url.
+     *
+     * <p>Deliberately not through the {@code base64Url} helper, which throws: an unreadable column has to
+     * become a refusal, not a 500.
+     */
+    private byte[] storedHandleBytes(PasskeyCredential saved) {
+        String stored = saved.getUserHandle();
+        if (!StringUtils.hasText(stored)) {
+            return new byte[0];
+        }
+        try {
+            return ByteArray.fromBase64Url(stored).getBytes();
+        } catch (Base64UrlException ex) {
+            return new byte[0];
+        }
+    }
+
+    /**
+     * The handle the authenticator replayed in this assertion, when it replayed one.
+     *
+     * <p>Empty is legitimate and must not be a refusal: an assertion answered off an allow list, which is how
+     * every step-up ceremony is built, need not replay a handle at all, and both clients send JSON null in
+     * that case. Only a handle that is present and unreadable is an error, and that is a malformed body.
+     */
+    private Optional<byte[]> replayedHandleBytes(JsonNode credential) {
+        JsonNode handle = credential.path("response").path("userHandle");
+        if (!handle.isTextual() || !StringUtils.hasText(handle.asText())) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(ByteArray.fromBase64Url(handle.asText()).getBytes());
+        } catch (Base64UrlException ex) {
+            throw new LoginFlowException(HttpStatus.BAD_REQUEST, "passkey_response_invalid",
+                    "Passkey sign-in response was invalid.");
+        }
     }
 
     private String displayNameFor(LoginSession session) {

@@ -93,6 +93,10 @@ class PasskeyServiceStepUpTest {
                 .thenReturn(java.util.Optional.of(new PasskeyPrincipals.Principal(PRINCIPAL, ACCOUNT.rawBytes())));
         // A credential resolves to whatever Matrix identity the account has now.
         lenient().when(principals.currentUserId(PRINCIPAL)).thenReturn(java.util.Optional.of(USER));
+        // The handle is now checked against the principal on every assertion, so the seam has to answer for
+        // this account's bytes. Left lenient because the tests that stop at the ceremony never reach it.
+        lenient().when(principals.fromHandleBytes(ACCOUNT.rawBytes()))
+                .thenReturn(java.util.Optional.of(new PasskeyPrincipals.Principal(PRINCIPAL, ACCOUNT.rawBytes())));
     }
 
     @Test
@@ -299,7 +303,10 @@ class PasskeyServiceStepUpTest {
                 // Ownership is the stable principal now; userId stays only as an audit note.
                 .accountPrincipal(PRINCIPAL)
                 .userId(USER)
-                .userHandle("dXNlcg")
+                // The handle a registration writes: this principal's own canonical bytes. It used to be four
+                // bytes spelling "user", which is precisely the row/principal disagreement the assertion path
+                // now refuses, so the fixture rather than the check is what was wrong.
+                .userHandle(new com.yubico.webauthn.data.ByteArray(ACCOUNT.rawBytes()).getBase64Url())
                 .credentialId(CREDENTIAL_ID)
                 .publicKeyCose(CREDENTIAL_ID)
                 .signatureCount(0)

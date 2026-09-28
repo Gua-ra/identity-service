@@ -17,8 +17,13 @@ import me.sarahlacerda.gua.identityservice.domain.PasskeyCredential;
 import me.sarahlacerda.gua.identityservice.repository.PasskeyCredentialRepository;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.http.HttpStatus;
+
+import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -49,6 +54,8 @@ class PasskeyStablePrincipalTest {
     private PasskeyPrincipals principals;
     @Mock
     private StringRedisTemplate redisTemplate;
+    @Mock
+    private ValueOperations<String, String> valueOperations;
 
     private PasskeyService service() {
         return new PasskeyService(repository, principals, new LoginFlowProperties(), redisTemplate,
@@ -60,7 +67,9 @@ class PasskeyStablePrincipalTest {
                 .accountPrincipal(PRINCIPAL)
                 // Stale on purpose: this is the identity at registration time, and nothing may read it.
                 .userId(OLD_MXID)
-                .userHandle("handle")
+                // The handle a registration writes: the principal's own canonical bytes, which the assertion
+                // path now compares against the row rather than merely storing.
+                .userHandle(new com.yubico.webauthn.data.ByteArray(ACCOUNT.rawBytes()).getBase64Url())
                 .credentialId("cred-1")
                 .publicKeyCose("cose")
                 .signatureCount(0)
@@ -210,4 +219,101 @@ class PasskeyStablePrincipalTest {
             return t;
         }
     }
+    // --- the handle is an ownership claim, so it is checked --------------------------------------------
+
+    /**
+     * A handle that names no principal at all is what a credential from before this model replays, and its
+     * holder has to be told to add the passkey again rather than left with "sign-in was not accepted".
+     *
+     * <p>The refusal has to happen BEFORE the WebAuthn ceremony. The library resolves a username from the
+     * handle while building its own steps and asserts that it resolved, before any signature is touched, so a
+     * branch placed after the ceremony is unreachable for exactly the rows it describes. That is what this
+     * test pins: not only the code, but that the ceremony never ran.
+     */
+    @Test
+    void aHandleThatNamesNoPrincipalIsRefusedBeforeTheCeremonyEverRuns() {
+        PasskeyService service = service();
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn("{\"stored\":\"ceremony\"}");
+        byte[] mxidBytes = OLD_MXID.getBytes(StandardCharsets.UTF_8);
+        when(principals.fromHandleBytes(mxidBytes)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.finishAuthentication("session-1", assertionReplaying(mxidBytes)))
+                .isInstanceOf(LoginFlowException.class)
+                .satisfies(ex -> {
+                    LoginFlowException flow = (LoginFlowException) ex;
+                    assertThat(flow.getCode()).isEqualTo("passkey_credential_retired");
+                    assertThat(flow.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED);
+                });
+
+        // Never reached the database, which is what makes the distinct code safe on an unauthenticated path:
+        // it answers a property of the caller's own submission and cannot say whether anything exists.
+        verify(repository, never()).findByCredentialId(anyString());
+    }
+
+    /**
+     * And the single-use challenge is still burned by that refusal. A guard placed before the try block would
+     * skip the finally that deletes it, turning one attempt into a retry window until the TTL ran out.
+     */
+    @Test
+    void thatRefusalStillSpendsTheChallenge() {
+        PasskeyService service = service();
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn("{\"stored\":\"ceremony\"}");
+        byte[] mxidBytes = OLD_MXID.getBytes(StandardCharsets.UTF_8);
+        when(principals.fromHandleBytes(mxidBytes)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.finishAuthentication("session-1", assertionReplaying(mxidBytes)))
+                .isInstanceOf(LoginFlowException.class);
+
+        verify(redisTemplate).delete("passkey:assertion:session-1");
+    }
+
+    /**
+     * An absent handle is not a refusal. Every step-up ceremony is built from an allow list, and an
+     * authenticator answering one need not replay a handle at all, so treating absence as a refusal would
+     * break step-up rather than tighten it.
+     */
+    @Test
+    void anAbsentHandleIsNoOpinionRatherThanARefusal() {
+        PasskeyService service = service();
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn("{\"stored\":\"ceremony\"}");
+
+        // No userHandle at all. It must get past the guard and fail later, in the ceremony, which with a
+        // stored value that is not a real ceremony means a refusal that is NOT the retired code.
+        assertThatThrownBy(() -> service.finishAuthentication("session-1", assertionWithNoHandle()))
+                .isInstanceOf(LoginFlowException.class)
+                .satisfies(ex -> assertThat(((LoginFlowException) ex).getCode())
+                        .isNotEqualTo("passkey_credential_retired"));
+    }
+
+    /**
+     * A handle that is present but not even base64url is a malformed body, not a retired credential.
+     */
+    @Test
+    void anUnreadableHandleIsAMalformedResponse() {
+        PasskeyService service = service();
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn("{\"stored\":\"ceremony\"}");
+
+        assertThatThrownBy(() -> service.finishAuthentication("session-1",
+                new ObjectMapper().readTree("{\"response\":{\"userHandle\":\"!!!not base64url!!!\"}}")))
+                .isInstanceOf(LoginFlowException.class)
+                .satisfies(ex -> {
+                    LoginFlowException flow = (LoginFlowException) ex;
+                    assertThat(flow.getCode()).isEqualTo("passkey_response_invalid");
+                    assertThat(flow.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                });
+    }
+
+    private static com.fasterxml.jackson.databind.JsonNode assertionReplaying(byte[] handle) throws Exception {
+        String b64url = new com.yubico.webauthn.data.ByteArray(handle).getBase64Url();
+        return new ObjectMapper().readTree("{\"response\":{\"userHandle\":\"" + b64url + "\"}}");
+    }
+
+    private static com.fasterxml.jackson.databind.JsonNode assertionWithNoHandle() throws Exception {
+        return new ObjectMapper().readTree("{\"response\":{}}");
+    }
+
 }
