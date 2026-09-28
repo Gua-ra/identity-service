@@ -84,7 +84,13 @@ jobs:
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod')
-    runs-on: [self-hosted, prod]
+    # The prod runner's actual label. `prod` matches NOTHING: the only registered runners are
+    # emolga-dev (self-hosted,Linux,X64,dev) and identity-service-deploy-runner-prod
+    # (self-hosted,Linux,X64,identity-service-incluster-prod). With an unmatchable label this job
+    # could never be scheduled at all, which is the real reason production has sat on an August
+    # image while runs queued: every prod deploy failed in about three seconds with zero steps,
+    # before the environment gate was ever consulted.
+    runs-on: [self-hosted, identity-service-incluster-prod]
     environment: production
     steps:
       - name: Roll out ${{ needs.build.outputs.ref }} to prod
