@@ -30,10 +30,8 @@ public class PasskeyCredential {
     /**
      * The account's Matrix user id at the moment this credential was registered.
      *
-     * <p>Audit only. It is deliberately NOT the ownership key any more and must never be read to decide who
-     * a credential belongs to, because an account's Matrix identity can change and this column cannot: a
-     * placement change would make it stale and every ownership question answered through it wrong. Use
-     * {@link #accountPrincipal}.
+     * <p>Audit only, and never the ownership key: a placement change moves the account's Matrix identity
+     * while this column stays as written. Use {@link #accountPrincipal}.
      */
     @Column(name = "user_id", nullable = false)
     private String userId;
@@ -41,9 +39,8 @@ public class PasskeyCredential {
     /**
      * The stable Gua account principal that owns this credential: the canonical accountId spelling.
      *
-     * <p>This is the ownership key. It is also what the WebAuthn user handle carries, as its 34 canonical
-     * bytes, so the authenticator itself replays the owner on every assertion. Null only on a row written
-     * before the stable model, which the application refuses rather than resolving.
+     * <p>The ownership key, and what {@link #userHandle} carries as its 34 canonical bytes. Null on a row
+     * predating the stable model, which the application refuses rather than resolving.
      */
     @Column(name = "account_principal", length = 64)
     private String accountPrincipal;

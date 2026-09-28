@@ -17,8 +17,13 @@ import me.sarahlacerda.gua.identityservice.domain.PasskeyCredential;
 import me.sarahlacerda.gua.identityservice.repository.PasskeyCredentialRepository;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.http.HttpStatus;
+
+import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -49,6 +54,8 @@ class PasskeyStablePrincipalTest {
     private PasskeyPrincipals principals;
     @Mock
     private StringRedisTemplate redisTemplate;
+    @Mock
+    private ValueOperations<String, String> valueOperations;
 
     private PasskeyService service() {
         return new PasskeyService(repository, principals, new LoginFlowProperties(), redisTemplate,
@@ -60,8 +67,10 @@ class PasskeyStablePrincipalTest {
                 .accountPrincipal(PRINCIPAL)
                 // Stale on purpose: this is the identity at registration time, and nothing may read it.
                 .userId(OLD_MXID)
-                .userHandle("handle")
-                .credentialId("cred-1")
+                // The handle a registration writes: the principal's own canonical bytes, which the assertion
+                // path now compares against the row rather than merely storing.
+                .userHandle(new com.yubico.webauthn.data.ByteArray(ACCOUNT.rawBytes()).getBase64Url())
+                .credentialId("Y3JlZC0x")
                 .publicKeyCose("cose")
                 .signatureCount(0)
                 .build();
@@ -210,4 +219,180 @@ class PasskeyStablePrincipalTest {
             return t;
         }
     }
+    // --- the handle is an ownership claim, so it is checked --------------------------------------------
+
+    /**
+     * A handle that names no principal at all is what a credential from before this model replays, and its
+     * holder has to be told to add the passkey again rather than left with "sign-in was not accepted".
+     *
+     * <p>The refusal has to happen BEFORE the WebAuthn ceremony. The library resolves a username from the
+     * handle while building its own steps and asserts that it resolved, before any signature is touched, so a
+     * branch placed after the ceremony is unreachable for exactly the rows it describes. That is what this
+     * test pins: not only the code, but that the ceremony never ran.
+     */
+    @Test
+    void aHandleThatNamesNoPrincipalIsRefusedBeforeTheCeremonyEverRuns() {
+        PasskeyService service = service();
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn("{\"stored\":\"ceremony\"}");
+        byte[] mxidBytes = OLD_MXID.getBytes(StandardCharsets.UTF_8);
+        when(principals.fromHandleBytes(mxidBytes)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.finishAuthentication("session-1", assertionReplaying(mxidBytes)))
+                .isInstanceOf(LoginFlowException.class)
+                .satisfies(ex -> {
+                    LoginFlowException flow = (LoginFlowException) ex;
+                    assertThat(flow.getCode()).isEqualTo("passkey_credential_retired");
+                    assertThat(flow.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED);
+                });
+
+        // Never reached the database, which is what makes the distinct code safe on an unauthenticated path:
+        // it answers a property of the caller's own submission and cannot say whether anything exists.
+        verify(repository, never()).findByCredentialId(anyString());
+    }
+
+    /**
+     * And the single-use challenge is still burned by that refusal. A guard placed before the try block would
+     * skip the finally that deletes it, turning one attempt into a retry window until the TTL ran out.
+     */
+    @Test
+    void thatRefusalStillSpendsTheChallenge() {
+        PasskeyService service = service();
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn("{\"stored\":\"ceremony\"}");
+        byte[] mxidBytes = OLD_MXID.getBytes(StandardCharsets.UTF_8);
+        when(principals.fromHandleBytes(mxidBytes)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.finishAuthentication("session-1", assertionReplaying(mxidBytes)))
+                .isInstanceOf(LoginFlowException.class);
+
+        verify(redisTemplate).delete("passkey:assertion:session-1");
+    }
+
+    /**
+     * An absent handle is not a refusal. Every step-up ceremony is built from an allow list, and an
+     * authenticator answering one need not replay a handle at all, so treating absence as a refusal would
+     * break step-up rather than tighten it.
+     */
+    @Test
+    void anAbsentHandleIsNoOpinionRatherThanARefusal() {
+        PasskeyService service = service();
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn("{\"stored\":\"ceremony\"}");
+
+        // No userHandle at all. It must get past the guard and fail later, in the ceremony, which with a
+        // stored value that is not a real ceremony means a refusal that is NOT the retired code.
+        assertThatThrownBy(() -> service.finishAuthentication("session-1", assertionWithNoHandle()))
+                .isInstanceOf(LoginFlowException.class)
+                .satisfies(ex -> assertThat(((LoginFlowException) ex).getCode())
+                        .isNotEqualTo("passkey_credential_retired"));
+    }
+
+    /**
+     * A handle that is present but not even base64url is a malformed body, not a retired credential.
+     */
+    @Test
+    void anUnreadableHandleIsAMalformedResponse() {
+        PasskeyService service = service();
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn("{\"stored\":\"ceremony\"}");
+
+        assertThatThrownBy(() -> service.finishAuthentication("session-1",
+                new ObjectMapper().readTree("{\"response\":{\"userHandle\":\"!!!not base64url!!!\"}}")))
+                .isInstanceOf(LoginFlowException.class)
+                .satisfies(ex -> {
+                    LoginFlowException flow = (LoginFlowException) ex;
+                    assertThat(flow.getCode()).isEqualTo("passkey_response_invalid");
+                    assertThat(flow.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                });
+    }
+
+    private static com.fasterxml.jackson.databind.JsonNode assertionReplaying(byte[] handle) throws Exception {
+        String b64url = new com.yubico.webauthn.data.ByteArray(handle).getBase64Url();
+        return new ObjectMapper().readTree("{\"response\":{\"userHandle\":\"" + b64url + "\"}}");
+    }
+
+    private static com.fasterxml.jackson.databind.JsonNode assertionWithNoHandle() throws Exception {
+        return new ObjectMapper().readTree("{\"response\":{}}");
+    }
+
+    // --- the handle-to-user mapping the WebAuthn library asks for ---------------------------------------
+
+    /**
+     * Several credentials of one account share a user handle, by design, so no row-keyed answer to "which
+     * user is this handle" can be correct. It is decoded from the handle instead, and no row is read.
+     */
+    @Test
+    void theHandleToUserMappingIsDecodedAndNeverReadFromARow() {
+        byte[] handle = ACCOUNT.rawBytes();
+        when(principals.fromHandleBytes(handle))
+                .thenReturn(Optional.of(new PasskeyPrincipals.Principal(PRINCIPAL, handle)));
+
+        assertThat(service().getUsernameForUserHandle(new com.yubico.webauthn.data.ByteArray(handle)))
+                .contains(PRINCIPAL);
+
+        verify(repository, never()).findByUserHandle(anyString());
+        verify(repository, never()).findByUserId(anyString());
+    }
+
+    /** Bytes that name no account map to no user, so the ceremony fails rather than resolving to a guess. */
+    @Test
+    void aHandleNamingNoAccountMapsToNoUser() {
+        byte[] notAPrincipal = OLD_MXID.getBytes(StandardCharsets.UTF_8);
+        when(principals.fromHandleBytes(notAPrincipal)).thenReturn(Optional.empty());
+
+        assertThat(service().getUsernameForUserHandle(new com.yubico.webauthn.data.ByteArray(notAPrincipal)))
+                .isEmpty();
+    }
+
+    /**
+     * A credential is only resolved when the handle names the principal its own row says owns it. Comparing
+     * the handle against the row's handle alone is self-confirming, because both sides are the same column,
+     * so a row whose handle belonged to another account would authenticate as this one.
+     */
+    @Test
+    void aCredentialWhoseHandleNamesAnotherAccountIsNotResolved() {
+        AccountId other = AccountId.derive(
+                AccountId.CLASS_BOOTSTRAP, "a-different-account".getBytes(StandardCharsets.UTF_8));
+        PasskeyCredential row = PasskeyCredential.builder()
+                .accountPrincipal(PRINCIPAL)
+                .userId(OLD_MXID)
+                // The handle of a different account, which the row nonetheless claims to own.
+                .userHandle(new com.yubico.webauthn.data.ByteArray(other.rawBytes()).getBase64Url())
+                .credentialId("cred-1")
+                .publicKeyCose("cose")
+                .signatureCount(0)
+                .build();
+        // lookup() addresses the row by the base64url of the credential id it is handed.
+        when(repository.findByCredentialId("Y3JlZC0x")).thenReturn(Optional.of(row));
+        when(principals.fromHandleBytes(other.rawBytes()))
+                .thenReturn(Optional.of(new PasskeyPrincipals.Principal(other.value(), other.rawBytes())));
+
+        assertThat(service().lookup(
+                new com.yubico.webauthn.data.ByteArray("cred-1".getBytes(StandardCharsets.UTF_8)),
+                new com.yubico.webauthn.data.ByteArray(other.rawBytes())))
+                .isEmpty();
+    }
+
+    /** A row with no principal is named by no handle, and asking must not fail with an error. */
+    @Test
+    void aRowWithNoPrincipalIsNotResolvedAndDoesNotThrow() {
+        PasskeyCredential row = PasskeyCredential.builder()
+                .userId(OLD_MXID)
+                .userHandle(new com.yubico.webauthn.data.ByteArray(ACCOUNT.rawBytes()).getBase64Url())
+                .credentialId("Y3JlZC0y")
+                .publicKeyCose("cose")
+                .signatureCount(0)
+                .build();
+        // lookup() addresses the row by the base64url of the credential id it is handed.
+        when(repository.findByCredentialId("Y3JlZC0y")).thenReturn(Optional.of(row));
+        when(principals.fromHandleBytes(ACCOUNT.rawBytes()))
+                .thenReturn(Optional.of(new PasskeyPrincipals.Principal(PRINCIPAL, ACCOUNT.rawBytes())));
+
+        assertThat(service().lookup(
+                new com.yubico.webauthn.data.ByteArray("cred-2".getBytes(StandardCharsets.UTF_8)),
+                new com.yubico.webauthn.data.ByteArray(ACCOUNT.rawBytes())))
+                .isEmpty();
+    }
+
 }

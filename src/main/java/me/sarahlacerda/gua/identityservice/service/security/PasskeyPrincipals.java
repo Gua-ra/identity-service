@@ -13,23 +13,17 @@ import me.sarahlacerda.gua.identityservice.repository.AccountGenesisRepository;
 /**
  * The one seam between a passkey and the stable Gua account it belongs to.
  *
- * <p>A passkey must belong to an identity that outlives the account's current Matrix name. The MXID is not
- * that identity: it contains the localpart and the homeserver domain, so it changes when placement changes,
- * and until this seam existed it was both the ownership key of every credential row and the WebAuthn user
- * handle itself, which the authenticator stores and replays on every assertion.
+ * <p>A passkey must belong to an identity that outlives the account's current Matrix name, and an MXID is
+ * not one: it carries the localpart and homeserver domain, so placement changes it. Resolution therefore
+ * runs one way only. A credential names a principal, and only then does anything ask which Matrix identity
+ * that principal currently has, so nothing in the WebAuthn layer handles an MXID.
  *
- * <p>So the direction of resolution is inverted. A credential resolves to a principal, and only then does
- * anything ask what Matrix identity that principal currently has. Nothing in the WebAuthn layer sees an
- * MXID any more.
- *
- * <p><b>Why this is the only new file that names an accountId.</b> {@code AccountIdNotReadGuardTest} allows a
- * small set of files to name one at all, and forbids it outright on the routing and login path. The hazard it
- * states is specific: MAS derives the Matrix localpart from a Jinja template over the imported claims, and an
- * accountId would pass MAS's localpart rules, so an accountId reaching a claim, a userinfo field or a
- * directory column is one deploy away from re-keying accounts. A WebAuthn user handle is none of those. This
- * class is therefore added to that test's allow list and exposes {@link Principal}, whose name carries no
- * "accountId", so {@code PasskeyService} never names one and stays outside the allow list. The precedent is
- * {@code AuthorityAccounts}, which the account-authority feature added the same way: exactly one seam.
+ * <p><b>Why this is the only file here that names an accountId.</b> {@code AccountIdNotReadGuardTest} allows
+ * a small set of files to name one and forbids it outright on the routing and login path, because MAS derives
+ * the Matrix localpart from a template over the imported claims and an accountId would satisfy MAS's
+ * localpart rules: one reaching a claim, a userinfo field or a directory column is a deploy away from
+ * re-keying accounts. A WebAuthn user handle is none of those. {@link Principal} carries the value without
+ * naming it, which is what keeps {@code PasskeyService} off the allow list.
  */
 @Component
 @RequiredArgsConstructor
@@ -49,9 +43,8 @@ public class PasskeyPrincipals {
     /**
      * The principal of the account currently known by this Matrix user id.
      *
-     * <p>Empty when the account has no attached genesis row. Callers must refuse rather than fall back to
-     * the MXID: a credential written under an MXID is exactly the thing being removed, and writing one
-     * "just this once" would reintroduce a row that no placement change can survive.
+     * <p>Empty when the account has no attached genesis row. Callers must refuse rather than fall back to the
+     * MXID, which would write a credential no placement change can survive.
      */
     @Transactional(readOnly = true)
     public Optional<Principal> forUserId(String userId) {
