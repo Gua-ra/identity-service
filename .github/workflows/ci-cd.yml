@@ -1,11 +1,22 @@
 name: CI/CD
 
-# Deploy paths, in order of how often they are used:
+# This workflow builds, tests and publishes. It does NOT deploy to production, by design.
+#
+# Production is a separate, explicit promotion of an artifact that already exists: see
+# promote-prod.yml, which takes a source commit, requires its image to have been built and tested
+# already, and deploys the immutable digest behind the `production` environment's approval. The old
+# model gave every merge to main its own prod deploy job, which meant production was "whatever was
+# merged and approved last" rather than something anyone chose, and it left a branch build with no
+# legitimate path to production at all.
+#
+# Paths here, in order of how often they are used:
 #   - label a PR `deploy:dev`  -> builds that branch and rolls it onto dev, so a change can
 #                                 be tried on the real stack before it is merged. Remove the
 #                                 label and re-add it to redeploy after new commits.
-#   - merge to main            -> deploys dev automatically, and stages prod for approval.
-#   - workflow_dispatch        -> same thing by hand, for either environment.
+#   - merge to main            -> builds, tests, publishes, and deploys dev.
+#   - workflow_dispatch        -> `dev` to build and roll dev; `none` to build, test and publish
+#                                 an artifact WITHOUT deploying anything, which is how a hotfix or
+#                                 feature branch produces something promotable.
 on:
   push:
     branches: ["main"]
@@ -14,10 +25,10 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: "Target environment for manual deploy"
+        description: "Where to deploy after building. `none` builds, tests and publishes only."
         type: choice
-        options: [dev, prod]
-        default: dev
+        options: [none, dev]
+        default: none
 
 permissions:
   contents: read
@@ -125,36 +136,10 @@ jobs:
               body: `Deployed to **dev** (ns \`gua\`): \`${{ needs.build.outputs.ref }}\`\n\nDev keeps running this build until something else is deployed over it. Merging to main returns dev to main's build.`
             })
 
-  # APPROVAL GATE: fires on every merge to main and on workflow_dispatch with
-  # environment=prod. A merge deploys dev automatically (deploy-dev above) and also
-  # stages this prod deployment, which pauses until a maintainer approves the
-  # `production` GitHub Environment (required reviewer).
+  # There is deliberately no deploy-prod job here.
   #
-  # NOTE: this job targets ns gua-prod. It used to say `-n gua`, which meant an approved
-  # prod deploy silently re-rolled DEV and prod never received the build. That is why prod
-  # still runs the mutable `:dev` tag: it has never had a real deploy. The first successful
-  # run here pins it to an immutable sha.
-  #
-  # It also waits for a runner labelled `prod`, which this repo does not have yet (the only
-  # registered runner is labelled `dev`). Until one is registered the job queues rather than
-  # deploying, which is the safe failure: it can no longer quietly hit the wrong namespace.
-  deploy-prod:
-    needs: build
-    if: >-
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod')
-    # Scoped in-cluster runner (k8s/cicd/identity-service-deploy-runner-prod.yaml in
-    # gua-deploy), not the shared host runner. Its label is unique on purpose: `prod` was
-    # never carried by anything, so this job used to queue forever instead of failing,
-    # and `dev` is a root runner with cluster-admin that a deploy must never route to.
-    runs-on: [self-hosted, identity-service-incluster-prod]
-    environment: production
-    steps:
-      - name: Roll out ${{ needs.build.outputs.ref }} to prod
-        run: |
-          IMG="${{ needs.build.outputs.ref }}"
-          # Plain kubectl against the in-cluster ServiceAccount. The scoped runner has no
-          # sudo and no k3s binary, and it does not need them: its Role permits exactly a
-          # patch of this one Deployment and a read of the resulting rollout.
-          kubectl -n gua-prod set image deployment/identity-service identity-service="$IMG"
-          kubectl -n gua-prod rollout status deployment/identity-service --timeout=180s
+  # Production is promoted, not pushed. promote-prod.yml takes a source commit, requires that commit's
+  # artifact to already exist, resolves its immutable digest and deploys THAT behind the `production`
+  # environment's approval. Keeping a prod deploy on this workflow made production mean "the last thing
+  # merged that someone approved", and it gave a branch build no legitimate route at all, because the
+  # production environment is `main`-only. Build here; promote there.

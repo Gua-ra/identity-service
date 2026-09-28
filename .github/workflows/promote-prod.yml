@@ -1,0 +1,211 @@
+name: Promote to production
+
+# Production runs explicitly promoted, previously built, immutable artifacts. Nothing is compiled here.
+#
+# WHY THIS EXISTS, and why it is not a deploy job on a branch build. The `production` GitHub Environment
+# carries a deployment-branch policy of `main` only, which is the control we want to keep: it means no
+# feature or hotfix branch can define its own path into production. But it also meant a branch build could
+# never deploy, and the old model had every `main` build own a prod deploy job, so "what is in production"
+# was whatever was last merged and approved rather than something anyone chose. This workflow lives on
+# `main`, so the policy admits it, and it takes a SOURCE COMMIT rather than a branch: the artifact for that
+# commit must already exist, having been built and tested by CI wherever it came from.
+#
+# THE INPUT IS A SOURCE COMMIT, NOT AN IMAGE. An image name is attacker-choosable and says nothing about
+# provenance; a commit sha can be checked against this repository. So the commit is verified first, and the
+# artifact is then required to exist for it. Both checks fail closed.
+#
+# WHAT IS DEPLOYED IS A DIGEST. The tag `sha-<commit>` is how the artifact is found; the immutable digest it
+# resolves to is what production is set to. A tag can be moved, a digest cannot, so production always
+# records exactly the bytes that were promoted.
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Full 40-character identity-service commit SHA to promote (its image must already exist)"
+        type: string
+        required: true
+
+env:
+  IMAGE: ghcr.io/gua-ra/identity-service
+  NAMESPACE: gua-prod
+  DEPLOYMENT: identity-service
+  CONTAINER: identity-service
+
+concurrency:
+  group: promote-prod-identity-service
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  # Ungated on purpose: everything here is read-only, and the approver needs to SEE the result before they
+  # decide. Its findings land in the run summary, which is what the approval screen links to.
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.provenance.outputs.commit }}
+      digest: ${{ steps.artifact.outputs.digest }}
+      ref: ${{ steps.artifact.outputs.ref }}
+    steps:
+      - name: Reject anything that is not a full commit sha
+        id: shape
+        env:
+          INPUT_COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          # Exactly 40 lowercase hex. An abbreviation would resolve to a commit here and to a DIFFERENT
+          # tag at the registry, and a ref name would silently follow whatever it points at today.
+          if ! printf '%s' "$INPUT_COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::'$INPUT_COMMIT' is not a full 40-character lowercase commit sha."
+            exit 1
+          fi
+          echo "commit=$INPUT_COMMIT" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the commit belongs to this repository
+        id: provenance
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT: ${{ steps.shape.outputs.commit }}
+        run: |
+          set -euo pipefail
+          # Asks THIS repository for THAT object. A sha from a fork, from another repository, or invented
+          # is a 404 and stops here. The returned sha is compared back, so a redirect or an abbreviation
+          # cannot widen the match.
+          resolved="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${COMMIT}" --jq '.sha' 2>/dev/null || true)"
+          if [ -z "$resolved" ]; then
+            echo "::error::${COMMIT} is not a commit in ${GITHUB_REPOSITORY}. Refusing to promote."
+            exit 1
+          fi
+          if [ "$resolved" != "$COMMIT" ]; then
+            echo "::error::Provenance is ambiguous: asked for ${COMMIT}, got ${resolved}."
+            exit 1
+          fi
+          subject="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${COMMIT}" --jq '.commit.message' | head -n1)"
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Candidate"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| source commit | \`${COMMIT}\` |"
+            echo "| subject | ${subject} |"
+            echo "| repository | ${GITHUB_REPOSITORY} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Require the artifact to exist and resolve its immutable digest
+        id: artifact
+        env:
+          COMMIT: ${{ steps.provenance.outputs.commit }}
+        run: |
+          set -euo pipefail
+          ref="${IMAGE}:sha-${COMMIT}"
+          # Nothing is built here. If CI never produced this artifact, promotion stops: that is the point,
+          # because an artifact that does not exist was never tested.
+          if ! docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+            echo "::error::No artifact at ${ref}. Build and test that commit first; promotion never builds."
+            exit 1
+          fi
+          digest="$(docker buildx imagetools inspect "$ref" --format '{{ .Manifest.Digest }}' 2>/dev/null || true)"
+          # Fail closed on anything ambiguous: empty, malformed, or more than one line.
+          if [ "$(printf '%s' "$digest" | wc -l | tr -d ' ')" != "0" ] \
+             || ! printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::Could not resolve a single immutable digest for ${ref} (got: '${digest}')."
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "ref=${IMAGE}@${digest}" >> "$GITHUB_OUTPUT"
+          {
+            echo "| artifact tag | \`${ref}\` |"
+            echo "| **digest to be deployed** | \`${digest}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Also ungated, also read-only, and separate because only an in-cluster runner can see production. This is
+  # what puts the CURRENT image and the ROLLBACK digest in front of the approver before they approve.
+  inspect-production:
+    needs: verify
+    runs-on: [self-hosted, identity-service-incluster-prod]
+    outputs:
+      rollback: ${{ steps.current.outputs.rollback }}
+    steps:
+      - name: Read what production is running now
+        id: current
+        run: |
+          set -euo pipefail
+          command -v kubectl >/dev/null || { echo "::error::kubectl is not on this runner."; exit 1; }
+          spec="$(kubectl -n "$NAMESPACE" get deploy "$DEPLOYMENT" \
+            -o jsonpath='{.spec.template.spec.containers[?(@.name=="'"$CONTAINER"'")].image}')"
+          running="$(kubectl -n "$NAMESPACE" get pods -l app="$DEPLOYMENT" \
+            -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="'"$CONTAINER"'")].imageID}' 2>/dev/null || true)"
+          [ -n "$running" ] || running="$spec"
+          echo "rollback=$running" >> "$GITHUB_OUTPUT"
+          {
+            echo ""
+            echo "### Production right now"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| spec image | \`${spec}\` |"
+            echo "| **rollback digest** | \`${running}\` |"
+            echo ""
+            echo "Rollback command:"
+            echo ""
+            echo '```bash'
+            echo "kubectl -n ${NAMESPACE} set image deployment/${DEPLOYMENT} ${CONTAINER}=${running}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The only job that writes. `environment: production` is what holds it: the existing required-reviewer
+  # rule on that environment means a human approves after reading everything the two jobs above printed.
+  promote:
+    needs: [verify, inspect-production]
+    runs-on: [self-hosted, identity-service-incluster-prod]
+    environment: production
+    steps:
+      - name: Re-read, print, then set production to the promoted digest
+        env:
+          CANDIDATE_REF: ${{ needs.verify.outputs.ref }}
+          CANDIDATE_DIGEST: ${{ needs.verify.outputs.digest }}
+          CANDIDATE_COMMIT: ${{ needs.verify.outputs.commit }}
+          ROLLBACK: ${{ needs.inspect-production.outputs.rollback }}
+        run: |
+          set -euo pipefail
+          command -v kubectl >/dev/null || { echo "::error::kubectl is not on this runner."; exit 1; }
+          # Re-read rather than trusting the earlier job: an approval can sit for a while, and what
+          # production is running at the moment of the change is what a rollback has to restore.
+          before="$(kubectl -n "$NAMESPACE" get deploy "$DEPLOYMENT" \
+            -o jsonpath='{.spec.template.spec.containers[?(@.name=="'"$CONTAINER"'")].image}')"
+          echo "commit    : ${CANDIDATE_COMMIT}"
+          echo "promoting : ${CANDIDATE_REF}"
+          echo "replacing : ${before}"
+          echo "rollback  : ${ROLLBACK}"
+
+          # By digest, never by tag. Production then records the exact bytes that were promoted.
+          kubectl -n "$NAMESPACE" set image "deployment/${DEPLOYMENT}" "${CONTAINER}=${CANDIDATE_REF}"
+          kubectl -n "$NAMESPACE" rollout status "deployment/${DEPLOYMENT}" --timeout=300s
+
+          after="$(kubectl -n "$NAMESPACE" get deploy "$DEPLOYMENT" \
+            -o jsonpath='{.spec.template.spec.containers[?(@.name=="'"$CONTAINER"'")].image}')"
+          if [ "$after" != "$CANDIDATE_REF" ]; then
+            echo "::error::Deployment reports '${after}', expected '${CANDIDATE_REF}'."
+            exit 1
+          fi
+          {
+            echo ""
+            echo "### Promoted"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| commit | \`${CANDIDATE_COMMIT}\` |"
+            echo "| digest | \`${CANDIDATE_DIGEST}\` |"
+            echo "| replaced | \`${before}\` |"
+            echo "| rollback | \`${ROLLBACK}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
