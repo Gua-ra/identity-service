@@ -23,9 +23,8 @@ public interface PasskeyCredentialRepository extends JpaRepository<PasskeyCreden
     boolean existsByAccountPrincipal(String accountPrincipal);
 
     /**
-     * Kept with no production caller on purpose: a regression test asserts the assertion path never calls it.
-     * Identifying a user from a handle is a decode, and several credentials of one account share a handle, so
-     * no query on this column can answer it.
+     * Has no production caller: a regression test asserts the assertion path never calls it. Several
+     * credentials of one account share a handle, so no query on this column identifies a user.
      */
     List<PasskeyCredential> findByUserHandle(String userHandle);
 

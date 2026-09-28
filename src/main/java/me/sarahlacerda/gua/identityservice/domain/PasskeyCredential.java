@@ -39,8 +39,8 @@ public class PasskeyCredential {
     /**
      * The stable Gua account principal that owns this credential: the canonical accountId spelling.
      *
-     * <p>The ownership key, and what {@link #userHandle} carries as its 34 canonical bytes. Null on a row
-     * predating the stable model, which the application refuses rather than resolving.
+     * <p>The ownership key, and what {@link #userHandle} carries as its 34 canonical bytes. Null means the
+     * credential has no owner this application will resolve, and the assertion path refuses it.
      */
     @Column(name = "account_principal", length = 64)
     private String accountPrincipal;

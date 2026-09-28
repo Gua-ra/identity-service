@@ -43,8 +43,8 @@ public class PasskeyPrincipals {
     /**
      * The principal of the account currently known by this Matrix user id.
      *
-     * <p>Empty when the account has no attached genesis row. Callers must refuse rather than fall back to the
-     * MXID, which would write a credential no placement change can survive.
+     * <p>Empty when the account has no attached genesis row. Callers must refuse: falling back to the MXID
+     * writes a credential that no placement change can survive.
      */
     @Transactional(readOnly = true)
     public Optional<Principal> forUserId(String userId) {

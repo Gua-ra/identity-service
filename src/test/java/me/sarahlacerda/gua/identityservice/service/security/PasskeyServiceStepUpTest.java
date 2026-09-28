@@ -300,12 +300,11 @@ class PasskeyServiceStepUpTest {
 
     private PasskeyCredential credential() {
         return PasskeyCredential.builder()
-                // Ownership is the stable principal now; userId stays only as an audit note.
                 .accountPrincipal(PRINCIPAL)
+                // Audit only.
                 .userId(USER)
-                // The handle a registration writes: this principal's own canonical bytes. It used to be four
-                // bytes spelling "user", which is precisely the row/principal disagreement the assertion path
-                // now refuses, so the fixture rather than the check is what was wrong.
+                // What registration writes: this principal's own canonical bytes. The assertion path refuses a
+                // row whose handle names a different principal, so a fixture has to carry the real bytes.
                 .userHandle(new com.yubico.webauthn.data.ByteArray(ACCOUNT.rawBytes()).getBase64Url())
                 .credentialId(CREDENTIAL_ID)
                 .publicKeyCose(CREDENTIAL_ID)
