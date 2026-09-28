@@ -59,6 +59,7 @@ public class PasskeyService implements CredentialRepository {
     private static final String STEP_UP_KEY_PREFIX = "passkey:stepup:";
 
     private final PasskeyCredentialRepository repository;
+    private final PasskeyPrincipals principals;
     private final LoginFlowProperties loginProperties;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
@@ -67,9 +68,21 @@ public class PasskeyService implements CredentialRepository {
         return loginProperties.getPasskeys().isEnabled();
     }
 
-    /** Whether the given account already has at least one registered passkey. */
+    /**
+     * Whether the given account already has at least one registered passkey.
+     *
+     * <p>Resolved through the stable principal, not the MXID. Keyed on the MXID this answered "no" for an
+     * account whose Matrix identity had changed, which is the wrong answer to a policy question: it is what
+     * decides whether a passkey-only account must assert, whether a step-up can be offered, and whether
+     * registration is a duplicate.
+     *
+     * <p>An account with no attached genesis row has no principal and therefore no passkey by construction,
+     * because a credential can no longer be written without one.
+     */
     public boolean hasPasskey(String userId) {
-        return StringUtils.hasText(userId) && repository.existsByUserId(userId);
+        return principals.forUserId(userId)
+                .map(p -> repository.existsByAccountPrincipal(p.text()))
+                .orElse(false);
     }
 
     /**
@@ -83,7 +96,14 @@ public class PasskeyService implements CredentialRepository {
      */
     @Transactional
     public int removeAllForUser(String userId) {
-        List<PasskeyCredential> credentials = repository.findByUserId(userId);
+        // By principal, and this one is a security property rather than a tidy-up. Recovery's premise is that
+        // the account holder cannot use these credentials, so any left behind leave a lost or stolen device
+        // able to sign straight back in through passkey-first sign-in, which asks for no OTP. Keyed on the
+        // MXID this deleted NOTHING for an account whose Matrix identity had changed since registration, and
+        // it would have failed silently: the count would simply be zero and recovery would report success.
+        List<PasskeyCredential> credentials = principals.forUserId(userId)
+                .map(p -> repository.findByAccountPrincipal(p.text()))
+                .orElseGet(List::of);
         repository.deleteAll(credentials);
         return credentials.size();
     }
@@ -95,10 +115,16 @@ public class PasskeyService implements CredentialRepository {
                     "Passkey setup requires a verified account");
         }
 
+        // The WebAuthn user is the STABLE principal, in both fields that leave this server. `id` is the user
+        // handle the authenticator stores and replays; `name` is what a credential manager shows and what
+        // Yubico keys its own username lookups on. Both used to be the MXID, which put the account's
+        // localpart and its homeserver domain inside every credential synced to the holder's password
+        // manager, and made the credential unusable the moment either changed.
+        PasskeyPrincipals.Principal principal = requirePrincipal(session.getUserId());
         UserIdentity user = UserIdentity.builder()
-                .name(session.getUserId())
+                .name(principal.text())
                 .displayName(displayNameFor(session))
-                .id(userHandleFor(session.getUserId()))
+                .id(new ByteArray(principal.bytes()))
                 .build();
 
         PublicKeyCredentialCreationOptions options = relyingParty().startRegistration(
@@ -145,9 +171,12 @@ public class PasskeyService implements CredentialRepository {
                     .response(PublicKeyCredential.parseRegistrationResponseJson(objectMapper.writeValueAsString(credential)))
                     .build());
 
+            PasskeyPrincipals.Principal principal = requirePrincipal(session.getUserId());
             repository.save(PasskeyCredential.builder()
+                    // Ownership key. userId is kept for audit and is never read to decide ownership.
+                    .accountPrincipal(principal.text())
                     .userId(session.getUserId())
-                    .userHandle(userHandleFor(session.getUserId()).getBase64Url())
+                    .userHandle(new ByteArray(principal.bytes()).getBase64Url())
                     .credentialId(result.getKeyId().getId().getBase64Url())
                     .publicKeyCose(result.getPublicKeyCose().getBase64Url())
                     .signatureCount(result.getSignatureCount())
@@ -232,8 +261,11 @@ public class PasskeyService implements CredentialRepository {
                     "This account has no passkey to verify with.");
         }
 
+        // Yubico looks credentials up by "username", so the username it is given has to be the ownership key.
+        // Passing the MXID made every username-pinned ceremony fail inside the library for a stable-handle
+        // credential, before any of this service's own checks were reached.
         AssertionRequest request = relyingParty().startAssertion(StartAssertionOptions.builder()
-                .username(userId)
+                .username(requirePrincipal(userId).text())
                 .userVerification(UserVerificationRequirement.REQUIRED)
                 .timeout(loginProperties.getPasskeys().getTimeoutMillis())
                 .build());
@@ -299,7 +331,20 @@ public class PasskeyService implements CredentialRepository {
             saved.setBackupState(result.isBackedUp());
             saved.setLastUsedAt(Instant.now());
 
-            return new PasskeyAuthentication(saved.getUserId(), saved.getCreatedAt());
+            // The credential names a principal; the principal names whatever Matrix identity the account has
+            // NOW. Reading saved.getUserId() here is what tied a credential to the identity it happened to be
+            // registered under. A row with no principal predates the stable model: its handle is an MXID's own
+            // bytes, which no principal can match, so it is refused and its holder re-enrols rather than being
+            // resolved by a guess.
+            String principalText = saved.getAccountPrincipal();
+            if (principalText == null || principalText.isBlank()) {
+                throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_credential_retired",
+                        "This passkey was set up under an older format. Please sign in another way and add it again.");
+            }
+            String currentUserId = principals.currentUserId(principalText)
+                    .orElseThrow(() -> new LoginFlowException(HttpStatus.UNAUTHORIZED,
+                            "passkey_authentication_failed", "Unknown passkey."));
+            return new PasskeyAuthentication(currentUserId, saved.getCreatedAt());
         } catch (AssertionFailedException ex) {
             throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_authentication_failed",
                     "Passkey sign-in was not accepted.");
@@ -340,7 +385,11 @@ public class PasskeyService implements CredentialRepository {
     @Override
     @Transactional(readOnly = true)
     public Set<PublicKeyCredentialDescriptor> getCredentialIdsForUsername(String username) {
-        return repository.findByUserId(username).stream()
+        // Ownership again: this feeds excludeCredentials at registration and the allow list at assertion. Keyed
+        // on the MXID it returned an empty set for an account whose identity had changed, which silently turned
+        // "you already have this passkey" into a duplicate registration and handed an assertion an empty allow
+        // list.
+        return repository.findByAccountPrincipal(username).stream()
                 .map(this::descriptorFor)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
     }
@@ -348,15 +397,21 @@ public class PasskeyService implements CredentialRepository {
     @Override
     @Transactional(readOnly = true)
     public Optional<ByteArray> getUserHandleForUsername(String username) {
-        return Optional.of(userHandleFor(username));
+        // The username Yubico passes here is the principal text this service supplied. Derive the handle from
+        // it. This used to recompute the MXID's bytes and never consult the stored column at all, so for a
+        // stable-handle credential the library compared the wrong handle and failed the ceremony before any
+        // check in this class ran.
+        return principals.fromText(username).map(p -> new ByteArray(p.bytes()));
     }
 
     @Override
     @Transactional(readOnly = true)
     public Optional<String> getUsernameForUserHandle(ByteArray userHandle) {
+        // Returns the principal, because that is the username this service deals in. Returning the MXID here
+        // made the library's own view of identity disagree with the column it had just read.
         return repository.findByUserHandle(userHandle.getBase64Url()).stream()
                 .findFirst()
-                .map(PasskeyCredential::getUserId);
+                .map(PasskeyCredential::getAccountPrincipal);
     }
 
     @Override
@@ -434,6 +489,21 @@ public class PasskeyService implements CredentialRepository {
         }
     }
 
+    /**
+     * The stable principal of the account, or a refusal.
+     *
+     * <p>Deliberately a refusal and never a fallback to the MXID. A credential written under an MXID is the
+     * thing this model removes, so writing one because a genesis row was missing would quietly recreate the
+     * defect for that account. An account reaching here without an attached genesis row means the bootstrap
+     * backfill has not run, which is a deployment state to fix rather than to paper over.
+     */
+    private PasskeyPrincipals.Principal requirePrincipal(String userId) {
+        return principals.forUserId(userId)
+                .orElseThrow(() -> new LoginFlowException(HttpStatus.CONFLICT, "passkey_account_not_ready",
+                        "This account is not ready for passkeys yet. Please try again shortly."));
+    }
+
+    @Deprecated(forRemoval = true)
     private ByteArray userHandleFor(String userId) {
         return new ByteArray(userId.getBytes(StandardCharsets.UTF_8));
     }
