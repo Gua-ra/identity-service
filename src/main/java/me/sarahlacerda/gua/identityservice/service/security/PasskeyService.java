@@ -71,12 +71,11 @@ public class PasskeyService implements CredentialRepository {
      * Whether the given account already has at least one registered passkey.
      *
      * <p>Resolved through the stable principal, not the MXID. Keyed on the MXID this answered "no" for an
-     * account whose Matrix identity had changed, which is the wrong answer to a policy question: it is what
-     * decides whether a passkey-only account must assert, whether a step-up can be offered, and whether
-     * registration is a duplicate.
+     * <p>The answer decides whether a passkey-only account must assert, whether a step-up can be offered and
+     * whether a registration is a duplicate, so it is keyed on the principal.
      *
-     * <p>An account with no attached genesis row has no principal and therefore no passkey by construction,
-     * because a credential can no longer be written without one.
+     * <p>An account with no attached genesis row has no principal, and therefore no passkey: a credential
+     * cannot be written without one.
      */
     public boolean hasPasskey(String userId) {
         return principals.forUserId(userId)
@@ -417,10 +416,9 @@ public class PasskeyService implements CredentialRepository {
     @Override
     @Transactional(readOnly = true)
     public Optional<ByteArray> getUserHandleForUsername(String username) {
-        // The username Yubico passes here is the principal text this service supplied. Derive the handle from
-        // it. This used to recompute the MXID's bytes and never consult the stored column at all, so for a
-        // stable-handle credential the library compared the wrong handle and failed the ceremony before any
-        // check in this class ran.
+        // The username is the principal text this service supplied, and the handle is that principal's bytes,
+        // so this is the exact inverse of getUsernameForUserHandle. The library uses the pair to pin a
+        // username-scoped ceremony to the handle the authenticator replayed.
         return principals.fromText(username).map(p -> new ByteArray(p.bytes()));
     }
 
@@ -519,10 +517,9 @@ public class PasskeyService implements CredentialRepository {
     /**
      * The stable principal of the account, or a refusal.
      *
-     * <p>Deliberately a refusal and never a fallback to the MXID. A credential written under an MXID is the
-     * thing this model removes, so writing one because a genesis row was missing would quietly recreate the
-     * defect for that account. An account reaching here without an attached genesis row means the bootstrap
-     * backfill has not run, which is a deployment state to fix rather than to paper over.
+     * <p>A refusal, never a fallback to the MXID: a credential written under one cannot survive a placement
+     * change. An account reaching here without an attached genesis row means the bootstrap backfill has not
+     * run, which is a deployment state to fix.
      */
     private PasskeyPrincipals.Principal requirePrincipal(String userId) {
         return principals.forUserId(userId)

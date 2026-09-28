@@ -75,14 +75,8 @@ public final class AccountId {
     /**
      * Rebuilds an accountId from the 34 canonical bytes {@link #rawBytes()} produced.
      *
-     * <p>The exact inverse of {@code rawBytes()}, and deliberately implemented by re-encoding and
-     * delegating to {@link #parse}, so the canonical-spelling, format-version and root-class checks all
-     * apply to a value that arrived as bytes exactly as they do to one that arrived as text. A
-     * hand-rolled decode here would be a second spelling of the rules and the two would drift.
-     *
-     * <p>This exists because the canonical principal travels as bytes: a WebAuthn user handle is bytes,
-     * and the authenticator hands them back on every assertion, so the bytes have to become an
-     * accountId again before anything can be looked up by it.
+     * <p>Re-encodes and delegates to {@link #parse}, so bytes are held to the same canonical-spelling,
+     * format-version and root-class checks as text.
      */
     public static AccountId fromRawBytes(byte[] raw) {
         if (raw == null || raw.length != RAW_LENGTH) {

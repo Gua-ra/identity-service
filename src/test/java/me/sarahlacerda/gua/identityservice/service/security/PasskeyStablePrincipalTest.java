@@ -33,8 +33,8 @@ import static org.mockito.Mockito.when;
  * The passkey ownership invariant: a credential belongs to the stable Gua account, and the account's current
  * Matrix identity is resolved afterwards and never stored as the owner.
  *
- * <p>These are the cases that were wrong when ownership was keyed on the MXID, and each one failed in a way
- * that looked like success rather than like an error.
+ * <p>Each case here fails silently if ownership is re-keyed on the Matrix identity: the call succeeds and
+ * answers for the wrong account.
  */
 @ExtendWith(MockitoExtension.class)
 class PasskeyStablePrincipalTest {
@@ -65,10 +65,10 @@ class PasskeyStablePrincipalTest {
     private static PasskeyCredential credentialOwnedByThePrincipal() {
         return PasskeyCredential.builder()
                 .accountPrincipal(PRINCIPAL)
-                // Stale on purpose: this is the identity at registration time, and nothing may read it.
+                // Stale on purpose: the identity at registration time, which nothing may read.
                 .userId(OLD_MXID)
-                // The handle a registration writes: the principal's own canonical bytes, which the assertion
-                // path now compares against the row rather than merely storing.
+                // What registration writes: the principal's own canonical bytes, which the assertion path
+                // compares against the row.
                 .userHandle(new com.yubico.webauthn.data.ByteArray(ACCOUNT.rawBytes()).getBase64Url())
                 .credentialId("Y3JlZC0x")
                 .publicKeyCose("cose")
@@ -112,7 +112,7 @@ class PasskeyStablePrincipalTest {
         int removed = service().removeAllForUser(NEW_MXID);
 
         assertThat(removed).isZero();
-        // The point is the KEY, not the call: nothing is ever looked up by the Matrix id. deleteAll may still
+        // The key is what matters, not the call: nothing is looked up by the Matrix id. deleteAll may still
         // be handed the empty list, which deletes nothing.
         verify(repository, never()).findByUserId(anyString());
         verify(repository, never()).findByAccountPrincipal(anyString());
@@ -222,13 +222,12 @@ class PasskeyStablePrincipalTest {
     // --- the handle is an ownership claim, so it is checked --------------------------------------------
 
     /**
-     * A handle that names no principal at all is what a credential from before this model replays, and its
-     * holder has to be told to add the passkey again rather than left with "sign-in was not accepted".
+     * A handle naming no principal belongs to a credential the account can no longer use, and its holder is
+     * told to add the passkey again.
      *
-     * <p>The refusal has to happen BEFORE the WebAuthn ceremony. The library resolves a username from the
-     * handle while building its own steps and asserts that it resolved, before any signature is touched, so a
-     * branch placed after the ceremony is unreachable for exactly the rows it describes. That is what this
-     * test pins: not only the code, but that the ceremony never ran.
+     * <p>The refusal must precede the WebAuthn ceremony: the library requires the handle to resolve to a
+     * username before any signature is checked, so a check placed after the ceremony never sees these rows.
+     * This test pins the ordering as well as the code.
      */
     @Test
     void aHandleThatNamesNoPrincipalIsRefusedBeforeTheCeremonyEverRuns() {
