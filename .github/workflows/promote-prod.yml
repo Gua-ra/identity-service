@@ -14,9 +14,22 @@ name: Promote to production
 # provenance; a commit sha can be checked against this repository. So the commit is verified first, and the
 # artifact is then required to exist for it. Both checks fail closed.
 #
-# WHAT IS DEPLOYED IS A DIGEST. The tag `sha-<commit>` is how the artifact is found; the immutable digest it
-# resolves to is what production is set to. A tag can be moved, a digest cannot, so production always
+# WHAT IS DEPLOYED IS A DIGEST. The tag `sha-<commit>` is how the artifact is FOUND; the immutable digest
+# it resolves to is what production is set to. A tag can be moved, a digest cannot, so production always
 # records exactly the bytes that were promoted.
+#
+# BUT A TAG POINTING SOMEWHERE IS NOT EVIDENCE. Resolving `sha-<commit>` proves only where that pointer
+# aims today, and anyone with package write can move it. So the digest is not trusted for being what the
+# tag says; it is trusted for carrying a Sigstore signature, made with this run's own OIDC identity by
+# CI's build job, over a certificate stating the source repository, the signing workflow file and the
+# commit. Those certificate fields come from GitHub, not from the workflow that asked to be signed, so
+# they hold even against a workflow whose steps were tampered with. The predicate body is deliberately
+# not consulted: a compromised build could write anything it liked there.
+#
+# The practical consequence is that the tag becomes a convenience for lookup and the signature becomes
+# the gate. Retagging `sha-<commit>` to some other image does not make that image promotable, because the
+# other image carries no signature binding it to that commit. An image built before the attestation step
+# existed carries nothing at all and is refused; rebuild that commit through CI to make it promotable.
 
 on:
   workflow_dispatch:
@@ -31,6 +44,20 @@ env:
   NAMESPACE: gua-prod
   DEPLOYMENT: identity-service
   CONTAINER: identity-service
+  # WHICH BUILDS MAY REACH PRODUCTION, as a Sigstore certificate identity.
+  #
+  # The certificate's subject records the workflow file AND the ref the build ran on, so this one
+  # pattern says both "only CI may sign a promotable artifact" and "only these refs may be built
+  # into one". Without the ref half, anyone with repository write could push a branch carrying a
+  # malicious Dockerfile, dispatch a publish-only build, and hold a perfectly genuine attestation
+  # for it: the commit is real, CI really built it, the signer really is ci-cd.yml.
+  #
+  # `main` is the normal path. `hotfix/*` is the deliberate exception this whole workflow exists to
+  # serve, since the production environment is main-only and a hotfix branches from what is
+  # deployed rather than from main. To promote from some other branch shape, widen this pattern in
+  # a reviewed change rather than working around it.
+  PROMOTABLE_IDENTITY: '^https://github\.com/Gua-ra/identity-service/\.github/workflows/ci-cd\.yml@refs/heads/(main|hotfix/[A-Za-z0-9._/-]+)$'
+  PROMOTABLE_REFS: '^refs/heads/(main|hotfix/[A-Za-z0-9._/-]+)$'
 
 concurrency:
   group: promote-prod-identity-service
@@ -39,6 +66,8 @@ concurrency:
 permissions:
   contents: read
   packages: read
+  # To fetch the signed build-provenance bundle for a digest from this repository.
+  attestations: read
 
 jobs:
   # Ungated on purpose: everything here is read-only, and the approver needs to SEE the result before they
@@ -101,7 +130,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Require the artifact to exist and resolve its immutable digest
+      - name: Find the candidate artifact for this commit
         id: artifact
         env:
           COMMIT: ${{ steps.provenance.outputs.commit }}
@@ -121,6 +150,8 @@ jobs:
             echo "::error::Could not resolve a single immutable digest for ${ref} (got: '${digest}')."
             exit 1
           fi
+          # This is a LOOKUP, not a decision. The tag is how a human names the thing they want; the next
+          # step is what establishes that CI built these exact bytes from this exact commit.
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "ref=${IMAGE}@${digest}" >> "$GITHUB_OUTPUT"
           {
@@ -128,38 +159,278 @@ jobs:
             echo "| **digest to be deployed** | \`${digest}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Prove CI built this digest from this commit
+        id: attested
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT: ${{ steps.provenance.outputs.commit }}
+          DIGEST: ${{ steps.artifact.outputs.digest }}
+        run: |
+          set -euo pipefail
+          # Each flag below is an assertion, and every one of them is checked against the Sigstore
+          # certificate rather than the attestation body:
+          #
+          #   --repo                 the source repository the signing identity was issued for.
+          #   --cert-oidc-issuer     GitHub's OIDC issuer. This is gh's default; naming it means the
+          #                          default cannot quietly change under us.
+          #   --cert-identity-regex  the workflow file that signed AND the ref it ran on, per
+          #                          PROMOTABLE_IDENTITY above. This is what stops a genuine
+          #                          attestation minted from an arbitrary branch being promotable.
+          #   --source-digest        the commit the signing run was for. This is the whole point: it
+          #                          turns "a digest exists" into "CI built this digest from THAT
+          #                          source". Not settable by the build.
+          #   --deny-self-hosted-runners
+          #                          CI builds on ubuntu-latest, so requiring a GitHub-hosted runner
+          #                          costs nothing and removes a class of attestation forged on a
+          #                          machine whose environment someone else controls.
+          if ! gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+                 --repo "${GITHUB_REPOSITORY}" \
+                 --cert-oidc-issuer "https://token.actions.githubusercontent.com" \
+                 --cert-identity-regex "${PROMOTABLE_IDENTITY}" \
+                 --source-digest "${COMMIT}" \
+                 --predicate-type "https://slsa.dev/provenance/v1" \
+                 --deny-self-hosted-runners \
+                 --format json > /tmp/attestation.json 2>/tmp/attestation.err; then
+            echo "::error::No verifiable build provenance binds ${DIGEST} to ${COMMIT}."
+            echo "::error::Any of these would cause this: the commit was never built by CI since"
+            echo "::error::attestation was added; the tag was moved to bytes CI did not build; or the"
+            echo "::error::build ran on a ref that is not promotable (allowed: ${PROMOTABLE_REFS})."
+            echo "::error::Rebuild the commit through CI/CD on a promotable ref (workflow_dispatch,"
+            echo "::error::environment=none) and promote the result."
+            sed -n '1,40p' /tmp/attestation.err || true
+            exit 1
+          fi
+
+          # Everything below is belt and braces. gh enforced each of these through a flag, so a
+          # mismatch here would mean a field moved rather than that a check was skipped. They are
+          # asserted with `all(...)` over every returned attestation, not folded into one string,
+          # so a set containing one good and one bad entry cannot average out. Only
+          # signature.certificate and verifiedTimestamps are read: gh's own manual is explicit that
+          # those are the only parts the originating workflow cannot manipulate. Nothing under
+          # statement.predicate is used for any decision.
+          bad="$(jq -r \
+            --arg commit "$COMMIT" \
+            --arg bare "${DIGEST#sha256:}" \
+            --arg image "$IMAGE" \
+            --arg repo "https://github.com/${GITHUB_REPOSITORY}" \
+            --arg refs "$PROMOTABLE_REFS" '
+              def check($name; $cond): if $cond then empty else $name end;
+              [ check("no attestations returned"; (length >= 1)),
+                check("subject is not exactly one artifact";
+                      all(.[]; (.verificationResult.statement.subject | length) == 1)),
+                check("signed subject name is not \($image)";
+                      all(.[]; .verificationResult.statement.subject[0].name == $image)),
+                check("signed subject digest is not the digest being deployed";
+                      all(.[]; .verificationResult.statement.subject[0].digest.sha256 == $bare)),
+                check("certificate source commit is not \($commit)";
+                      all(.[]; .verificationResult.signature.certificate.sourceRepositoryDigest == $commit)),
+                check("certificate source repository is not \($repo)";
+                      all(.[]; .verificationResult.signature.certificate.sourceRepositoryURI == $repo)),
+                check("certificate ref is not promotable (\($refs))";
+                      all(.[]; .verificationResult.signature.certificate.sourceRepositoryRef | test($refs))),
+                check("certificate issuer is not GitHub Actions";
+                      all(.[]; .verificationResult.signature.certificate.issuer == "https://token.actions.githubusercontent.com")),
+                check("build did not run on a GitHub-hosted runner";
+                      all(.[]; .verificationResult.signature.certificate.runnerEnvironment == "github-hosted")),
+                check("predicate type is not SLSA provenance v1";
+                      all(.[]; .verificationResult.statement.predicateType == "https://slsa.dev/provenance/v1")),
+                check("attestation carries no verified timestamp";
+                      all(.[]; (.verificationResult.verifiedTimestamps | length) >= 1))
+              ] | join("; ")' /tmp/attestation.json)"
+          if [ -n "$bad" ]; then
+            echo "::error::Verification returned a shape we refuse to act on: ${bad}"
+            exit 1
+          fi
+
+          count="$(jq 'length' /tmp/attestation.json)"
+          cert_sha="$(jq -r '[.[].verificationResult.signature.certificate.sourceRepositoryDigest] | unique | join(",")' /tmp/attestation.json)"
+          cert_wf="$(jq -r '[.[].verificationResult.signature.certificate.buildSignerURI] | unique | join(",")' /tmp/attestation.json)"
+          cert_ref="$(jq -r '[.[].verificationResult.signature.certificate.sourceRepositoryRef] | unique | join(",")' /tmp/attestation.json)"
+          cert_runner="$(jq -r '[.[].verificationResult.signature.certificate.runnerEnvironment] | unique | join(",")' /tmp/attestation.json)"
+          {
+            echo ""
+            echo "### Build provenance (verified)"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| attestations verified | ${count} |"
+            echo "| signed subject | \`${IMAGE}@${DIGEST}\` |"
+            echo "| certificate source commit | \`${cert_sha}\` |"
+            echo "| certificate signer workflow | \`${cert_wf}\` |"
+            echo "| built from ref | \`${cert_ref}\` |"
+            echo "| runner environment | ${cert_runner} |"
+            echo ""
+            echo "Read from the Sigstore certificate, which GitHub minted for the build run. The"
+            echo "attestation predicate is not used for any decision here."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Also ungated, also read-only, and separate because only an in-cluster runner can see production. This is
-  # what puts the CURRENT image and the ROLLBACK digest in front of the approver before they approve.
+  # what puts the CONFIGURED image, the OBSERVED running digest(s) and the ROLLBACK target in front of the
+  # approver before they approve.
+  #
+  # WHY THIS IS NOT ONE jsonpath. The obvious version reads `.items[0]`, which is wrong in three ways that
+  # all end with a rollback command that does not restore what was running: the list is not ordered by
+  # anything meaningful, it includes pods that are terminating or not yet ready, and during a rollout it
+  # includes pods from BOTH ReplicaSets, so `[0]` can be the new image the moment a promotion is retried.
+  # It also silently returned the spec image when no pod matched, which is the one case where the two can
+  # legitimately disagree. So: require the Deployment to be settled, look at every ready pod, and require
+  # them to agree.
   inspect-production:
     needs: verify
     runs-on: [self-hosted, identity-service-incluster-prod]
     outputs:
       rollback: ${{ steps.current.outputs.rollback }}
+      configured: ${{ steps.current.outputs.configured }}
+      observed: ${{ steps.current.outputs.observed }}
     steps:
       - name: Read what production is running now
         id: current
         run: |
           set -euo pipefail
           command -v kubectl >/dev/null || { echo "::error::kubectl is not on this runner."; exit 1; }
-          spec="$(kubectl -n "$NAMESPACE" get deploy "$DEPLOYMENT" \
+
+          configured="$(kubectl -n "$NAMESPACE" get deploy "$DEPLOYMENT" \
             -o jsonpath='{.spec.template.spec.containers[?(@.name=="'"$CONTAINER"'")].image}')"
-          running="$(kubectl -n "$NAMESPACE" get pods -l app="$DEPLOYMENT" \
-            -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="'"$CONTAINER"'")].imageID}' 2>/dev/null || true)"
-          [ -n "$running" ] || running="$spec"
-          echo "rollback=$running" >> "$GITHUB_OUTPUT"
+          if [ -z "$configured" ]; then
+            echo "::error::No container named '${CONTAINER}' in deployment/${DEPLOYMENT}."
+            exit 1
+          fi
+
+          # A promotion on top of an unfinished rollout has no single "before" state to record, so there is
+          # no honest rollback target to offer. Stop and let it settle.
+          read -r gen obs desired updated ready avail <<EOF
+          $(kubectl -n "$NAMESPACE" get deploy "$DEPLOYMENT" -o go-template='{{.metadata.generation}} {{or .status.observedGeneration 0}} {{or .spec.replicas 0}} {{or .status.updatedReplicas 0}} {{or .status.readyReplicas 0}} {{or .status.availableReplicas 0}}')
+          EOF
+          if [ "$gen" != "$obs" ] || [ "$updated" != "$desired" ] || [ "$ready" != "$desired" ]; then
+            echo "::error::deployment/${DEPLOYMENT} is not settled (generation ${gen}/observed ${obs}, desired ${desired}, updated ${updated}, ready ${ready}, available ${avail})."
+            echo "::error::Refusing to promote over an in-progress or degraded rollout."
+            exit 1
+          fi
+
+          # Use the Deployment's own selector rather than a hardcoded label, so this cannot drift from
+          # whatever actually owns the pods.
+          selector="$(kubectl -n "$NAMESPACE" get deploy "$DEPLOYMENT" \
+            -o go-template='{{range $k, $v := .spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}')"
+          selector="${selector%,}"
+          [ -n "$selector" ] || { echo "::error::deployment/${DEPLOYMENT} has no matchLabels selector."; exit 1; }
+
+          # One line per pod: name, phase, container readiness, imageID, owner kinds. Terminating pods
+          # are skipped because they are already on their way out and may be running the previous
+          # image. The owner kinds are carried so a bare pod that merely wears the selector's labels
+          # is not counted as one of the Deployment's replicas.
+          rows="$(kubectl -n "$NAMESPACE" get pods -l "$selector" -o go-template='
+            {{- range .items -}}
+              {{- if not .metadata.deletionTimestamp -}}
+                {{- $p := .metadata.name -}}{{- $ph := .status.phase -}}
+                {{- $owners := .metadata.ownerReferences -}}
+                {{- range .status.containerStatuses -}}
+                  {{- if eq .name "'"$CONTAINER"'" -}}
+                    {{ $p }} {{ $ph }} {{ .ready }} {{ .imageID }} owners:
+                    {{- range $owners -}}{{ .kind }}/{{- end -}}
+                    {{ "\n" }}
+                  {{- end -}}
+                {{- end -}}
+              {{- end -}}
+            {{- end -}}')"
+
+          digests=""
+          pod_table=""
+          ready_count=0
+          while read -r pod phase is_ready image_id owners; do
+            [ -n "${pod:-}" ] || continue
+            pod_table="${pod_table}| \`${pod}\` | ${phase} | ${is_ready} | \`${image_id}\` | ${owners#owners:} |"$'\n'
+            [ "$phase" = "Running" ] && [ "$is_ready" = "true" ] || continue
+            # Not owned by a ReplicaSet means not one of this Deployment's replicas, whatever labels
+            # it happens to wear. Counting it would let an unrelated pod decide the rollback target.
+            case "${owners:-}" in *ReplicaSet/*) ;; *) continue ;; esac
+            ready_count=$((ready_count + 1))
+            # kubelet reports this as repo@sha256:..., and some runtimes prefix docker-pullable://.
+            ref="${image_id#docker-pullable://}"
+            case "$ref" in
+              *@sha256:*)
+                repo="${ref%@*}"
+                dig="${ref##*@}"
+                if [ "$repo" != "$IMAGE" ]; then
+                  echo "::error::Pod ${pod} is running an image from '${repo}', not '${IMAGE}'. Refusing."
+                  exit 1
+                fi
+                ;;
+              sha256:*)
+                # No repository in the id; it can only be ours, since the spec image is.
+                dig="$ref"
+                ;;
+              *)
+                echo "::error::Cannot read an immutable digest out of pod ${pod}'s imageID '${image_id}'."
+                exit 1
+                ;;
+            esac
+            if ! printf '%s' "$dig" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+              echo "::error::Pod ${pod} reported a malformed digest '${dig}'."
+              exit 1
+            fi
+            digests="${digests}${dig}"$'\n'
+          done <<EOF
+          $rows
+          EOF
+
+          if [ "$ready_count" -eq 0 ]; then
+            echo "::error::No ready ${CONTAINER} container found in ns ${NAMESPACE}. There is nothing to roll back to."
+            exit 1
+          fi
+          unique="$(printf '%s' "$digests" | grep -v '^$' | sort -u)"
+          observed="$(printf '%s' "$unique" | tr '\n' ' ' | sed 's/ $//')"
+          distinct="$(printf '%s\n' "$unique" | wc -l | tr -d ' ')"
+          if [ "$distinct" != "1" ]; then
+            echo "::error::Production is heterogeneous: ${ready_count} ready pods are running ${distinct} different digests (${observed})."
+            echo "::error::There is no single state to restore, so there is no safe rollback target. Refusing."
+            exit 1
+          fi
+
+          # PREFER THE CONFIGURED IMAGE when it is already immutable: it is the Deployment's own declared
+          # intent, and restoring it restores the spec exactly. When the spec carries a TAG, as it does for
+          # anything deployed by the old push model, restoring that tag would restore a pointer and not the
+          # bytes, so the observed digest is the only honest target.
+          if printf '%s' "$configured" | grep -Eq '@sha256:[0-9a-f]{64}$'; then
+            rollback="$configured"
+            basis="the Deployment's configured image, which is already digest-pinned"
+            # A settled Deployment pinned to a digest must have its ready pods running that digest and
+            # nothing else. If they disagree there is no honest baseline at all: the spec describes
+            # bytes that are not running, and the running bytes are not what anyone declared. Refuse
+            # rather than pick one, because either choice would be a rollback target that does not
+            # restore the state being replaced.
+            if [ "${configured##*@}" != "$observed" ]; then
+              echo "::error::Production's configured digest (${configured##*@}) is not what its ready pods are running (${observed}), although the Deployment reports settled."
+              echo "::error::There is no honest rollback baseline in that state. Refusing."
+              exit 1
+            fi
+          else
+            rollback="${IMAGE}@${observed}"
+            basis="the digest every ready pod is observed running, because the configured image is a mutable tag"
+          fi
+
+          echo "configured=$configured" >> "$GITHUB_OUTPUT"
+          echo "observed=$observed" >> "$GITHUB_OUTPUT"
+          echo "rollback=$rollback" >> "$GITHUB_OUTPUT"
           {
             echo ""
             echo "### Production right now"
             echo ""
             echo "| field | value |"
             echo "| --- | --- |"
-            echo "| spec image | \`${spec}\` |"
-            echo "| **rollback digest** | \`${running}\` |"
+            echo "| configured image (spec) | \`${configured}\` |"
+            echo "| observed running digest | \`${observed}\` |"
+            echo "| ready pods | ${ready_count} of ${desired} |"
+            echo "| **rollback target** | \`${rollback}\` |"
+            echo "| rollback basis | ${basis} |"
+            echo ""
+            echo "| pod | phase | ready | imageID | owned by |"
+            echo "| --- | --- | --- | --- | --- |"
+            printf '%s' "$pod_table"
             echo ""
             echo "Rollback command:"
             echo ""
             echo '```bash'
-            echo "kubectl -n ${NAMESPACE} set image deployment/${DEPLOYMENT} ${CONTAINER}=${running}"
+            echo "kubectl -n ${NAMESPACE} set image deployment/${DEPLOYMENT} ${CONTAINER}=${rollback}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -176,6 +447,8 @@ jobs:
           CANDIDATE_DIGEST: ${{ needs.verify.outputs.digest }}
           CANDIDATE_COMMIT: ${{ needs.verify.outputs.commit }}
           ROLLBACK: ${{ needs.inspect-production.outputs.rollback }}
+          INSPECTED_CONFIGURED: ${{ needs.inspect-production.outputs.configured }}
+          INSPECTED_OBSERVED: ${{ needs.inspect-production.outputs.observed }}
         run: |
           set -euo pipefail
           command -v kubectl >/dev/null || { echo "::error::kubectl is not on this runner."; exit 1; }
@@ -183,9 +456,39 @@ jobs:
           # production is running at the moment of the change is what a rollback has to restore.
           before="$(kubectl -n "$NAMESPACE" get deploy "$DEPLOYMENT" \
             -o jsonpath='{.spec.template.spec.containers[?(@.name=="'"$CONTAINER"'")].image}')"
+          # If production moved between inspection and approval, the rollback target the approver read is
+          # no longer the state this change is replacing, and approving it meant approving something else.
+          # An approval can sit for hours, so both halves of the baseline are re-checked: the declared
+          # image AND the bytes actually running. Checking only the spec would miss a tag that was
+          # repointed and rolled underneath us, which is precisely the case the digest exists to catch.
+          if [ "$before" != "$INSPECTED_CONFIGURED" ]; then
+            echo "::error::Production changed after it was inspected: it was '${INSPECTED_CONFIGURED}', it is now '${before}'."
+            echo "::error::The rollback target shown at approval time is stale. Re-run this workflow so the approver sees the current state."
+            exit 1
+          fi
+          selector="$(kubectl -n "$NAMESPACE" get deploy "$DEPLOYMENT" \
+            -o go-template='{{range $k, $v := .spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}')"
+          now="$(kubectl -n "$NAMESPACE" get pods -l "${selector%,}" -o go-template='
+            {{- range .items -}}
+              {{- if not .metadata.deletionTimestamp -}}
+                {{- $rs := false -}}
+                {{- range .metadata.ownerReferences -}}{{- if eq .kind "ReplicaSet" -}}{{- $rs = true -}}{{- end -}}{{- end -}}
+                {{- if $rs -}}
+                  {{- range .status.containerStatuses -}}
+                    {{- if and (eq .name "'"$CONTAINER"'") .ready -}}{{ .imageID }}{{ "\n" }}{{- end -}}
+                  {{- end -}}
+                {{- end -}}
+              {{- end -}}
+            {{- end -}}' | sed -e 's#^docker-pullable://##' -e 's#^.*@##' | grep -v '^$' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+          if [ "$now" != "$INSPECTED_OBSERVED" ]; then
+            echo "::error::The bytes production is running changed after inspection: they were '${INSPECTED_OBSERVED}', they are now '${now}'."
+            echo "::error::The rollback target shown at approval time no longer describes what is being replaced. Re-run this workflow."
+            exit 1
+          fi
           echo "commit    : ${CANDIDATE_COMMIT}"
           echo "promoting : ${CANDIDATE_REF}"
           echo "replacing : ${before}"
+          echo "observed  : ${INSPECTED_OBSERVED}"
           echo "rollback  : ${ROLLBACK}"
 
           # By digest, never by tag. Production then records the exact bytes that were promoted.
@@ -206,6 +509,7 @@ jobs:
             echo "| --- | --- |"
             echo "| commit | \`${CANDIDATE_COMMIT}\` |"
             echo "| digest | \`${CANDIDATE_DIGEST}\` |"
-            echo "| replaced | \`${before}\` |"
+            echo "| replaced (configured) | \`${before}\` |"
+            echo "| replaced (running digest) | \`${INSPECTED_OBSERVED}\` |"
             echo "| rollback | \`${ROLLBACK}\` |"
           } >> "$GITHUB_STEP_SUMMARY"

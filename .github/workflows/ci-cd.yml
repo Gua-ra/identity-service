@@ -17,6 +17,11 @@ name: CI/CD
 #   - workflow_dispatch        -> `dev` to build and roll dev; `none` to build, test and publish
 #                                 an artifact WITHOUT deploying anything, which is how a hotfix or
 #                                 feature branch produces something promotable.
+#
+# Every image this workflow pushes is also signed with a build provenance attestation binding its
+# digest to the commit it was built from. That signature is the only thing that makes an artifact
+# promotable: promotion verifies it and refuses an image that does not carry one. An image built
+# before this step existed has no such record and cannot be promoted; rebuild the commit here first.
 on:
   push:
     branches: ["main"]
@@ -45,8 +50,19 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Narrower than the workflow default, plus the two the signing step needs. `id-token: write`
+    # mints the OIDC token Sigstore signs with, so the certificate carries GitHub's own claims
+    # about this run: which repository, which workflow file, which commit. `attestations: write`
+    # stores the resulting bundle against the repository. A fork PR is capped to read no matter
+    # what is declared here, which is why a fork can never produce a promotable artifact.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     outputs:
       ref: ${{ steps.ref.outputs.ref }}
+      digest: ${{ steps.push.outputs.digest }}
       deploy-to-dev: ${{ steps.gate.outputs.dev }}
     steps:
       - uses: actions/checkout@v4
@@ -94,6 +110,7 @@ jobs:
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=pr-${{ github.event.number }},enable=${{ github.event_name == 'pull_request' }}
       - if: github.event_name != 'pull_request' || steps.gate.outputs.dev == 'true'
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -103,6 +120,48 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # THE RECORD THAT MAKES PROMOTION POSSIBLE.
+      #
+      # Without this, the only link from a commit to an image is the tag `sha-<commit>`, and a tag is
+      # a pointer someone with package write can move. Promotion would then be trusting whatever that
+      # pointer happens to say on the day, which is not provenance.
+      #
+      # This signs a statement, through Sigstore, whose certificate is minted from this run's OIDC
+      # token. The parts promotion relies on are therefore GitHub's claims and not this workflow's:
+      # the source repository, the workflow file that signed, and the commit the run was for. A
+      # workflow cannot lie about them even if its own steps are compromised, which is exactly why
+      # promotion checks those certificate fields rather than the predicate body.
+      #
+      # `steps.push.outputs.digest` is the index (manifest-list) digest, which is what production is
+      # set to and what kubelet reports back, so the signed subject and the deployed bytes are the
+      # same object rather than one of its per-architecture children.
+      # A digest we cannot read is a promotable artifact with no evidence, so refuse it here rather
+      # than let it reach the registry unsigned.
+      - name: Require a usable digest from the push
+        if: github.event_name != 'pull_request' || steps.gate.outputs.dev == 'true'
+        id: digest
+        env:
+          PUSHED: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$PUSHED" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::build-push-action reported no usable digest ('${PUSHED}')."
+            exit 1
+          fi
+          echo "digest=$PUSHED" >> "$GITHUB_OUTPUT"
+
+      # Pinned to a commit, not a tag. This step is what production trusts, so the one thing it must
+      # not do is follow a moving reference: v4.2.2.
+      - if: github.event_name != 'pull_request' || steps.gate.outputs.dev == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          # Left off deliberately. The bundle lives with the repository, where the same people who
+          # can move a tag cannot reach it; pushing a copy into the registry would add a second,
+          # weaker place for a verifier to look.
+          push-to-registry: false
 
   # AUTOMATIC on merge to main. Also fires for a PR labelled `deploy:dev`, and by hand
   # via workflow_dispatch with environment=dev.
