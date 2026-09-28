@@ -2,34 +2,16 @@ name: Promote to production
 
 # Production runs explicitly promoted, previously built, immutable artifacts. Nothing is compiled here.
 #
-# WHY THIS EXISTS, and why it is not a deploy job on a branch build. The `production` GitHub Environment
-# carries a deployment-branch policy of `main` only, which is the control we want to keep: it means no
-# feature or hotfix branch can define its own path into production. But it also meant a branch build could
-# never deploy, and the old model had every `main` build own a prod deploy job, so "what is in production"
-# was whatever was last merged and approved rather than something anyone chose. This workflow lives on
-# `main`, so the policy admits it, and it takes a SOURCE COMMIT rather than a branch: the artifact for that
-# commit must already exist, having been built and tested by CI wherever it came from.
+# The input is a SOURCE COMMIT, not an image: an image name is caller-chosen and carries no provenance,
+# while a commit can be checked against this repository. What is deployed is the DIGEST that commit's tag
+# resolves to, so the Deployment records the exact bytes promoted.
 #
-# THE INPUT IS A SOURCE COMMIT, NOT AN IMAGE. An image name is attacker-choosable and says nothing about
-# provenance; a commit sha can be checked against this repository. So the commit is verified first, and the
-# artifact is then required to exist for it. Both checks fail closed.
-#
-# WHAT IS DEPLOYED IS A DIGEST. The tag `sha-<commit>` is how the artifact is FOUND; the immutable digest
-# it resolves to is what production is set to. A tag can be moved, a digest cannot, so production always
-# records exactly the bytes that were promoted.
-#
-# BUT A TAG POINTING SOMEWHERE IS NOT EVIDENCE. Resolving `sha-<commit>` proves only where that pointer
-# aims today, and anyone with package write can move it. So the digest is not trusted for being what the
-# tag says; it is trusted for carrying a Sigstore signature, made with this run's own OIDC identity by
-# CI's build job, over a certificate stating the source repository, the signing workflow file and the
-# commit. Those certificate fields come from GitHub, not from the workflow that asked to be signed, so
-# they hold even against a workflow whose steps were tampered with. The predicate body is deliberately
-# not consulted: a compromised build could write anything it liked there.
-#
-# The practical consequence is that the tag becomes a convenience for lookup and the signature becomes
-# the gate. Retagging `sha-<commit>` to some other image does not make that image promotable, because the
-# other image carries no signature binding it to that commit. An image built before the attestation step
-# existed carries nothing at all and is refused; rebuild that commit through CI to make it promotable.
+# A tag is only the lookup. Anyone with package write can move `sha-<commit>`, so the digest is trusted
+# for carrying a Sigstore signature that binds it to that commit, not for what the tag says. The fields
+# that decide come from the certificate GitHub minted for the build run (source repository, signing
+# workflow file, ref, commit), never from the attestation predicate, which a compromised build could
+# write freely. This workflow lives on `main`, which is what the `production` environment's main-only
+# branch policy admits, while the commit it promotes may come from any promotable ref.
 
 on:
   workflow_dispatch:
@@ -44,18 +26,12 @@ env:
   NAMESPACE: gua-prod
   DEPLOYMENT: identity-service
   CONTAINER: identity-service
-  # WHICH BUILDS MAY REACH PRODUCTION, as a Sigstore certificate identity.
-  #
-  # The certificate's subject records the workflow file AND the ref the build ran on, so this one
-  # pattern says both "only CI may sign a promotable artifact" and "only these refs may be built
-  # into one". Without the ref half, anyone with repository write could push a branch carrying a
-  # malicious Dockerfile, dispatch a publish-only build, and hold a perfectly genuine attestation
-  # for it: the commit is real, CI really built it, the signer really is ci-cd.yml.
-  #
-  # `main` is the normal path. `hotfix/*` is the deliberate exception this whole workflow exists to
-  # serve, since the production environment is main-only and a hotfix branches from what is
-  # deployed rather than from main. To promote from some other branch shape, widen this pattern in
-  # a reviewed change rather than working around it.
+  # Which builds may reach production, as a Sigstore certificate identity. The certificate subject records
+  # the workflow file AND the ref the build ran on, and both halves are load-bearing: CI will sign a
+  # publish-only build dispatched on any branch, malicious Dockerfile included, and that attestation is
+  # perfectly genuine. `main` is the normal path; `hotfix/*` is the exception this workflow exists for,
+  # since the production environment is main-only and a hotfix branches from what is deployed. Widen this
+  # pattern in a reviewed change rather than working around it.
   PROMOTABLE_IDENTITY: '^https://github\.com/Gua-ra/identity-service/\.github/workflows/ci-cd\.yml@refs/heads/(main|hotfix/[A-Za-z0-9._/-]+)$'
   PROMOTABLE_REFS: '^refs/heads/(main|hotfix/[A-Za-z0-9._/-]+)$'
 
@@ -150,8 +126,7 @@ jobs:
             echo "::error::Could not resolve a single immutable digest for ${ref} (got: '${digest}')."
             exit 1
           fi
-          # This is a LOOKUP, not a decision. The tag is how a human names the thing they want; the next
-          # step is what establishes that CI built these exact bytes from this exact commit.
+          # The tag is the lookup, not the evidence. The next step is what binds these bytes to this commit.
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "ref=${IMAGE}@${digest}" >> "$GITHUB_OUTPUT"
           {
@@ -167,22 +142,19 @@ jobs:
           DIGEST: ${{ steps.artifact.outputs.digest }}
         run: |
           set -euo pipefail
-          # Each flag below is an assertion, and every one of them is checked against the Sigstore
-          # certificate rather than the attestation body:
+          # Every flag is checked against the Sigstore certificate, not the attestation body:
           #
           #   --repo                 the source repository the signing identity was issued for.
-          #   --cert-oidc-issuer     GitHub's OIDC issuer. This is gh's default; naming it means the
-          #                          default cannot quietly change under us.
+          #   --cert-oidc-issuer     GitHub's OIDC issuer. Also gh's default; naming it means the default
+          #                          cannot quietly change under us.
           #   --cert-identity-regex  the workflow file that signed AND the ref it ran on, per
-          #                          PROMOTABLE_IDENTITY above. This is what stops a genuine
-          #                          attestation minted from an arbitrary branch being promotable.
-          #   --source-digest        the commit the signing run was for. This is the whole point: it
-          #                          turns "a digest exists" into "CI built this digest from THAT
-          #                          source". Not settable by the build.
-          #   --deny-self-hosted-runners
-          #                          CI builds on ubuntu-latest, so requiring a GitHub-hosted runner
-          #                          costs nothing and removes a class of attestation forged on a
-          #                          machine whose environment someone else controls.
+          #                          PROMOTABLE_IDENTITY above. Without the ref half a genuine attestation
+          #                          minted from an arbitrary branch would be promotable.
+          #   --source-digest        the commit the signing run was for, which is what turns "a digest
+          #                          exists" into "CI built this digest from that source". Not settable by
+          #                          the build.
+          #   --deny-self-hosted-runners  CI builds on ubuntu-latest, so this is free and it removes
+          #                          attestations minted on a machine someone else controls.
           if ! gh attestation verify "oci://${IMAGE}@${DIGEST}" \
                  --repo "${GITHUB_REPOSITORY}" \
                  --cert-oidc-issuer "https://token.actions.githubusercontent.com" \
@@ -201,13 +173,11 @@ jobs:
             exit 1
           fi
 
-          # Everything below is belt and braces. gh enforced each of these through a flag, so a
-          # mismatch here would mean a field moved rather than that a check was skipped. They are
-          # asserted with `all(...)` over every returned attestation, not folded into one string,
-          # so a set containing one good and one bad entry cannot average out. Only
-          # signature.certificate and verifiedTimestamps are read: gh's own manual is explicit that
-          # those are the only parts the originating workflow cannot manipulate. Nothing under
-          # statement.predicate is used for any decision.
+          # Re-asserted from the output with `all(...)` over every returned attestation, never folded into
+          # one string, so a set holding one good and one bad entry cannot average out. Only
+          # `signature.certificate` and `verifiedTimestamps` are read: gh's manual is explicit that those
+          # are the only parts the originating workflow cannot manipulate. Nothing under
+          # `statement.predicate` decides anything.
           bad="$(jq -r \
             --arg commit "$COMMIT" \
             --arg bare "${DIGEST#sha256:}" \
@@ -264,17 +234,14 @@ jobs:
             echo "attestation predicate is not used for any decision here."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Also ungated, also read-only, and separate because only an in-cluster runner can see production. This is
-  # what puts the CONFIGURED image, the OBSERVED running digest(s) and the ROLLBACK target in front of the
-  # approver before they approve.
+  # Also ungated, also read-only, and separate because only an in-cluster runner can see production. It puts
+  # the CONFIGURED image, the OBSERVED running digest and the ROLLBACK target in front of the approver
+  # before they approve.
   #
-  # WHY THIS IS NOT ONE jsonpath. The obvious version reads `.items[0]`, which is wrong in three ways that
-  # all end with a rollback command that does not restore what was running: the list is not ordered by
-  # anything meaningful, it includes pods that are terminating or not yet ready, and during a rollout it
-  # includes pods from BOTH ReplicaSets, so `[0]` can be the new image the moment a promotion is retried.
-  # It also silently returned the spec image when no pod matched, which is the one case where the two can
-  # legitimately disagree. So: require the Deployment to be settled, look at every ready pod, and require
-  # them to agree.
+  # The rollback target has to be the state this promotion replaces, so it is read from every ready pod the
+  # Deployment owns, and only while the Deployment is settled. A pod list is unordered, includes
+  # terminating and not-ready pods, and during a rollout carries both ReplicaSets, so no single pod can be
+  # trusted to name what is running.
   inspect-production:
     needs: verify
     runs-on: [self-hosted, identity-service-incluster-prod]

@@ -1,27 +1,20 @@
 name: CI/CD
 
-# This workflow builds, tests and publishes. It does NOT deploy to production, by design.
+# Builds, tests and publishes. It never deploys production: promote-prod.yml deploys an artifact that
+# already exists, behind the `production` environment's approval.
 #
-# Production is a separate, explicit promotion of an artifact that already exists: see
-# promote-prod.yml, which takes a source commit, requires its image to have been built and tested
-# already, and deploys the immutable digest behind the `production` environment's approval. The old
-# model gave every merge to main its own prod deploy job, which meant production was "whatever was
-# merged and approved last" rather than something anyone chose, and it left a branch build with no
-# legitimate path to production at all.
+# Paths, in order of how often they are used:
+#   - label a PR `deploy:dev`  -> build that branch and roll it onto dev, so a change can be tried on
+#                                 the real stack before it is merged. Remove and re-add the label to
+#                                 redeploy after new commits.
+#   - merge to main            -> build, test, publish, deploy dev.
+#   - workflow_dispatch        -> `dev` builds and rolls dev; `none` builds, tests and publishes without
+#                                 deploying, which is how a branch produces a promotable artifact.
 #
-# Paths here, in order of how often they are used:
-#   - label a PR `deploy:dev`  -> builds that branch and rolls it onto dev, so a change can
-#                                 be tried on the real stack before it is merged. Remove the
-#                                 label and re-add it to redeploy after new commits.
-#   - merge to main            -> builds, tests, publishes, and deploys dev.
-#   - workflow_dispatch        -> `dev` to build and roll dev; `none` to build, test and publish
-#                                 an artifact WITHOUT deploying anything, which is how a hotfix or
-#                                 feature branch produces something promotable.
-#
-# Every image this workflow pushes is also signed with a build provenance attestation binding its
-# digest to the commit it was built from. That signature is the only thing that makes an artifact
-# promotable: promotion verifies it and refuses an image that does not carry one. An image built
-# before this step existed has no such record and cannot be promoted; rebuild the commit here first.
+# Every image pushed here is signed with a build provenance attestation binding its digest to the commit
+# it was built from. That signature is what makes an artifact promotable: promotion verifies it and
+# refuses an image without one.
+
 on:
   push:
     branches: ["main"]
@@ -50,11 +43,10 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Narrower than the workflow default, plus the two the signing step needs. `id-token: write`
-    # mints the OIDC token Sigstore signs with, so the certificate carries GitHub's own claims
-    # about this run: which repository, which workflow file, which commit. `attestations: write`
-    # stores the resulting bundle against the repository. A fork PR is capped to read no matter
-    # what is declared here, which is why a fork can never produce a promotable artifact.
+    # `id-token: write` mints the OIDC token Sigstore signs with, so the certificate carries GitHub's own
+    # claims: repository, workflow file, commit. `attestations: write` stores the bundle against the
+    # repository. A fork PR is capped to read no matter what is declared here, which is why a fork can
+    # never produce a promotable artifact: widening this block would not change that.
     permissions:
       contents: read
       packages: write
@@ -121,23 +113,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # THE RECORD THAT MAKES PROMOTION POSSIBLE.
-      #
-      # Without this, the only link from a commit to an image is the tag `sha-<commit>`, and a tag is
-      # a pointer someone with package write can move. Promotion would then be trusting whatever that
-      # pointer happens to say on the day, which is not provenance.
-      #
-      # This signs a statement, through Sigstore, whose certificate is minted from this run's OIDC
-      # token. The parts promotion relies on are therefore GitHub's claims and not this workflow's:
-      # the source repository, the workflow file that signed, and the commit the run was for. A
-      # workflow cannot lie about them even if its own steps are compromised, which is exactly why
-      # promotion checks those certificate fields rather than the predicate body.
-      #
-      # `steps.push.outputs.digest` is the index (manifest-list) digest, which is what production is
-      # set to and what kubelet reports back, so the signed subject and the deployed bytes are the
-      # same object rather than one of its per-architecture children.
-      # A digest we cannot read is a promotable artifact with no evidence, so refuse it here rather
-      # than let it reach the registry unsigned.
+      # Promotion refuses an image carrying no signature, so the signed subject must be the digest that is
+      # actually deployed: the push's index (manifest-list) digest, which is what production is set to and
+      # what kubelet reports back, not one of its per-architecture children. An unreadable digest would
+      # leave a published image unsigned, so the guard below fails closed.
       - name: Require a usable digest from the push
         if: github.event_name != 'pull_request' || steps.gate.outputs.dev == 'true'
         id: digest
@@ -151,8 +130,8 @@ jobs:
           fi
           echo "digest=$PUSHED" >> "$GITHUB_OUTPUT"
 
-      # Pinned to a commit, not a tag. This step is what production trusts, so the one thing it must
-      # not do is follow a moving reference: v4.2.2.
+      # Pinned to a commit, not a tag (v4.2.2). This step is what production trusts, so it must not follow
+      # a moving reference.
       - if: github.event_name != 'pull_request' || steps.gate.outputs.dev == 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
@@ -195,10 +174,6 @@ jobs:
               body: `Deployed to **dev** (ns \`gua\`): \`${{ needs.build.outputs.ref }}\`\n\nDev keeps running this build until something else is deployed over it. Merging to main returns dev to main's build.`
             })
 
-  # There is deliberately no deploy-prod job here.
-  #
-  # Production is promoted, not pushed. promote-prod.yml takes a source commit, requires that commit's
-  # artifact to already exist, resolves its immutable digest and deploys THAT behind the `production`
-  # environment's approval. Keeping a prod deploy on this workflow made production mean "the last thing
-  # merged that someone approved", and it gave a branch build no legitimate route at all, because the
-  # production environment is `main`-only. Build here; promote there.
+  # No deploy-prod job by design. Production is promoted from an artifact that already exists, by
+  # promote-prod.yml, which is also the only route a branch build has, because the `production`
+  # environment is main-only. Build here; promote there.
