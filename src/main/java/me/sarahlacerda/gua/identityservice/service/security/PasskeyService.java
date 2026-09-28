@@ -95,11 +95,8 @@ public class PasskeyService implements CredentialRepository {
      */
     @Transactional
     public int removeAllForUser(String userId) {
-        // By principal, and this one is a security property rather than a tidy-up. Recovery's premise is that
-        // the account holder cannot use these credentials, so any left behind leave a lost or stolen device
-        // able to sign straight back in through passkey-first sign-in, which asks for no OTP. Keyed on the
-        // MXID this deleted NOTHING for an account whose Matrix identity had changed since registration, and
-        // it would have failed silently: the count would simply be zero and recovery would report success.
+        // By principal. Keyed on the row's user_id this silently deletes nothing for an account whose Matrix
+        // identity has changed, and recovery still reports success.
         List<PasskeyCredential> credentials = principals.forUserId(userId)
                 .map(p -> repository.findByAccountPrincipal(p.text()))
                 .orElseGet(List::of);
@@ -110,25 +107,19 @@ public class PasskeyService implements CredentialRepository {
     /**
      * Removes one credential of the account, and reports whether it was there.
      *
-     * <p>ADM-009 gate 5 calls this a prerequisite rather than a nice-to-have, and the reason is the fresh-factor
-     * hold. Until now the only way to remove a credential was {@link #removeAllForUser(String)}, so an owner
-     * locking a thief out of a stolen device had to wipe every credential and then register a new one, which put
-     * their own remaining factor inside the hold and cost them a week on anything the hold gates. Removing the
-     * one credential that is gone leaves the others established.
+     * <p>Removing one credential rather than all of them leaves the account's other factors established, so
+     * locking out a lost device does not put the owner's remaining factor inside the fresh-factor hold.
      *
-     * <p>The last remaining factor is refused. An account that holds nothing has to set a factor up before a
-     * sign-in completes, so wiping the last one here would turn a tidy-up into a state the account holder did
-     * not ask for; the way to be rid of every credential is still the recovery that assumes they are lost.
+     * <p>The account's last factor is refused: an account holding nothing must set one up before a sign-in
+     * completes. Clearing every credential is what {@link #removeAllForUser(String)} does for a recovery.
      *
      * @return whether a credential of this account with that id existed
      * @throws LoginFlowException 409 {@code factor_required} when it is the account's last factor
      */
     @Transactional
     public boolean removeCredential(String userId, String credentialId, boolean accountHoldsAnotherFactor) {
-        // By principal, both times. Keyed on the MXID, as this was, an owner whose Matrix identity had changed
-        // since registration could not remove their own credential, because the audit column still held the old
-        // id; and the last-factor guard counted rows by that same stale key, so it would have permitted removing
-        // the account's only factor while believing it had found none.
+        // Both the ownership test and the last-factor count key on the principal, never on the row's user_id,
+        // which is audit only and may name a Matrix identity the account no longer has.
         PasskeyPrincipals.Principal principal = requirePrincipal(userId);
         Optional<PasskeyCredential> credential = repository.findByCredentialId(credentialId)
                 .filter(row -> principal.text().equals(row.getAccountPrincipal()));
@@ -152,11 +143,10 @@ public class PasskeyService implements CredentialRepository {
                     "Passkey setup requires a verified account");
         }
 
-        // The WebAuthn user is the STABLE principal, in both fields that leave this server. `id` is the user
-        // handle the authenticator stores and replays; `name` is what a credential manager shows and what
-        // Yubico keys its own username lookups on. Both used to be the MXID, which put the account's
-        // localpart and its homeserver domain inside every credential synced to the holder's password
-        // manager, and made the credential unusable the moment either changed.
+        // Both fields that leave this server carry the stable principal, never the MXID: `id` is the handle the
+        // authenticator stores and replays, and `name` is what a credential manager shows. An MXID here would
+        // put the account's localpart and homeserver into every synced credential and break it on a placement
+        // change.
         PasskeyPrincipals.Principal principal = requirePrincipal(session.getUserId());
         UserIdentity user = UserIdentity.builder()
                 .name(principal.text())
@@ -345,22 +335,13 @@ public class PasskeyService implements CredentialRepository {
         }
 
         try {
-            // BEFORE the ceremony, because the library refuses first otherwise. A credential registered under
-            // the old model replays an MXID's own bytes as its user handle, and those bytes can never name a
-            // principal: 34 bytes are required and the first must be the format version, while an MXID begins
-            // with '@'. The Yubico flow resolves a username from the handle while building its Step6 and
-            // asserts that it resolved, before any signature is touched, so a handle naming no principal is
-            // answered generically from the catch below and this branch was unreachable for exactly the rows
-            // it describes.
+            // A credential predating the stable model replays its Matrix id as the user handle, which can never
+            // name a principal. Judging the submitted bytes reads nothing, so a distinct code here reveals
+            // nothing about which accounts or credentials exist, and it still answers once the row is deleted.
             //
-            // This reads NOTHING. It is a decision about the shape of a value the caller itself submitted, so
-            // it can carry a distinct code on an unauthenticated path without becoming an oracle: it cannot
-            // say whether an account or a credential exists, because it never asks. It also keeps working
-            // after the row is deleted, which is the retirement policy, where a row-keyed check would leave
-            // the holder with nothing but a generic dead end.
-            //
-            // Inside the try on purpose: the finally burns the single-use challenge, and a refusal that
-            // skipped it would turn one attempt into a retry window until the TTL ran out.
+            // Two placement constraints: before the ceremony, which requires the handle to resolve to a
+            // username before any signature is checked, and inside the try, whose finally spends the
+            // single-use challenge.
             Optional<byte[]> replayedHandle = replayedHandleBytes(credential);
             if (replayedHandle.isPresent() && principals.fromHandleBytes(replayedHandle.get()).isEmpty()) {
                 throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_credential_retired",
@@ -386,24 +367,17 @@ public class PasskeyService implements CredentialRepository {
                     .orElseThrow(() -> new LoginFlowException(HttpStatus.UNAUTHORIZED,
                             "passkey_authentication_failed", "Unknown passkey."));
 
-            // A row with no principal names no account. It cannot reach here on the sign-in path, because the
-            // guard above already answered its holder actionably, so this is the backstop rather than the
-            // message.
+            // A row with no principal names no account.
             String principalText = saved.getAccountPrincipal();
             if (!StringUtils.hasText(principalText)) {
                 throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_authentication_failed",
                         "Passkey sign-in was not accepted.");
             }
 
-            // The handle is the ownership claim, so it is checked now rather than merely stored. Two things
-            // have to hold: the row's OWN handle has to be this principal's bytes, and a handle the
-            // authenticator replayed has to name the same principal. Neither held before, and a row whose
-            // handle carried some other bytes signed in: the row is found by CREDENTIAL ID, and the replayed
-            // handle only ever reaches the library, which compares it to this same column and therefore
-            // cannot notice the column disagreeing with the principal beside it.
-            //
-            // Not read from AssertionResult.getUserHandle(). That returns the handle of the RegisteredCredential
-            // this service handed the library out of this very row, so comparing it to the row proves nothing.
+            // The handle is an ownership claim, so both the row's own handle and any handle the authenticator
+            // replayed must name this principal. The replayed value comes from the response body:
+            // AssertionResult.getUserHandle() returns the handle this service handed the library out of this
+            // same row, so it cannot disagree with it.
             if (!namesPrincipal(storedHandleBytes(saved), principalText)) {
                 throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_authentication_failed",
                         "Passkey sign-in was not accepted.");
@@ -413,15 +387,14 @@ public class PasskeyService implements CredentialRepository {
                         "Passkey sign-in was not accepted.");
             }
 
-            // After the checks, so a refused assertion does not leave its counter and last-used stamp behind.
+            // After the checks, so a refused assertion leaves no counter or timestamp behind.
             saved.setSignatureCount(result.getSignatureCount());
             saved.setBackupEligible(result.isBackupEligible());
             saved.setBackupState(result.isBackedUp());
             saved.setLastUsedAt(Instant.now());
 
-            // The credential names a principal; the principal names whatever Matrix identity the account has
-            // NOW. Reading saved.getUserId() here is what tied a credential to the identity it happened to be
-            // registered under.
+            // The credential names a principal; the principal names the account's current Matrix identity. The
+            // row's own user_id is audit only and must never answer this.
             String currentUserId = principals.currentUserId(principalText)
                     .orElseThrow(() -> new LoginFlowException(HttpStatus.UNAUTHORIZED,
                             "passkey_authentication_failed", "Unknown passkey."));
@@ -445,13 +418,11 @@ public class PasskeyService implements CredentialRepository {
 
     /**
      * The WebAuthn ceremony on its own, separated from the checks applied to its result.
-     * Behaviour is unchanged: this is the same call that used to sit inline in
-     * {@link #redeemAssertion}.
      *
      * <p>
-     * It is a seam, and it exists because the user-verification bar had none. That bar is
-     * the whole of what separates a step-up from a sign-in, and nothing in the suite could
-     * build an assertion that failed it, so switching it off was an edit no test objected
+     * A seam for tests. The user-verification bar is the whole of what separates a step-up
+     * from a sign-in, and no test can build a real assertion that fails it, so without an
+     * override here that bar could be removed with nothing objecting
      * to. Overriding this one method lets a test hand {@link #redeemAssertion} a result whose
      * {@code isUserVerified()} is false and watch what the bar does with it.
      */
@@ -488,11 +459,15 @@ public class PasskeyService implements CredentialRepository {
     @Override
     @Transactional(readOnly = true)
     public Optional<String> getUsernameForUserHandle(ByteArray userHandle) {
-        // Returns the principal, because that is the username this service deals in. Returning the MXID here
-        // made the library's own view of identity disagree with the column it had just read.
-        return repository.findByUserHandle(userHandle.getBase64Url()).stream()
-                .findFirst()
-                .map(PasskeyCredential::getAccountPrincipal);
+        // A decode, not a lookup: the handle is the principal's own canonical bytes, so the mapping the library
+        // wants is already in the value it handed us, and reading a row to answer it would substitute a
+        // different fact for the one submitted. Several credentials of one account share a handle by design,
+        // which is why no row-keyed answer can be correct here.
+        //
+        // The library does not treat this as proof the account exists; lookup establishes the credential, and
+        // the same validation step asserts both.
+        return principals.fromHandleBytes(userHandle.getBytes())
+                .map(PasskeyPrincipals.Principal::text);
     }
 
     @Override
@@ -500,6 +475,9 @@ public class PasskeyService implements CredentialRepository {
     public Optional<RegisteredCredential> lookup(ByteArray credentialId, ByteArray userHandle) {
         return repository.findByCredentialId(credentialId.getBase64Url())
                 .filter(credential -> credential.getUserHandle().equals(userHandle.getBase64Url()))
+                // The handle must also name the principal the row says owns the credential. Without this the
+                // comparison above is self-confirming, since both sides come from the same column.
+                .filter(credential -> namesPrincipal(userHandle.getBytes(), credential.getAccountPrincipal()))
                 .map(this::registeredCredentialFor);
     }
 
@@ -585,24 +563,24 @@ public class PasskeyService implements CredentialRepository {
     }
 
     /**
-     * Whether these handle bytes name the same principal the row names.
+     * Whether these handle bytes name the given principal.
      *
-     * <p>Through {@link PasskeyPrincipals#fromHandleBytes(byte[])}, which is the seam: this class compares two
-     * opaque principal texts and never names the identifier underneath. Anything unparseable is empty and
-     * therefore false, so the answer is always "prove it names this principal" and never "prove it does not".
+     * <p>Bytes that parse to nothing name nothing, and a row with no principal is named by nothing, so the
+     * answer is always "these bytes prove this principal" and never "these bytes disprove it". The comparison
+     * runs from the decoded side so a null principal is false rather than an error.
      */
     private boolean namesPrincipal(byte[] handleBytes, String principalText) {
         return principals.fromHandleBytes(handleBytes)
                 .map(PasskeyPrincipals.Principal::text)
-                .filter(principalText::equals)
+                .filter(decoded -> decoded.equals(principalText))
                 .isPresent();
     }
 
     /**
-     * The handle the row stores, or no bytes at all when the column is not even base64url.
+     * The handle the row stores, or no bytes when the column is not base64url.
      *
-     * <p>Deliberately not through the {@code base64Url} helper, which throws: an unreadable column has to
-     * become a refusal, not a 500.
+     * <p>Does not use the throwing {@code base64Url} helper: an unreadable column must become a refusal
+     * rather than a 500.
      */
     private byte[] storedHandleBytes(PasskeyCredential saved) {
         String stored = saved.getUserHandle();
@@ -617,11 +595,10 @@ public class PasskeyService implements CredentialRepository {
     }
 
     /**
-     * The handle the authenticator replayed in this assertion, when it replayed one.
+     * The handle the authenticator replayed, when it replayed one.
      *
-     * <p>Empty is legitimate and must not be a refusal: an assertion answered off an allow list, which is how
-     * every step-up ceremony is built, need not replay a handle at all, and both clients send JSON null in
-     * that case. Only a handle that is present and unreadable is an error, and that is a malformed body.
+     * <p>Absent is legitimate and must not be a refusal: a ceremony built from an allow list, which is every
+     * step-up, need not carry one. A handle that is present but unreadable is a malformed body.
      */
     private Optional<byte[]> replayedHandleBytes(JsonNode credential) {
         JsonNode handle = credential.path("response").path("userHandle");

@@ -70,7 +70,7 @@ class PasskeyStablePrincipalTest {
                 // The handle a registration writes: the principal's own canonical bytes, which the assertion
                 // path now compares against the row rather than merely storing.
                 .userHandle(new com.yubico.webauthn.data.ByteArray(ACCOUNT.rawBytes()).getBase64Url())
-                .credentialId("cred-1")
+                .credentialId("Y3JlZC0x")
                 .publicKeyCose("cose")
                 .signatureCount(0)
                 .build();
@@ -314,6 +314,85 @@ class PasskeyStablePrincipalTest {
 
     private static com.fasterxml.jackson.databind.JsonNode assertionWithNoHandle() throws Exception {
         return new ObjectMapper().readTree("{\"response\":{}}");
+    }
+
+    // --- the handle-to-user mapping the WebAuthn library asks for ---------------------------------------
+
+    /**
+     * Several credentials of one account share a user handle, by design, so no row-keyed answer to "which
+     * user is this handle" can be correct. It is decoded from the handle instead, and no row is read.
+     */
+    @Test
+    void theHandleToUserMappingIsDecodedAndNeverReadFromARow() {
+        byte[] handle = ACCOUNT.rawBytes();
+        when(principals.fromHandleBytes(handle))
+                .thenReturn(Optional.of(new PasskeyPrincipals.Principal(PRINCIPAL, handle)));
+
+        assertThat(service().getUsernameForUserHandle(new com.yubico.webauthn.data.ByteArray(handle)))
+                .contains(PRINCIPAL);
+
+        verify(repository, never()).findByUserHandle(anyString());
+        verify(repository, never()).findByUserId(anyString());
+    }
+
+    /** Bytes that name no account map to no user, so the ceremony fails rather than resolving to a guess. */
+    @Test
+    void aHandleNamingNoAccountMapsToNoUser() {
+        byte[] notAPrincipal = OLD_MXID.getBytes(StandardCharsets.UTF_8);
+        when(principals.fromHandleBytes(notAPrincipal)).thenReturn(Optional.empty());
+
+        assertThat(service().getUsernameForUserHandle(new com.yubico.webauthn.data.ByteArray(notAPrincipal)))
+                .isEmpty();
+    }
+
+    /**
+     * A credential is only resolved when the handle names the principal its own row says owns it. Comparing
+     * the handle against the row's handle alone is self-confirming, because both sides are the same column,
+     * so a row whose handle belonged to another account would authenticate as this one.
+     */
+    @Test
+    void aCredentialWhoseHandleNamesAnotherAccountIsNotResolved() {
+        AccountId other = AccountId.derive(
+                AccountId.CLASS_BOOTSTRAP, "a-different-account".getBytes(StandardCharsets.UTF_8));
+        PasskeyCredential row = PasskeyCredential.builder()
+                .accountPrincipal(PRINCIPAL)
+                .userId(OLD_MXID)
+                // The handle of a different account, which the row nonetheless claims to own.
+                .userHandle(new com.yubico.webauthn.data.ByteArray(other.rawBytes()).getBase64Url())
+                .credentialId("cred-1")
+                .publicKeyCose("cose")
+                .signatureCount(0)
+                .build();
+        // lookup() addresses the row by the base64url of the credential id it is handed.
+        when(repository.findByCredentialId("Y3JlZC0x")).thenReturn(Optional.of(row));
+        when(principals.fromHandleBytes(other.rawBytes()))
+                .thenReturn(Optional.of(new PasskeyPrincipals.Principal(other.value(), other.rawBytes())));
+
+        assertThat(service().lookup(
+                new com.yubico.webauthn.data.ByteArray("cred-1".getBytes(StandardCharsets.UTF_8)),
+                new com.yubico.webauthn.data.ByteArray(other.rawBytes())))
+                .isEmpty();
+    }
+
+    /** A row with no principal is named by no handle, and asking must not fail with an error. */
+    @Test
+    void aRowWithNoPrincipalIsNotResolvedAndDoesNotThrow() {
+        PasskeyCredential row = PasskeyCredential.builder()
+                .userId(OLD_MXID)
+                .userHandle(new com.yubico.webauthn.data.ByteArray(ACCOUNT.rawBytes()).getBase64Url())
+                .credentialId("Y3JlZC0y")
+                .publicKeyCose("cose")
+                .signatureCount(0)
+                .build();
+        // lookup() addresses the row by the base64url of the credential id it is handed.
+        when(repository.findByCredentialId("Y3JlZC0y")).thenReturn(Optional.of(row));
+        when(principals.fromHandleBytes(ACCOUNT.rawBytes()))
+                .thenReturn(Optional.of(new PasskeyPrincipals.Principal(PRINCIPAL, ACCOUNT.rawBytes())));
+
+        assertThat(service().lookup(
+                new com.yubico.webauthn.data.ByteArray("cred-2".getBytes(StandardCharsets.UTF_8)),
+                new com.yubico.webauthn.data.ByteArray(ACCOUNT.rawBytes())))
+                .isEmpty();
     }
 
 }
