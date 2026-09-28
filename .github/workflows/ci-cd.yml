@@ -90,5 +90,16 @@ jobs:
       - name: Roll out ${{ needs.build.outputs.ref }} to prod
         run: |
           IMG="${{ needs.build.outputs.ref }}"
-          sudo k3s kubectl -n gua set image deployment/identity-service identity-service="$IMG"
-          sudo k3s kubectl -n gua rollout status deployment/identity-service --timeout=180s
+          # ns gua-prod, and NOT ns gua. This job was a copy of deploy-dev with only the runner label
+          # and the environment changed, so it still pointed at the dev namespace: an approved
+          # production deploy silently re-rolled DEV and production never received the build. That is
+          # why prod has sat on an August image while runs queued for approval. gua-resolver had the
+          # identical bug and its workflow records the same fix.
+          #
+          # Plain kubectl, not `sudo k3s kubectl`. The dev runner is a host-level runner where k3s'
+          # bundled kubectl and the node kubeconfig are the right answer; this one is a POD
+          # (deployment/identity-service-deploy-runner-prod in ns gua-prod) whose ServiceAccount
+          # identity-service-deployer-prod is granted deployments get+patch in that namespace, so it
+          # authenticates as itself and there is no k3s binary to sudo.
+          kubectl -n gua-prod set image deployment/identity-service identity-service="$IMG"
+          kubectl -n gua-prod rollout status deployment/identity-service --timeout=180s
