@@ -13,6 +13,8 @@ name: CI/CD
 #   + the attest step
 #   + a `none` dispatch target, which is how this branch publishes without deploying
 #   - the deploy-prod job and the `prod` dispatch option, which are the old push-to-production path
+#   - the deploy-dev job and the `dev` dispatch option, because this tree's migrations stop at V10 and
+#     the dev database is at V19, so rolling it there would not start and would take the dev stack down
 #
 # No application code, no schema and nothing from main comes with it. Verified by tree hash: the
 # whole tree excluding .github is bit-identical to the tree before this change.
@@ -23,9 +25,9 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: "Where to deploy after building. `none` builds, tests, publishes and signs only."
+        description: "Kept for shape only. This branch builds, tests, publishes and signs; it deploys nothing."
         type: choice
-        options: [none, dev]
+        options: [none]
         default: none
 
 permissions:
@@ -119,25 +121,20 @@ jobs:
           subject-digest: ${{ steps.digest.outputs.digest }}
           push-to-registry: false
 
-  # AUTOMATIC on merge to main; also manually dispatchable (environment=dev) to
-  # roll any branch onto dev for QA.
-  deploy-dev:
-    needs: build
-    if: >-
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_dispatch' && inputs.environment == 'dev')
-    runs-on: [self-hosted, dev]
-    environment: dev
-    steps:
-      - name: Roll out ${{ needs.build.outputs.ref }} to dev
-        run: |
-          IMG="${{ needs.build.outputs.ref }}"
-          # k8s pulls the immutable sha-tagged image from GHCR via the ghcr-pull secret
-          # (deployment is imagePullPolicy: IfNotPresent + imagePullSecrets) — no docker needed.
-          # Use k3s' bundled kubectl as root so PATH + kubeconfig are always correct on the node.
-          sudo k3s kubectl -n gua set image deployment/identity-service identity-service="$IMG"
-          sudo k3s kubectl -n gua rollout status deployment/identity-service --timeout=180s
-
+  # There is deliberately no deploy-dev job on this branch either, and no `dev` dispatch target.
+  #
+  # This branch's tree is the production baseline, which carries migrations V1..V10. The dev database
+  # is at V19. Flyway validates on startup and an applied migration it cannot resolve is a failure, so
+  # rolling this image onto dev would not start: it would take the dev stack down until someone
+  # redeployed it, and the live passkey end-to-end gate runs against exactly that stack.
+  #
+  # That made `workflow_dispatch --ref hotfix/... -f environment=dev` a one-keystroke outage with no
+  # upside, since QA for this fix belongs on a build of the branch it will be promoted from. Removing
+  # the job is one deletion beyond the minimum needed for provenance, and it is here because a hazard
+  # that can only cause harm is not worth carrying for the sake of a smaller diff.
+  #
+  # So this workflow now does exactly one thing: build, test, publish and sign. Nothing it can be asked
+  # to do deploys anywhere.
   # There is deliberately no deploy-prod job on this branch any more.
   #
   # Production is promoted, not pushed. promote-prod.yml on main takes a source commit, requires its
