@@ -45,6 +45,7 @@ import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryService;
 import me.sarahlacerda.gua.identityservice.service.security.EndOtherSessionsService;
+import me.sarahlacerda.gua.identityservice.service.security.PasskeyPrincipals;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.PinPolicy;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
@@ -138,8 +139,8 @@ class AuthorityNotificationSurvivesRecoveryTest {
         userSecurityService = new UserSecurityService(userRepository, encoder, properties,
                 mock(DirectoryService.class), mock(PhoneNumberHasher.class), mock(OtpService.class), audit,
                 mock(StringRedisTemplate.class), new PinPolicy());
-        passkeyService = new PasskeyService(passkeyRepository, new LoginFlowProperties(),
-                mock(StringRedisTemplate.class), new ObjectMapper());
+        passkeyService = new PasskeyService(passkeyRepository, new PasskeyPrincipals(genesisRepository),
+                new LoginFlowProperties(), mock(StringRedisTemplate.class), new ObjectMapper());
         recovery = new AccountRecoveryService(userSecurityService, passkeyService,
                 mock(EndOtherSessionsService.class), properties, audit, clock);
 
@@ -338,6 +339,10 @@ class AuthorityNotificationSurvivesRecoveryTest {
 
     private PasskeyCredential passkey(String credentialId) {
         PasskeyCredential credential = PasskeyCredential.builder()
+                // The ownership key. A row carrying only the MXID is the pre-stable shape, and a recovery
+                // would find nothing to delete, so the fixture has to be written the way registration
+                // writes one or the control below would pass for the wrong reason.
+                .accountPrincipal(accountReference)
                 .userId(USER)
                 .userHandle("handle")
                 .credentialId(credentialId)

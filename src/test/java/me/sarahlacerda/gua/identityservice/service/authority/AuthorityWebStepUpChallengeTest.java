@@ -41,6 +41,7 @@ import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactor;
+import me.sarahlacerda.gua.identityservice.service.security.PasskeyPrincipals;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.PinPolicy;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
@@ -134,7 +135,11 @@ class AuthorityWebStepUpChallengeTest {
         userSecurityService = new UserSecurityService(userRepository, encoder, properties,
                 mock(DirectoryService.class), mock(PhoneNumberHasher.class), mock(OtpService.class), audit,
                 mock(StringRedisTemplate.class), new PinPolicy());
-        PasskeyService passkeyService = new PasskeyService(passkeyRepository, new LoginFlowProperties(),
+        // Real principals over the real genesis table: this test stores no credential, so the seam is here
+        // only because the step-up service takes a passkey service, but wiring a mock would let the
+        // ownership key drift from the one production uses without any test noticing.
+        PasskeyService passkeyService = new PasskeyService(passkeyRepository,
+                new PasskeyPrincipals(genesisRepository), new LoginFlowProperties(),
                 mock(StringRedisTemplate.class), new ObjectMapper());
 
         AuthorityPolicy policy = new AuthorityPolicy(properties, userSecurityService);
