@@ -54,7 +54,13 @@ class AccountIdNotReadGuardTest {
             // and nowhere else: every other file in the feature speaks of an opaque "account reference", and
             // this file is deliberately NOT added to the routing-and-login list below, which is the half of
             // this guard that matters.
-            "AuthorityAccounts.java");
+            "AuthorityAccounts.java",
+            // The one seam between a passkey and the stable account it belongs to. A WebAuthn user handle is
+            // not a claim, a userinfo field, a directory column or a localpart, which are the four things the
+            // tests below actually defend, so binding credentials to a principal does not weaken any of them.
+            // It exposes an opaque Principal so PasskeyService never names an accountId and stays off this
+            // list. Same shape as the account-authority feature's single seam.
+            "PasskeyPrincipals.java");
 
     /**
      * Files on the paths that must never learn an accountId: everything that decides where an account

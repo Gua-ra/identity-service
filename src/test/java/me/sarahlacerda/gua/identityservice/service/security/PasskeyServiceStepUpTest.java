@@ -54,6 +54,15 @@ import me.sarahlacerda.gua.identityservice.repository.PasskeyCredentialRepositor
 class PasskeyServiceStepUpTest {
 
     private static final String USER = "@alice:gua.global";
+    /**
+     * The stable principal the account resolves to. Derived rather than hand-written so it is a genuinely
+     * canonical accountId: the ceremony now pins THIS, not the MXID, which is the whole point of the change.
+     */
+    private static final me.sarahlacerda.gua.identityservice.account.genesis.AccountId ACCOUNT =
+            me.sarahlacerda.gua.identityservice.account.genesis.AccountId.derive(
+                    me.sarahlacerda.gua.identityservice.account.genesis.AccountId.CLASS_BOOTSTRAP,
+                    "alice-genesis".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    private static final String PRINCIPAL = ACCOUNT.value();
     // base64url of 32 bytes, the shape a stored credential id has.
     private static final String CREDENTIAL_ID = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
     // Stands in for the ceremony Redis is holding. The tests that use it replace the ceremony
@@ -63,6 +72,8 @@ class PasskeyServiceStepUpTest {
 
     @Mock
     private PasskeyCredentialRepository repository;
+    @Mock
+    private PasskeyPrincipals principals;
     @Mock
     private StringRedisTemplate redisTemplate;
     @Mock
@@ -74,22 +85,32 @@ class PasskeyServiceStepUpTest {
     @BeforeEach
     void setUp() {
         properties = new LoginFlowProperties();
-        service = new PasskeyService(repository, properties, redisTemplate, new ObjectMapper());
+        service = new PasskeyService(repository, principals, properties, redisTemplate, new ObjectMapper());
+        // Every ownership question now goes through the principal, so the seam is stubbed once here.
+        lenient().when(principals.forUserId(USER))
+                .thenReturn(java.util.Optional.of(new PasskeyPrincipals.Principal(PRINCIPAL, ACCOUNT.rawBytes())));
+        lenient().when(principals.fromText(PRINCIPAL))
+                .thenReturn(java.util.Optional.of(new PasskeyPrincipals.Principal(PRINCIPAL, ACCOUNT.rawBytes())));
+        // A credential resolves to whatever Matrix identity the account has now.
+        lenient().when(principals.currentUserId(PRINCIPAL)).thenReturn(java.util.Optional.of(USER));
     }
 
     @Test
     void theStepUpCeremonyDemandsUserVerification() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(repository.existsByUserId(USER)).thenReturn(true);
-        when(repository.findByUserId(USER)).thenReturn(List.of(credential()));
+        when(repository.existsByAccountPrincipal(PRINCIPAL)).thenReturn(true);
+        when(repository.findByAccountPrincipal(PRINCIPAL)).thenReturn(List.of(credential()));
 
         service.startStepUpAssertion("step-1", USER);
 
         ArgumentCaptor<String> stored = ArgumentCaptor.forClass(String.class);
         verify(valueOperations).set(eq("passkey:stepup:step-1"), stored.capture(), any());
         assertThat(stored.getValue()).contains("\"userVerification\":\"required\"");
-        // Pinned to the account that asked for it, so the assertion cannot resolve elsewhere.
-        assertThat(stored.getValue()).contains(USER);
+        // Pinned to the STABLE PRINCIPAL of the account that asked, not to its Matrix id. That is what lets
+        // the same credential keep working across a change of Matrix identity, and it is what keeps the
+        // account's localpart and homeserver domain out of the ceremony.
+        assertThat(stored.getValue()).contains(PRINCIPAL);
+        assertThat(stored.getValue()).doesNotContain(USER);
     }
 
     @Test
@@ -122,7 +143,7 @@ class PasskeyServiceStepUpTest {
 
     @Test
     void anAccountWithNoCredentialGetsAClearRefusalAndNoChallenge() {
-        when(repository.existsByUserId(USER)).thenReturn(false);
+        when(repository.existsByAccountPrincipal(PRINCIPAL)).thenReturn(false);
 
         assertThatThrownBy(() -> service.startStepUpAssertion("step-1", USER))
                 .isInstanceOf(LoginFlowException.class)
@@ -135,8 +156,8 @@ class PasskeyServiceStepUpTest {
     @Test
     void aRefusedStepUpAssertionBurnsItsChallenge() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(repository.existsByUserId(USER)).thenReturn(true);
-        when(repository.findByUserId(USER)).thenReturn(List.of(credential()));
+        when(repository.existsByAccountPrincipal(PRINCIPAL)).thenReturn(true);
+        when(repository.findByAccountPrincipal(PRINCIPAL)).thenReturn(List.of(credential()));
         service.startStepUpAssertion("step-1", USER);
         ArgumentCaptor<String> stored = ArgumentCaptor.forClass(String.class);
         verify(valueOperations).set(eq("passkey:stepup:step-1"), stored.capture(), any());
@@ -275,6 +296,8 @@ class PasskeyServiceStepUpTest {
 
     private PasskeyCredential credential() {
         return PasskeyCredential.builder()
+                // Ownership is the stable principal now; userId stays only as an audit note.
+                .accountPrincipal(PRINCIPAL)
                 .userId(USER)
                 .userHandle("dXNlcg")
                 .credentialId(CREDENTIAL_ID)

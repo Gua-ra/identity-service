@@ -27,8 +27,26 @@ public class PasskeyCredential {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
+    /**
+     * The account's Matrix user id at the moment this credential was registered.
+     *
+     * <p>Audit only. It is deliberately NOT the ownership key any more and must never be read to decide who
+     * a credential belongs to, because an account's Matrix identity can change and this column cannot: a
+     * placement change would make it stale and every ownership question answered through it wrong. Use
+     * {@link #accountPrincipal}.
+     */
     @Column(name = "user_id", nullable = false)
     private String userId;
+
+    /**
+     * The stable Gua account principal that owns this credential: the canonical accountId spelling.
+     *
+     * <p>This is the ownership key. It is also what the WebAuthn user handle carries, as its 34 canonical
+     * bytes, so the authenticator itself replays the owner on every assertion. Null only on a row written
+     * before the stable model, which the application refuses rather than resolving.
+     */
+    @Column(name = "account_principal", length = 64)
+    private String accountPrincipal;
 
     @Column(name = "user_handle", nullable = false)
     private String userHandle;
@@ -56,6 +74,7 @@ public class PasskeyCredential {
 
     @Builder
     public PasskeyCredential(
+            String accountPrincipal,
             String userId,
             String userHandle,
             String credentialId,
@@ -63,6 +82,7 @@ public class PasskeyCredential {
             long signatureCount,
             boolean backupEligible,
             boolean backupState) {
+        this.accountPrincipal = accountPrincipal;
         this.userId = userId;
         this.userHandle = userHandle;
         this.credentialId = credentialId;
