@@ -795,6 +795,35 @@ class AccountAuthorityTransitionTest {
     }
 
     @Test
+    void aRevokedDeviceKeyCannotBeGrantedAgain() {
+        rootTheAccount();
+        AccountAuthorityService.Submitted grant = grantSecondDevice();
+        opposeTheGrantAs(firstDevice, grant.recordHash());
+        clock.advance(Duration.ofHours(73));
+        long seqBefore = head().getHeadSeq();
+
+        assertThat(refusalFrom(this::grantSecondDevice)).isEqualTo("authority_device_known");
+
+        assertThat(device(secondDevice.rawPublicKey()).getState()).isEqualTo(AuthorityDevice.State.REVOKED);
+        assertThat(head().getHeadSeq()).isEqualTo(seqBefore);
+    }
+
+    @Test
+    void aRefusedGrantOverAKnownKeyChargesNobodysBackoff() {
+        rootTheAccount();
+        recoverThroughAccountRecovery();
+        service.registerCandidate(USER, encode(firstDevice.rawPublicKey()), "iPhone");
+        String challenge = mint(Purpose.GRANT);
+        byte[] bytes = AuthorityRecords.grantFor(reference, firstDevice.rawPublicKey(),
+                firstDevice.rawPublicKey(), "iPhone", head().nextSeq(), hexToBytes(head().getHeadHash()));
+
+        assertThat(refusalFrom(() -> service.grantDevice(USER, Optional.of(NATIVE_CLIENT), SESSION, encode(bytes),
+                sign(firstDevice, AuthorityRecordType.DEVICE_GRANT, challenge, bytes), challenge)))
+                .isEqualTo("authority_device_known");
+        assertThat(backoff.charged).isEmpty();
+    }
+
+    @Test
     void aCandidateExpiresAndIsThenNoLongerGrantable() {
         rootTheAccount();
         service.registerCandidate(USER, encode(secondDevice.rawPublicKey()), "iPad");

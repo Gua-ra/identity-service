@@ -433,10 +433,13 @@ public class AccountAuthorityService {
                 AuthorityDevice signer = requireKnownDevice(devices, record.verifyingKey());
                 policy.requireNotQuarantined(signer.isQuarantined(now));
                 if (record.type() == AuthorityRecordType.DEVICE_GRANT) {
+                    String granted = encode(record.deviceKey());
                     policy.requireLiveCandidate(candidateRepository
-                            .findByAccountAndDeviceKeyB64(account.reference(), encode(record.deviceKey()))
+                            .findByAccountAndDeviceKeyB64(account.reference(), granted)
                             .filter(candidate -> candidate.isLive(now))
                             .isPresent());
+                    policy.requireKeyNewToTheAccount(
+                            devices.stream().anyMatch(device -> device.getDeviceKeyB64().equals(granted)));
                 }
                 if (record.type() == AuthorityRecordType.DEVICE_REVOKE) {
                     policy.requireLeavesAnActiveDevice(

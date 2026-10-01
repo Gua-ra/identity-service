@@ -317,6 +317,14 @@ public class AuthorityPolicy {
         }
     }
 
+    /** A key is granted once per account: a revoked key does not come back, the device offers a new one. */
+    public void requireKeyNewToTheAccount(boolean alreadyHeld) {
+        if (alreadyHeld) {
+            throw new AuthorityTransitionException(HttpStatus.CONFLICT, "authority_device_known",
+                    "That device key has already been on this account. Set the device up again to add it.");
+        }
+    }
+
     public Duration approvalTtl() {
         return authority().getApprovalTtl();
     }

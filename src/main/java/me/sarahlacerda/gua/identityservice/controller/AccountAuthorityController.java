@@ -238,7 +238,8 @@ public class AccountAuthorityController {
             @ApiResponse(responseCode = "403", description = "authority_signer_refused, "
                     + "authority_device_quarantined or authority_native_session_required", content = @Content),
             @ApiResponse(responseCode = "409", description = "authority_position_refused, "
-                    + "authority_pending_conflict or authority_head_conflict", content = @Content),
+                    + "authority_pending_conflict, authority_head_conflict, authority_unknown_candidate or "
+                    + "authority_device_known", content = @Content),
             @ApiResponse(responseCode = "503", description = "authority_disabled", content = @Content)
     })
     public ResponseEntity<AuthoritySubmissionResponse> grantDevice(
