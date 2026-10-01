@@ -81,4 +81,11 @@ public class LoggingSecurityAuditLogger implements SecurityAuditLogger {
     public void reauthFailed(String userId, String operation, String requesterIp) {
         log.warn("Reauth/step-up failed for user {} from IP {} (operation={})", userId, requesterIp, operation);
     }
+
+    @Override
+    public void authorityTransitionAccepted(String userId, String type, long seq, boolean pending,
+            Instant effectiveAt) {
+        log.info("Authority transition {} accepted for user {} at seq {} (pending={}, effective={})",
+                type, userId, seq, pending, effectiveAt);
+    }
 }

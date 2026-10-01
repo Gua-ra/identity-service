@@ -55,6 +55,9 @@ public class IdentityUser {
     @Column(name = "last_phone_change_at")
     private Instant lastPhoneChangeAt;
 
+    @Column(name = "recovery_completed_at")
+    private Instant recoveryCompletedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

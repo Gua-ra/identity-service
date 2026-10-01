@@ -18,8 +18,10 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import me.sarahlacerda.gua.identityservice.account.authority.InvalidAuthorityRecordException;
 import me.sarahlacerda.gua.identityservice.account.genesis.InvalidGenesisException;
 import me.sarahlacerda.gua.identityservice.exception.AccountRecoveryCooldownException;
+import me.sarahlacerda.gua.identityservice.exception.AuthorityTransitionException;
 import me.sarahlacerda.gua.identityservice.exception.AccountRecoveryNotReadyException;
 import me.sarahlacerda.gua.identityservice.exception.EndpointRetiredException;
 import me.sarahlacerda.gua.identityservice.exception.GenesisRegistrationException;
@@ -275,6 +277,24 @@ public class RestExceptionHandler {
         public ResponseEntity<ErrorResponse> handleGenesisRegistration(GenesisRegistrationException ex) {
                 return ResponseEntity.status(ex.getStatus())
                                 .body(new ErrorResponse(ex.getCode(), ex.getMessage()));
+        }
+
+        @ExceptionHandler(AuthorityTransitionException.class)
+        public ResponseEntity<ErrorResponse> handleAuthorityTransition(AuthorityTransitionException ex) {
+                ResponseEntity.BodyBuilder builder = ResponseEntity.status(ex.getStatus());
+                if (ex.getRetryAfterSeconds() != null) {
+                        builder = builder.header("Retry-After", String.valueOf(ex.getRetryAfterSeconds()));
+                }
+                return builder.body(ex.getRetryAfterSeconds() == null
+                                ? new ErrorResponse(ex.getCode(), ex.getMessage())
+                                : new ErrorResponse(ex.getCode(), ex.getMessage(), ex.getRetryAfterSeconds()));
+        }
+
+        @ExceptionHandler(InvalidAuthorityRecordException.class)
+        public ResponseEntity<ErrorResponse> handleInvalidAuthorityRecord(InvalidAuthorityRecordException ex) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .body(new ErrorResponse("invalid_authority_record",
+                                                "Rejected by rule: " + ex.reason()));
         }
 
         /**

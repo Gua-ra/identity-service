@@ -129,6 +129,8 @@ public class AccountRecoveryService {
         // not guaranteed to run: a recovered account must not look dormant enough for another
         // recovery to start straight away.
         userSecurityService.recordAccountActivity(user, now);
+        // The authority chain reads this stamp to hold transitions after a recovery.
+        userSecurityService.recordRecoveryCompleted(user, now);
         endOtherSessionsService.markOwed(userId);
         auditLogger.accountRecoveryCompleted(userId, removed);
         return removed;

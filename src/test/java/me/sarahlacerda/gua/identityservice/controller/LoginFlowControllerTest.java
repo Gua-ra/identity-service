@@ -122,6 +122,7 @@ class LoginFlowControllerTest {
     private static final String CSRF = "csrf-token";
     private static final String CALLBACK = "https://mas.example.com/callback";
     private static final String ENROLL_APP_SCHEME = "global.gua:/oidc";
+    private static final String AUTHORITY_SESSION_HASH = "c".repeat(64);
     private static final String PHONE = "+15551234567";
 
     @Autowired
@@ -169,6 +170,8 @@ class LoginFlowControllerTest {
     private TokenRevocationService tokenRevocationService;
     @MockitoBean
     private EndOtherSessionsService endOtherSessionsService;
+    @MockitoBean
+    private me.sarahlacerda.gua.identityservice.service.authority.AuthorityWebStepUpService authorityWebStepUps;
 
     @BeforeEach
     void setUp() {
@@ -740,6 +743,118 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.redirectUrl").value(ENROLL_APP_SCHEME));
 
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    @Test
+    void theAuthorityStepUpRecordsWhatItProvedAndHandsTheSheetBack() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(authoritySession()));
+        when(userSecurityService.hasPin("@alice:gua.local")).thenReturn(true);
+        Instant pinSetAt = Instant.now().minus(Duration.ofDays(40));
+        when(userSecurityService.pinSetAt("@alice:gua.local")).thenReturn(Optional.of(pinSetAt));
+
+        mockMvc.perform(post("/login/authority/stepup/pin")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"pin\":\"284917\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.redirectUrl").value(ENROLL_APP_SCHEME));
+
+        verify(userSecurityService).validatePinOrThrow("@alice:gua.local", "284917");
+        verify(authorityWebStepUps).proved("@alice:gua.local", AUTHORITY_SESSION_HASH, "ADOPT",
+                me.sarahlacerda.gua.identityservice.service.security.AuthFactor.PIN, pinSetAt);
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    @Test
+    void theAuthorityStepUpPublishesWhichTransitionItIsFor() throws Exception {
+        LoginSession session = authoritySession();
+        session.setAuthorityPurpose("REVOKE");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(userSecurityService.hasPin("@alice:gua.local")).thenReturn(true);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("AUTHORITY_STEP_UP"))
+                .andExpect(jsonPath("$.authorityPurpose").value("REVOKE"))
+                .andExpect(jsonPath("$.pinRegistered").value(true));
+    }
+
+    @Test
+    void noOtherStepPublishesATransition() throws Exception {
+        LoginSession session = enrollSession();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("ENROLL_STEP_UP"))
+                .andExpect(jsonPath("$.authorityPurpose").doesNotExist());
+    }
+
+    @Test
+    void theAuthorityStepUpHasNoCodeToSend() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(authoritySession()));
+
+        org.springframework.test.web.servlet.MvcResult result = mockMvc.perform(
+                post("/login/authority/stepup/otp/send")
+                        .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"phoneNumber\":\"" + PHONE + "\"}"))
+                .andReturn();
+        // No handler exists for this path; which refusal Spring answers with is not asserted.
+        org.junit.jupiter.api.Assertions.assertNotEquals(200, result.getResponse().getStatus());
+
+        org.mockito.Mockito.verifyNoInteractions(accountReauthService, otpService);
+    }
+
+    @Test
+    void theAuthorityPinStepUpIsRefusedWhenTheAccountHasNoPin() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(authoritySession()));
+
+        mockMvc.perform(post("/login/authority/stepup/pin")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"pin\":\"284917\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("pin_not_set"));
+
+        verify(userSecurityService, org.mockito.Mockito.never()).validatePinOrThrow(any(), any());
+        verify(authorityWebStepUps, org.mockito.Mockito.never())
+                .proved(any(), any(), anyString(), any(), any());
+    }
+
+    @Test
+    void theAuthorityStepUpBelongsToItsOwnSessionAndNothingElse() throws Exception {
+        LoginSession signingIn = new LoginSession();
+        signingIn.setCsrfToken(CSRF);
+        signingIn.setUserId("@alice:gua.local");
+        signingIn.setPhase(Phase.PIN_REQUIRED);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(signingIn));
+
+        mockMvc.perform(post("/login/authority/stepup/pin")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"pin\":\"284917\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("unexpected_step"));
+
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(authoritySession()));
+        mockMvc.perform(post("/login/passkey/auth/options")
+                .cookie(cookie()).header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("enroll_session_cannot_sign_in"));
+
+        org.mockito.Mockito.verifyNoInteractions(authorityWebStepUps);
+    }
+
+    private LoginSession authoritySession() {
+        LoginSession session = new LoginSession();
+        session.setUserId("@alice:gua.local");
+        session.setReauthUserId("@alice:gua.local");
+        session.setRedirectUri(ENROLL_APP_SCHEME);
+        session.setCsrfToken(CSRF);
+        session.setAuthorityPurpose("ADOPT");
+        session.setAuthoritySessionHash(AUTHORITY_SESSION_HASH);
+        session.setPhase(Phase.AUTHORITY_STEP_UP);
+        return session;
     }
 
     /** Mirrors SecurityController.startFactorEnrollment: an enrollment session has no OIDC client. */

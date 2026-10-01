@@ -26,9 +26,11 @@ import me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
+import me.sarahlacerda.gua.identityservice.service.authority.AuthorityWebStepUpService;
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryService;
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryState;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy;
+import me.sarahlacerda.gua.identityservice.service.security.PasskeyRemovalService;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.PinChangeService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
@@ -58,6 +60,12 @@ class SecurityControllerTest {
     @Mock
     private AccountRecoveryService accountRecoveryService;
 
+    @Mock
+    private PasskeyRemovalService passkeyRemovalService;
+
+    @Mock
+    private AuthorityWebStepUpService authorityWebStepUps;
+
     private MockMvc mockMvc;
     private ObjectMapper objectMapper;
     private IdentityServiceProperties properties;
@@ -76,7 +84,8 @@ class SecurityControllerTest {
                 // Real policy over the mocked services, so the factor report and the enrollment
                 // guard are the ones the application computes.
                 new AuthFactorPolicy(userSecurityService, passkeyService),
-                new AccountLocalpartResolver(directoryService), pinChangeService, accountRecoveryService);
+                new AccountLocalpartResolver(directoryService), pinChangeService, accountRecoveryService,
+                passkeyRemovalService, authorityWebStepUps);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new RestExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter())
@@ -263,6 +272,65 @@ class SecurityControllerTest {
 
             org.junit.jupiter.api.Assertions.assertEquals("global.gua:/oidc", createdSession().getRedirectUri());
         }
+    }
+
+    @Test
+    void anAuthorityStepUpSheetIsMintedForOneTransitionAndOneToken() throws Exception {
+        loginProperties.getEnroll().setRedirectUri("global.gua:/oidc");
+        stubEnrollmentSessionFor("@alice:dev.local");
+        org.mockito.Mockito.when(userSecurityService.hasPin("@alice:dev.local")).thenReturn(true);
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/authority/step-up/start")
+                .header("Authorization", "Bearer token-abc")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"purpose\":\"ADOPT\"}"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.stepUpUrl").value("https://auth.example.com/login/enroll/tok-1"));
+
+        LoginSession session = createdSession();
+        org.junit.jupiter.api.Assertions.assertEquals(LoginSession.Phase.AUTHORITY_STEP_UP, session.getPhase());
+        org.junit.jupiter.api.Assertions.assertEquals("ADOPT", session.getAuthorityPurpose());
+        org.junit.jupiter.api.Assertions.assertEquals("global.gua:/oidc", session.getRedirectUri());
+        org.junit.jupiter.api.Assertions.assertEquals(
+                me.sarahlacerda.gua.identityservice.service.authority.AuthorityWebStepUpService
+                        .sessionHash("Bearer token-abc"),
+                session.getAuthoritySessionHash());
+        org.junit.jupiter.api.Assertions.assertFalse(session.isEnroll());
+        org.junit.jupiter.api.Assertions.assertNull(session.getEnrollTarget());
+        verify(authorityWebStepUps).requireMayOpen(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.eq(
+                        me.sarahlacerda.gua.identityservice.domain.AuthorityChallenge.Purpose.ADOPT));
+    }
+
+    @Test
+    void anAccountWithNothingToProveWithIsRefusedBeforeASheetExists() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
+        org.mockito.Mockito.when(userSecurityService.hasPin("@alice:dev.local")).thenReturn(false);
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/authority/step-up/start")
+                .header("Authorization", "Bearer token-abc")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"purpose\":\"ADOPT\"}"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isConflict())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.code").value("authority_step_up_unavailable"));
+
+        verify(loginSessionService, org.mockito.Mockito.never())
+                .create(org.mockito.ArgumentMatchers.any(LoginSession.class));
+    }
+
+    @Test
+    void aSheetIsNeverOpenedWithoutATransitionToConfirm() throws Exception {
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/authority/step-up/start")
+                .header("Authorization", "Bearer token-abc")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .status().isBadRequest());
+
+        verify(loginSessionService, org.mockito.Mockito.never())
+                .create(org.mockito.ArgumentMatchers.any(LoginSession.class));
     }
 
     private void stubEnrollmentSessionFor(String userId) {

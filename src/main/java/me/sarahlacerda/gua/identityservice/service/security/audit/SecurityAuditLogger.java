@@ -31,4 +31,6 @@ public interface SecurityAuditLogger {
     void phoneChangeOtpFailed(String userId, int attempt, String requesterIp);
 
     void reauthFailed(String userId, String operation, String requesterIp);
+
+    void authorityTransitionAccepted(String userId, String type, long seq, boolean pending, Instant effectiveAt);
 }

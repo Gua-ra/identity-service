@@ -34,6 +34,7 @@ public class IdentityServiceProperties {
     private final RateLimitProperties rateLimits = new RateLimitProperties();
     private final GenesisProperties genesis = new GenesisProperties();
     private final PlacementProperties placement = new PlacementProperties();
+    private final AuthorityProperties authority = new AuthorityProperties();
 
     @Getter
     @Setter
@@ -520,5 +521,138 @@ public class IdentityServiceProperties {
             @Min(1)
             private int batchSize = 500;
         }
+    }
+
+    /** Everything defaults to off. Startup refuses {@code enabled} without an out-of-band notification channel. */
+    @Getter
+    @Setter
+    public static class AuthorityProperties {
+
+        private boolean enabled = false;
+
+        /** Dev only until the recovery authority key can be stored independently of the device key. */
+        private boolean adoptionPermitted = false;
+
+        /**
+         * Also the quarantine of a granted device. Startup refuses under 24 hours unless
+         * {@link #allowShortWindowsForTesting} is set.
+         */
+        @NotNull
+        private Duration oppositionWindow = Duration.ofHours(72);
+
+        @NotNull
+        private Duration recoveryWindow = Duration.ofDays(7);
+
+        /** Also the maximum age of the step-up that minted the challenge. Startup refuses more than 15 minutes. */
+        @NotNull
+        private Duration challengeTtl = Duration.ofMinutes(15);
+
+        @NotNull
+        private Duration approvalTtl = Duration.ofMinutes(10);
+
+        @Min(1)
+        private int maxLiveApprovals = 3;
+
+        /** Dev only. */
+        private boolean allowShortWindowsForTesting = false;
+
+        /** Matched against the verified token audience, never against a client-asserted value. */
+        @NotNull
+        private List<String> nativeClientIds = new ArrayList<>();
+
+        @NotNull
+        private Duration candidateLife = Duration.ofMinutes(10);
+
+        @Valid
+        @NotNull
+        private NotificationProperties notifications = new NotificationProperties();
+
+        @Valid
+        @NotNull
+        private final PublicationProperties publication = new PublicationProperties();
+    }
+
+    @Getter
+    @Setter
+    public static class PublicationProperties {
+
+        private boolean enabled = false;
+
+        private String resolverBaseUrl = "";
+
+        /** Roster id of the homeserver this deployment signs for. It must hold that homeserver's membership key. */
+        private String homeserverId = "";
+
+        @NotNull
+        private Duration headValidity = Duration.ofDays(400);
+
+        /** Must be shorter than {@link #headValidity}. */
+        @NotNull
+        private Duration republishAfter = Duration.ofDays(300);
+
+        @NotNull
+        private Duration retryAfter = Duration.ofMinutes(5);
+    }
+
+    @Getter
+    @Setter
+    public static class NotificationProperties {
+
+        private boolean enabled = false;
+
+        @NotNull
+        private Duration registrationLife = Duration.ofDays(180);
+
+        /** Consecutive failed sends, transient or permanent, before a registration stops counting as a channel. */
+        @Min(1)
+        private int failureLimit = 3;
+
+        @Valid
+        @NotNull
+        private ApnsProperties apns = new ApnsProperties();
+
+        @Valid
+        @NotNull
+        private FcmProperties fcm = new FcmProperties();
+    }
+
+    @Getter
+    @Setter
+    public static class ApnsProperties {
+
+        /** Empty disables this transport. */
+        private String baseUrl = "";
+
+        private String keyId = "";
+
+        private String teamId = "";
+
+        private String privateKeyPkcs8Base64 = "";
+
+        @NotNull
+        private Map<String, String> topics = new LinkedHashMap<>();
+
+        /** Apple rejects a provider token older than one hour. */
+        @NotNull
+        private Duration tokenLife = Duration.ofMinutes(50);
+    }
+
+    @Getter
+    @Setter
+    public static class FcmProperties {
+
+        /** Empty disables this transport. */
+        private String baseUrl = "";
+
+        private String projectId = "";
+
+        private String clientEmail = "";
+
+        private String privateKeyPkcs8Base64 = "";
+
+        private String tokenUri = "https://oauth2.googleapis.com/token";
+
+        @NotNull
+        private Duration refreshSkew = Duration.ofMinutes(5);
     }
 }

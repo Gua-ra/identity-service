@@ -52,6 +52,11 @@ public class LoginSession {
          * ever reach it, and it never issues an authorization code.
          */
         ENROLL_STEP_UP,
+        /**
+         * An already-signed-in user confirming one authority transition. It never issues an authorization
+         * code, never stores a factor and never sends a code to the account's number.
+         */
+        AUTHORITY_STEP_UP,
         /** An account holding no factor, after declining the passkey offer; must set a PIN. */
         PIN_SETUP,
         /**
@@ -196,6 +201,11 @@ public class LoginSession {
      * refused there for having authenticated with nothing.
      */
     private AuthFactor enrollStepUpFactor;
+
+    /** Held as the enum name so an older build reading the Redis JSON ignores it instead of failing. */
+    private String authorityPurpose;
+
+    private String authoritySessionHash;
 
     /**
      * Single-use attach handle taken from a {@code gua:} login hint, naming an {@code AccountGenesis}

@@ -73,6 +73,7 @@ import me.sarahlacerda.gua.identityservice.service.security.LoginFactorEnrollmen
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.EndOtherSessionsService;
 import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
+import me.sarahlacerda.gua.identityservice.service.authority.AuthorityWebStepUpService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 
 /**
@@ -127,7 +128,13 @@ public class LoginFlowController {
      * conditioned on that subject actually being on the session.
      */
     private static final Set<Phase> FACTOR_REPORT_PHASES = EnumSet.of(Phase.PIN_REQUIRED, Phase.PASSKEY_REQUIRED,
-            Phase.PIN_SETUP, Phase.PASSKEY_SETUP, Phase.ENROLL_STEP_UP);
+            Phase.PIN_SETUP, Phase.PASSKEY_SETUP, Phase.ENROLL_STEP_UP, Phase.AUTHORITY_STEP_UP);
+
+    /**
+     * Only bearer-minted steps may report whether the account holds a PIN. At a sign-in step it would
+     * disclose that to anyone who typed the number.
+     */
+    private static final Set<Phase> PIN_REPORT_PHASES = EnumSet.of(Phase.ENROLL_STEP_UP, Phase.AUTHORITY_STEP_UP);
 
     /**
      * The steps from which the delayed account recovery may be offered: the two where a returning
@@ -160,6 +167,7 @@ public class LoginFlowController {
     private final AccountReauthService accountReauthService;
     private final TokenRevocationService tokenRevocationService;
     private final EndOtherSessionsService endOtherSessionsService;
+    private final AuthorityWebStepUpService authorityWebStepUps;
 
     @GetMapping("/context")
     @Operation(summary = "Fetch the current login state", description = "Returns the current step, the login intent (PHONE or PASSKEY, from the OIDC login_hint), a CSRF token to echo on subsequent calls, the masked phone when known, and whether this is an in-app passkey enrollment. Once the step is one the flow can only reach with the subject resolved, it also reports passkeyRegistered, preferredFactor and passkeysEnabled; all are absent before then, and in particular at the phone step, where the session holds a submitted number and nothing proved. At ENROLL_STEP_UP, and only there, it additionally reports pinRegistered, so the step-up offers the PIN beside the passkey only to an account that holds one. At PIN_REQUIRED and PASSKEY_REQUIRED after an OTP it also reports recovery, the delayed account recovery state, which is absent whenever recovery is not available to this session.")
@@ -739,6 +747,59 @@ public class LoginFlowController {
         return acceptEnrollStepUp(sessionId, session, AuthFactor.PHONE_OTP);
     }
 
+    // --- The authority step-up: confirming one authority transition ---
+
+    @PostMapping("/authority/stepup/passkey/options")
+    @Operation(summary = "Start the authority step-up with a passkey", description = "Begins a user-verifying WebAuthn assertion for a session at AUTHORITY_STEP_UP. The preferred proof, and the reason this page exists: the assertion cannot be produced natively on every platform, and an account that holds only a passkey must never be told to add a PIN to gain authority. The ceremony is pinned to the session's account and lives in the step-up namespace, so it can neither complete a sign-in nor be answered by another account's credential.")
+    public ResponseEntity<PasskeyOptionsResponse> startAuthorityStepUpPasskey(
+            @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
+            @RequestHeader(value = CSRF_HEADER, required = false) String csrf) {
+        LoginSession session = requireSession(sessionId);
+        requireCsrf(session, csrf);
+        requireAuthorityStepUp(session);
+
+        return ResponseEntity.ok(new PasskeyOptionsResponse(
+                passkeyService.startStepUpAssertion(sessionId, session.getUserId())));
+    }
+
+    @PostMapping("/authority/stepup/passkey/verify")
+    @Operation(summary = "Finish the authority step-up with a passkey", description = "Verifies the assertion, which must verify the user and must resolve to this session's account, records the step-up against that account and that transition, and hands the sheet back to the app. The record is single use and lives as long as the authority challenge does, which is at most 15 minutes.")
+    public ResponseEntity<LoginStateResponse> finishAuthorityStepUpPasskey(
+            @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
+            @RequestHeader(value = CSRF_HEADER, required = false) String csrf,
+            @RequestBody @Valid PasskeyCredentialRequest request) {
+        LoginSession session = requireSession(sessionId);
+        requireCsrf(session, csrf);
+        requireAuthorityStepUp(session);
+
+        PasskeyService.PasskeyAuthentication auth =
+                passkeyService.finishStepUpAssertion(sessionId, request.credential());
+        if (!session.getUserId().equals(auth.userId())) {
+            throw new LoginFlowException(HttpStatus.FORBIDDEN, "passkey_user_mismatch",
+                    "This passkey belongs to a different account.");
+        }
+        return acceptAuthorityStepUp(sessionId, session, AuthFactor.PASSKEY, auth.credentialRegisteredAt());
+    }
+
+    @PostMapping("/authority/stepup/pin")
+    @Operation(summary = "Finish the authority step-up with the account PIN", description = "The fallback for an account that holds a PIN, counted and locked out exactly like the PIN step of a sign-in. Refused with pin_not_set for an account that holds none, which has nothing else to offer here: no code is sent to the account's number at this step, so a passkey-only account confirms with its passkey or not at all.")
+    public ResponseEntity<LoginStateResponse> submitAuthorityStepUpPin(
+            @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
+            @RequestHeader(value = CSRF_HEADER, required = false) String csrf,
+            @RequestBody @Valid PinRequest request) {
+        LoginSession session = requireSession(sessionId);
+        requireCsrf(session, csrf);
+        requireAuthorityStepUp(session);
+        if (!authFactorPolicy.pinRegistered(session.getUserId())) {
+            throw new LoginFlowException(HttpStatus.CONFLICT, "pin_not_set",
+                    "This account has no PIN to confirm with.");
+        }
+
+        userSecurityService.validatePinOrThrow(session.getUserId(), request.pin().trim());
+        return acceptAuthorityStepUp(sessionId, session, AuthFactor.PIN,
+                userSecurityService.pinSetAt(session.getUserId()).orElse(null));
+    }
+
     @PostMapping("/recovery/start")
     @Operation(summary = "Start a delayed account recovery", description = "For a user who proved the phone number by OTP but cannot present the PIN or passkey the account holds. Available only at PIN_REQUIRED or PASSKEY_REQUIRED after an OTP, never in a re-authentication or an enrollment session (409 recovery_unavailable). Opens a recovery episode when the account has had no completed sign-in for the dormancy period, and returns the login state with recovery.status PENDING; a live episode is returned unchanged. 400 recovery_cooldown_active with retryAfterSeconds and Retry-After when the account was used too recently. Sends no SMS. Every signed-in app can cancel the episode, and signing in with the PIN or a passkey ends it.")
     public ResponseEntity<LoginStateResponse> startRecovery(
@@ -848,19 +909,30 @@ public class LoginFlowController {
         session.setPhase(Phase.COMPLETED);
         loginSessionService.delete(sessionId);
 
-        ResponseCookie expired = ResponseCookie.from(properties.getCookieName(), "")
+        // No code/state query params: an app-scheme redirect carrying no OIDC `error` is the
+        // client's success signal for enrollment (see PasskeyEnrollmentPresenter on iOS).
+        return ResponseEntity.ok()
+                .header(HttpHeaders.SET_COOKIE, clearedLoginCookie().toString())
+                .body(state(session, session.getRedirectUri()));
+    }
+
+    private ResponseEntity<LoginStateResponse> completeAuthorityStepUp(String sessionId, LoginSession session) {
+        session.setPhase(Phase.COMPLETED);
+        loginSessionService.delete(sessionId);
+
+        return ResponseEntity.ok()
+                .header(HttpHeaders.SET_COOKIE, clearedLoginCookie().toString())
+                .body(state(session, session.getRedirectUri()));
+    }
+
+    private ResponseCookie clearedLoginCookie() {
+        return ResponseCookie.from(properties.getCookieName(), "")
                 .httpOnly(true)
                 .secure(properties.isCookieSecure())
                 .sameSite("Lax")
                 .path("/")
                 .maxAge(0)
                 .build();
-
-        // No code/state query params: an app-scheme redirect carrying no OIDC `error` is the
-        // client's success signal for enrollment (see PasskeyEnrollmentPresenter on iOS).
-        return ResponseEntity.ok()
-                .header(HttpHeaders.SET_COOKIE, expired.toString())
-                .body(state(session, session.getRedirectUri()));
     }
 
     /**
@@ -970,6 +1042,12 @@ public class LoginFlowController {
             throw new LoginFlowException(HttpStatus.CONFLICT, "enroll_session_cannot_sign_in",
                     "This session is for adding a passkey, not for signing in.");
         }
+        // Kept although the phase already excludes this session, so widening a phase set cannot turn a
+        // confirmation into a sign-in.
+        if (StringUtils.hasText(session.getAuthorityPurpose())) {
+            throw new LoginFlowException(HttpStatus.CONFLICT, "enroll_session_cannot_sign_in",
+                    "This session is for confirming a change to your devices, not for signing in.");
+        }
     }
 
     /**
@@ -1022,6 +1100,27 @@ public class LoginFlowController {
                 : Phase.PASSKEY_SETUP);
         loginSessionService.save(sessionId, session);
         return ResponseEntity.ok(state(session, null));
+    }
+
+    private void requireAuthorityStepUp(LoginSession session) {
+        requirePhase(session, Phase.AUTHORITY_STEP_UP);
+        if (!StringUtils.hasText(session.getAuthorityPurpose())) {
+            throw new LoginFlowException(HttpStatus.CONFLICT, "unexpected_step",
+                    "This step belongs to confirming a change to your account's devices.");
+        }
+        if (!StringUtils.hasText(session.getUserId()) || !StringUtils.hasText(session.getAuthoritySessionHash())) {
+            throw new LoginFlowException(HttpStatus.CONFLICT, "enroll_user_unknown",
+                    "This confirmation is not bound to an account.");
+        }
+        authorityWebStepUps.requireOpen(session.getAuthorityPurpose());
+    }
+
+    /** Must not set {@code authenticatedFactor}: this session may never complete a sign-in. */
+    private ResponseEntity<LoginStateResponse> acceptAuthorityStepUp(String sessionId, LoginSession session,
+            AuthFactor provedWith, java.time.Instant factorCreatedAt) {
+        authorityWebStepUps.proved(session.getUserId(), session.getAuthoritySessionHash(),
+                session.getAuthorityPurpose(), provedWith, factorCreatedAt);
+        return completeAuthorityStepUp(sessionId, session);
     }
 
     /**
@@ -1095,7 +1194,12 @@ public class LoginFlowController {
                 factors == null ? null : factors.preferred().name(),
                 factors == null ? null : authFactorPolicy.passkeysSupported(),
                 session.isEnroll(),
+                publishableAuthorityPurpose(session),
                 recovery);
+    }
+
+    private String publishableAuthorityPurpose(LoginSession session) {
+        return session.getPhase() == Phase.AUTHORITY_STEP_UP ? session.getAuthorityPurpose() : null;
     }
 
     /**
@@ -1143,7 +1247,7 @@ public class LoginFlowController {
      * without saying whether a PIN sits behind it.
      */
     private Boolean publishablePin(LoginSession session, AuthFactorPolicy.RegisteredFactors factors) {
-        return factors == null || session.getPhase() != Phase.ENROLL_STEP_UP ? null : factors.pin();
+        return factors == null || !PIN_REPORT_PHASES.contains(session.getPhase()) ? null : factors.pin();
     }
 
     private static String maskPhone(String phone) {
@@ -1259,6 +1363,7 @@ public class LoginFlowController {
              * than a sign-in, so the UI can tell the two apart after a reload.
              */
             boolean enrollment,
+            String authorityPurpose,
             /**
              * The delayed account recovery state for this account. Null whenever recovery is not
              * available to this session, which is the signal for the UI to hide the recovery link.

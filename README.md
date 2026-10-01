@@ -233,6 +233,141 @@ A handle on its own attaches nothing. Anyone can compose an authorize URL, so th
 
 **Rollback.** Turn the flags off: the endpoint returns `503`, attach is skipped and nothing writes a genesis row. The table stays, because an accountId is permanent and nothing reads it. Drop `account_genesis` (and its `flyway_schema_history` row) only on abandoning the feature.
 
+### Account authority, adoption and the device lifecycle
+
+An account's authority is an append-only chain of signed records, one chain per account. Design: [account authority decision record](https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-009-account-authority-adoption-and-device-lifecycle.md).
+
+The feature ships disabled. With `identity.authority.enabled` off, every `/account/authority` endpoint answers `503 authority_disabled`, no authority row is written, and no existing login, recovery, factor or genesis path changes.
+
+**Adoption.** Adoption leaves the accountId and `account_genesis` unchanged. The class byte records how the id was derived, not whether the account holds authority: an adopted class `0x00` account's authority is read from its chain, not from its id.
+
+**Records.** Fixed layout, big-endian, no delimiters: magic (4 bytes, also the signature domain), version, suite, the 34 raw accountId bytes, `prevHash` (32), `seq` (8), then a body fixed per type.
+
+| Magic | Record | Bytes |
+| --- | --- | --- |
+| `GUAA` | AdoptRoot | 177 |
+| `GUAD` | DeviceGrant | 161 |
+| `GUAX` | DeviceRevoke | 145 |
+| `GUAR` | AuthorityRecovery | 209 |
+| `GUAO` | Oppose | 144 |
+
+The decoder refuses each of these with a stable rule token: an unknown magic, version, suite, framework, reason, authorization or flag; a wrong length; a `seq` below 1; an all-zero key; a key that fails Ed25519 point decoding; a recovery key equal to a device key in the same record; a label with a non-zero byte after its first zero. The all-zero rule is separate from point decoding because the all-zero encoding decodes to a valid low-order point.
+
+`authorizingKey` names the key whose signature authorizes a record and is inside the hashed bytes. `AuthorityRecovery.authorization` is `0x01` for the committed recovery authority key or `0x02` for the account-recovery path. `authorizingKey` is all zero under `0x02` and only then.
+
+**Signatures.** Every record type is verified against `magic || 32-byte server challenge || canonical bytes`. A challenge is bound to the account, the stepped-up session and the purpose, is single use, and is burned on refusal as well as on acceptance. The burn commits in its own transaction, so a refused submission cannot roll it back. Only the challenge's SHA-256 is stored.
+
+**Ordering.** There is one `account_authority_head` row per account, read `FOR UPDATE` by every writer, and acceptance is a compare-and-set on `prevHash` and `seq`. A record inside its opposition window holds its `seq`; a cancelled record gives the slot back. Competing transitions resolve by rank:
+
+| Rank | Record |
+| --- | --- |
+| 2 | A recovery signed by the committed recovery authority key |
+| 1 | Any record signed by an active device |
+| 0 | A recovery authorized through account recovery |
+
+A higher rank cancels a pending lower one and an equal rank is refused. Each cancelled initiation doubles the backoff of the key set that opened it, charged when the cancelling submission is accepted. The cooldown a cancellation writes applies to transitions of the same record type.
+
+**Opposition.** `GUAO` Oppose names a record by its SHA-256 and is signed by an active, unquarantined device key. It takes no slot and starts no window: it carries the `seq` and `prevHash` of the record it cancels and is never appended. A bearer session with no signed record may oppose an adoption and the account-recovery path. Opposing is never subject to the fresh-factor hold.
+
+**Adding a device.** The new device generates its own key and offers the public half as a candidate. The server returns an eight-character fingerprint derived from the key, from the alphabet `ABCDEFGHJKLMNPQRSTUVWXYZ2346789`, so both devices compute the same characters. The granting device signs a grant over the candidate the user confirms. A grant over a key that is not a live candidate of the same account is refused (`authority_unknown_candidate`), and so is one over a key the account already has, revoked or not (`authority_device_known`). A candidate lives ten minutes and its grant spends it.
+
+**Device set.** Each device has its own key. A grant takes effect on acceptance and its holder is quarantined for one opposition window: it may not sign a grant, a revocation or an approval, and it does not count toward the active device a revocation must leave behind. An `Oppose` from another active device naming the grant revokes the granted device at once; the grant record stays in the chain. Revoking another device waits out the window and a device revoking itself is immediate. Neither may leave the account with no unquarantined active device.
+
+**Browser sessions.** A browser session never signs an authority record and no flag allows it. An authority-sensitive web action creates a pending approval carrying the account, a digest the server derives from the named action, and a challenge. The browser shows a four-character code, and an active authority device shows the same code and the action, then signs it.
+
+Every authority endpoint is bearer-only. The web step-up sheet holds a login session cookie rather than an access token, so it gets `401` from them (`AccountAuthorityGuardTest`). `identity.authority.native-client-ids` refuses a registered client of ours that is not listed as native. It does not refuse a token that names no client of ours, which is every homeserver-issued token and therefore both apps.
+
+**Phone possession.** An SMS code authorizes no authority operation, including adoption. `AccountAuthorityGuardTest` fails the build on each of three rules: no authority file references the OTP services; `AuthFactor.PHONE_OTP` is in no accepted set; no transition is accepted on a factor inside the fresh-factor hold or while the account's last completed recovery is inside it. `identity_users.recovery_completed_at` exists for the third rule, because `pin_reset_requested_at` is cleared on completion and `pin_set_at` cannot tell a recovery from an ordinary PIN change.
+
+**Endpoints** (`503` while the flag is off; bearer unless noted; the four transitions also refuse a registered client of ours that is not listed as native):
+
+| Endpoint | What it does |
+| --- | --- |
+| `POST /account/authority/challenge` | Accepts the step-up for a purpose and mints the challenge the record will sign. |
+| `POST /account/authority/adopt` | Records a pending `AdoptRoot` at `seq 1`. Refused on a non-empty chain, on a class `0x01` account, and without the confirmation that the recovery key was stored. |
+| `POST /account/authority/oppose` | Objects to the pending transition named by `recordHash`, on the session alone. An objection naming any other record is refused with `409 authority_opposition_stale`. Free the first time, then a step-up on any factor at any age. Accepted for an adoption and for the account-recovery path. |
+| `POST /account/authority/oppose/record` | Objects with a signed `Oppose` from an active, unquarantined device. |
+| `POST /account/authority/device/candidate`, `GET /account/authority/device/candidate` | A new device offers its public key and gets its fingerprint; the granting device reads the account's candidates. |
+| `POST /account/authority/device/grant` | Activates another device key at once. The grantee is quarantined and the grant is opposable for one window. |
+| `POST /account/authority/device/revoke` | Removes a device key: pending for another device, immediate for itself. |
+| `POST /account/authority/recover` | Replaces the device set and the recovery key in one record. |
+| `GET /account/authority` | The chain, the device set and any pending step. Returns the accountId to its own account holder, because the client signs over its 34 raw bytes. |
+| `POST /account/authority/approval`, `GET /account/authority/approval`, `POST /account/authority/approval/{id}/sign` | Browser-started approvals. |
+| `POST /security/authority/step-up/start` | Mints the one-time URL of a web step-up scoped to one purpose. Native session only. Refused for a purpose that asks for no factor and for an account that holds neither an assertable passkey nor a PIN. |
+| `POST /login/authority/stepup/passkey/options`, `POST /login/authority/stepup/passkey/verify`, `POST /login/authority/stepup/pin` | The sheet's own steps, on the login cookie. Passkey or PIN; no code is sent to the account's number. |
+
+**Web step-up.** A client that cannot produce a WebAuthn assertion natively runs the step-up in a web sheet. `POST /security/authority/step-up/start` mints a one-time URL for one purpose, the client opens it in an `ASWebAuthenticationSession` or a Custom Tab, `gua-idp-web` runs the ceremony at the `AUTHORITY_STEP_UP` step, and the sheet closes back into the app through the app's own scheme.
+
+The sheet leaves a row in `account_authority_web_step_up`, bound to the account, the SHA-256 of the access token that asked for the sheet and one purpose, spendable once within the challenge TTL. `POST /account/authority/challenge` spends it only for a request that carries no assertion and no PIN of its own. The fresh-factor hold, the recent-recovery refusal and the native-session rule apply as on the native path.
+
+`POST /security/passkey/credentials/{credentialId}/remove` removes one passkey credential behind the usual step-up, so locking a stolen device out does not require removing every credential.
+
+**Flags** (all off or empty by default):
+
+| Property | Env | Default | Effect |
+| --- | --- | --- | --- |
+| `identity.authority.enabled` | `IDENTITY_AUTHORITY_ENABLED` | `false` | Master switch. Off: every endpoint answers `503` and no row exists. |
+| `identity.authority.adoption-permitted` | `IDENTITY_AUTHORITY_ADOPTION_PERMITTED` | `false` | Allows adoption. Off outside dev: under framework `0x01` the recovery key shares the device store with the key it would veto. |
+| `identity.authority.opposition-window` | `IDENTITY_AUTHORITY_OPPOSITION_WINDOW` | `PT72H` | The opposition window, and the quarantine a granted device serves. |
+| `identity.authority.recovery-window` | `IDENTITY_AUTHORITY_RECOVERY_WINDOW` | `P7D` | The delay of a recovery signed by the recovery authority key under framework `0x01`. |
+| `identity.authority.challenge-ttl` | `IDENTITY_AUTHORITY_CHALLENGE_TTL` | `PT15M` | How long a challenge, and therefore its step-up, stays spendable. |
+| `identity.authority.approval-ttl` | `IDENTITY_AUTHORITY_APPROVAL_TTL` | `PT10M` | How long a browser-started approval stays signable. |
+| `identity.authority.max-live-approvals` | `IDENTITY_AUTHORITY_MAX_LIVE_APPROVALS` | `3` | How many approvals one account may hold at once. |
+| `identity.authority.candidate-life` | `IDENTITY_AUTHORITY_CANDIDATE_LIFE` | `PT10M` | How long a new device's offered key stays grantable. |
+| `identity.authority.allow-short-windows-for-testing` | `IDENTITY_AUTHORITY_ALLOW_SHORT_WINDOWS_FOR_TESTING` | `false` | Lifts the 24-hour floor on both windows. Dev only. |
+| `identity.authority.native-client-ids` | `IDENTITY_AUTHORITY_NATIVE_CLIENT_IDS` | empty | Client ids of ours whose tokens may act on the chain, read from the token's verified audience. |
+
+Startup refuses `identity.authority.enabled=true` when no out-of-band notification channel is configured, when a window is under 24 hours without the testing switch, and when the challenge TTL is over 15 minutes.
+
+**Golden vectors.** `docs/specs/authority-vectors.v1.json` publishes every record type with its canonical bytes, hashes, signature preimage, deterministic signature and the cases a decoder must refuse. `docs/specs/authority-head-vectors.v1.json` does the same for the published head. The keys are the RFC 8032 section 7.1 test constants. `AuthorityVectorsTest` and `AuthorityHeadVectorsTest` recompute every byte of both files, which are the cross-platform contract for the iOS and Android clients.
+
+**Rollback.** Turn `identity.authority.*` off: every endpoint answers `503` and nothing writes. The tables may stay, because nothing else reads them. Keep `identity_users.recovery_completed_at`: the fresh-factor hold reads it.
+
+#### The security notification channel
+
+Authority alerts go to an install-scoped registration that this service delivers directly to APNs and FCM. It is not a Matrix pusher, because a pusher belongs to a session and an account recovery ends every session. A windowed transition is refused when the account has no live registration (`authority_no_notification_channel`).
+
+Each row is keyed on an installation id the client keeps in the keychain or keystore across sign-out and re-login. Account recovery does not touch the table (`AuthorityNotificationSurvivesRecoveryTest`).
+
+The push token is never logged or returned; a row is named by a SHA-256 fingerprint of it. No IP, user agent, accountId or phone number is stored. Retention is bounded by `last_seen_at`. An alert carries a device label, a sentence and a time.
+
+Removing a registration requires a step-up on a factor past the fresh-factor hold, plus a signature by an active unquarantined device key where the row carries one. Moving an existing row's push destination requires the same device signature. There is no admin path, no bulk delete and no browser path. Every accepted removal is announced to the registrations that remain.
+
+On an account with one install, the only registration belongs to the install performing the transition.
+
+| Endpoint | What it does |
+| --- | --- |
+| `POST /account/security-notifications` | Registers or refreshes this install's destination, as an upsert on the installation id. Optionally binds a device authority key, with a signature by that key over a spent `NOTIFY` challenge. |
+| `GET /account/security-notifications` | The account's own registrations, named by token fingerprint. |
+| `POST /account/security-notifications/remove` | Removes one registration. |
+
+| Property | Env | Default | Effect |
+| --- | --- | --- | --- |
+| `identity.authority.notifications.enabled` | `IDENTITY_AUTHORITY_NOTIFICATIONS_ENABLED` | `false` | The channel's own switch, separate from the chain's. |
+| `identity.authority.notifications.registration-life` | `IDENTITY_AUTHORITY_NOTIFICATIONS_REGISTRATION_LIFE` | `P180D` | How long a registration counts as a channel with nothing heard from it. |
+| `identity.authority.notifications.failure-limit` | `IDENTITY_AUTHORITY_NOTIFICATIONS_FAILURE_LIMIT` | `3` | Consecutive failed dispatches that retire a destination. A transport reporting the destination gone (FCM `404`/`UNREGISTERED`, APNs `410`) reaches the limit in one step; any other failure counts as one. An account whose only destination is retired has no live channel until the app registers again, which it does on every session start. |
+| `identity.authority.notifications.apns.*` | `IDENTITY_AUTHORITY_APNS_*` | empty | Base URL, key id, team id and the p8. Empty means this transport is not configured. |
+| `identity.authority.notifications.apns.topics` | `IDENTITY_AUTHORITY_NOTIFICATIONS_APNS_TOPICS_<APP_ID>` | empty | Maps the app id the client sends to the APNs topic. The key comes from the variable name: `..._TOPICS_GLOBAL_GUA_DEV_IOS_PROD=global.gua.dev` becomes `global.gua.dev.ios.prod -> global.gua.dev`. An unmapped app id is sent as the topic verbatim, which Apple refuses (`AuthorityEnvironmentBindingTest`). |
+| `identity.authority.notifications.fcm.*` | `IDENTITY_AUTHORITY_FCM_*` | empty | Base URL, project, service-account email and key, and the token endpoint. Empty means this transport is not configured. |
+
+APNs is called through the JDK `HttpClient` over HTTP/2. The FCM bearer is minted with the nimbus library already on the classpath and cached until the expiry the exchange stated, less a skew.
+
+#### Publishing the settled head
+
+With `identity.authority.publication.enabled` and the master switch both on, a settled head is published to the resolver's transparency log as an `ACCOUNT_AUTHORITY` leaf. No deployment has this switch on.
+
+The published object is `gua-account-authority-head.v1`, magic `GUAH`: a fixed-layout byte string carrying the 34 raw accountId bytes, the head hash, its `seq` and the suite. The leaf commits the SHA-256 of those bytes. An empty chain is not published.
+
+A head is published when an immediate record is accepted and when a window completes; nothing schedules a sweep. A pending record is never published. A `seq` below the one already published is refused, and a byte-identical republish is answered `ALREADY_PUBLISHED`.
+
+The head is signed with the homeserver's roster membership key, which the deployment that stores the chain also holds. Publication therefore lets a reader check inclusion against a signed checkpoint; it does not protect a class `0x00` chain against a malicious homeserver.
+
+| Property | Env | Default | Effect |
+| --- | --- | --- | --- |
+| `identity.authority.publication.enabled` | `IDENTITY_AUTHORITY_PUBLICATION_ENABLED` | `false` | Publishes a settled head to the resolver's transparency log. With the master switch off no head is signed. |
+| `identity.authority.publication.resolver-base-url` | `IDENTITY_AUTHORITY_PUBLICATION_RESOLVER_BASE_URL` | empty | The resolver to publish to. Separate from `identity.placement.resolver-base-url`. |
+| `identity.authority.publication.homeserver-id` | `IDENTITY_AUTHORITY_PUBLICATION_HOMESERVER_ID` | empty | The federation roster id of the homeserver whose chains this deployment publishes. Empty means publishing refuses to start. |
+
 ### Which factor applies where
 
 A passkey is the preferred strong factor and the account PIN is the fallback for everyone who cannot use one. `AuthFactorPolicy` is where the answers live, so the interactive login flow, the legacy REST sign-in, the status endpoint and the phone-change step-up cannot each decide them differently. Two of them it decides, and two it states, which is not the same thing:

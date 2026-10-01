@@ -57,6 +57,9 @@ class PlacementRecordsNotServedGuardTest {
             "PlacementShadowReconciler", "PlacementAccountScanner", "PlacementShadowResult",
             "service.placement");
 
+    /** The roster membership signing key, shared with authority head publication. It is not a placement record. */
+    private static final String SHARED_KEY_HOLDER = "RosterMembershipKeys";
+
     @Test
     void noRoutingOrLoginPathFileReachesAPlacementRecord() throws IOException {
         List<String> offenders = new ArrayList<>();
@@ -168,6 +171,9 @@ class PlacementRecordsNotServedGuardTest {
                 continue;
             }
             for (String line : codeLines(file)) {
+                if (line.contains(SHARED_KEY_HOLDER)) {
+                    continue;
+                }
                 for (String type : PLACEMENT_RECORD_TYPES) {
                     if (line.contains(type)) {
                         offenders.add(file.getFileName() + ": " + line);
@@ -179,6 +185,31 @@ class PlacementRecordsNotServedGuardTest {
         // The named-file guard above catches a rename or a deletion but cannot catch a routing file
         // nobody has written yet. This one holds for every file that will ever be added.
         assertThat(offenders).isEmpty();
+    }
+
+    @Test
+    void theOnlySharedNameIsAKeyAndTheRoutingFilesStillCannotReachIt() throws IOException {
+        List<String> routingOffenders = new ArrayList<>();
+        List<String> reachers = new ArrayList<>();
+        for (Path file : mainSources()) {
+            String name = file.getFileName().toString();
+            String path = file.toString();
+            boolean ownsTheTypes = path.contains("service" + java.io.File.separator + "placement");
+            for (String line : codeLines(file)) {
+                if (!line.contains(SHARED_KEY_HOLDER)) {
+                    continue;
+                }
+                if (ROUTING_AND_LOGIN_PATH.contains(name)) {
+                    routingOffenders.add(name + ": " + line);
+                }
+                if (!ownsTheTypes) {
+                    reachers.add(name);
+                }
+            }
+        }
+
+        assertThat(routingOffenders).isEmpty();
+        assertThat(reachers).containsOnly("AuthorityHeadSigner.java");
     }
 
     @Test

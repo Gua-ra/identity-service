@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -247,6 +248,29 @@ public class UserSecurityService {
         }
     }
 
+    @Transactional(readOnly = true)
+    public Optional<Instant> pinSetAt(String userId) {
+        return repository.findByUserId(userId).map(IdentityUser::getPinSetAt);
+    }
+
+    @Transactional(readOnly = true)
+    public long freshFactorHoldRemaining(Instant factorCreatedAt) {
+        return freshFactorHoldRemainingSeconds(factorCreatedAt);
+    }
+
+    @Transactional(readOnly = true)
+    public long recoveryCompletionHoldRemaining(String userId) {
+        return repository.findByUserId(userId)
+                .map(user -> freshFactorHoldRemainingSeconds(user.getRecoveryCompletedAt()))
+                .orElse(0L);
+    }
+
+    /** Must be called inside the completing transaction, under the row lock. */
+    public void recordRecoveryCompleted(IdentityUser user, Instant now) {
+        user.setRecoveryCompletedAt(now);
+        repository.save(user);
+    }
+
     private long pinHoldRemainingSeconds(IdentityUser user) {
         if (!user.hasPin()) {
             return 0L;
@@ -318,7 +342,9 @@ public class UserSecurityService {
                 .orElse(false);
     }
 
-    @Transactional(noRollbackFor = { InvalidPinException.class, PinLockedException.class })
+    /** Runs in its own transaction: a caller that rolls back must not undo the failed-attempt count. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW,
+            noRollbackFor = { InvalidPinException.class, PinLockedException.class })
     public void validatePinOrThrow(String userId, String providedPin) {
         IdentityUser user = repository.findByUserIdForUpdate(userId)
                 .orElseThrow(() -> new UnknownUserException("Unknown user: " + userId));
