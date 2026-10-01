@@ -1,19 +1,7 @@
 name: CI/CD
 
-# Builds, tests and publishes. It never deploys production: promote-prod.yml deploys an artifact that
-# already exists, behind the `production` environment's approval.
-#
-# Paths, in order of how often they are used:
-#   - label a PR `deploy:dev`  -> build that branch and roll it onto dev, so a change can be tried on
-#                                 the real stack before it is merged. Remove and re-add the label to
-#                                 redeploy after new commits.
-#   - merge to main            -> build, test, publish, deploy dev.
-#   - workflow_dispatch        -> `dev` builds and rolls dev; `none` builds, tests and publishes without
-#                                 deploying, which is how a branch produces a promotable artifact.
-#
-# Every image pushed here is signed with a build provenance attestation binding its digest to the commit
-# it was built from. That signature is what makes an artifact promotable: promotion verifies it and
-# refuses an image without one.
+# Builds, tests and publishes signed images; deploys dev only. Production is promoted by promote-prod.yml.
+# Triggers: push to main, the deploy:dev PR label, and workflow_dispatch (dev or none).
 
 on:
   push:
@@ -36,17 +24,14 @@ permissions:
 
 env:
   IMAGE: ghcr.io/gua-ra/identity-service
-  # Put this label on a PR to roll that PR's build onto dev. Only people with write
-  # access can label, which is what keeps this from being an open door on a public repo.
+  # Only people with write access can label a PR.
   DEPLOY_LABEL: deploy:dev
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # `id-token: write` mints the OIDC token Sigstore signs with, so the certificate carries GitHub's own
-    # claims: repository, workflow file, commit. `attestations: write` stores the bundle against the
-    # repository. A fork PR is capped to read no matter what is declared here, which is why a fork can
-    # never produce a promotable artifact: widening this block would not change that.
+    # id-token mints the OIDC token Sigstore signs with; attestations stores the bundle.
+    # A fork PR is capped to read regardless.
     permissions:
       contents: read
       packages: write
@@ -67,8 +52,7 @@ jobs:
 
       - id: gate
         name: Decide whether this PR asked for a dev deploy
-        # Same-repo check: a PR from a fork has no access to the registry credentials, so
-        # labelling one would fail at the push step rather than deploy anything.
+        # A fork PR has no registry credentials, so only same-repo PRs deploy.
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ] \
              && [ "${{ github.event.pull_request.head.repo.full_name }}" = "${{ github.repository }}" ] \
@@ -81,7 +65,6 @@ jobs:
       - id: ref
         run: echo "ref=${IMAGE}:sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
-      # An unlabelled PR stops at "it builds and the tests pass": no image, no deploy.
       - if: github.event_name != 'pull_request' || steps.gate.outputs.dev == 'true'
         uses: docker/setup-buildx-action@v3
       - if: github.event_name != 'pull_request' || steps.gate.outputs.dev == 'true'
@@ -95,8 +78,7 @@ jobs:
         id: meta
         with:
           images: ${{ env.IMAGE }}
-          # Deploys always use the immutable sha tag. `dev` stays pinned to main so it keeps
-          # meaning "what main builds"; a labelled PR gets a pr-N tag for humans to spot.
+          # Deploys use the immutable sha tag. The dev tag stays pinned to main.
           tags: |
             type=sha,format=long
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/main' }}
@@ -113,10 +95,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Promotion refuses an image carrying no signature, so the signed subject must be the digest that is
-      # actually deployed: the push's index (manifest-list) digest, which is what production is set to and
-      # what kubelet reports back, not one of its per-architecture children. An unreadable digest would
-      # leave a published image unsigned, so the guard below fails closed.
+      # Sign the index (manifest-list) digest: it is what production is set to and what promotion verifies.
       - name: Require a usable digest from the push
         if: github.event_name != 'pull_request' || steps.gate.outputs.dev == 'true'
         id: digest
@@ -130,20 +109,15 @@ jobs:
           fi
           echo "digest=$PUSHED" >> "$GITHUB_OUTPUT"
 
-      # Pinned to a commit, not a tag (v4.2.2). This step is what production trusts, so it must not follow
-      # a moving reference.
+      # Pinned to a commit, not a tag: production trusts this step.
       - if: github.event_name != 'pull_request' || steps.gate.outputs.dev == 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.digest.outputs.digest }}
-          # Left off deliberately. The bundle lives with the repository, where the same people who
-          # can move a tag cannot reach it; pushing a copy into the registry would add a second,
-          # weaker place for a verifier to look.
+          # Deliberately off: the bundle stays with the repository, not the registry.
           push-to-registry: false
 
-  # AUTOMATIC on merge to main. Also fires for a PR labelled `deploy:dev`, and by hand
-  # via workflow_dispatch with environment=dev.
   deploy-dev:
     needs: build
     if: >-
@@ -156,9 +130,7 @@ jobs:
       - name: Roll out ${{ needs.build.outputs.ref }} to dev
         run: |
           IMG="${{ needs.build.outputs.ref }}"
-          # k8s pulls the immutable sha-tagged image from GHCR via the ghcr-pull secret
-          # (deployment is imagePullPolicy: IfNotPresent + imagePullSecrets), no docker needed.
-          # Use k3s' bundled kubectl as root so PATH + kubeconfig are always correct on the node.
+          # k3s' bundled kubectl as root, so PATH and kubeconfig are correct on the node.
           sudo k3s kubectl -n gua set image deployment/identity-service identity-service="$IMG"
           sudo k3s kubectl -n gua rollout status deployment/identity-service --timeout=180s
 
@@ -173,7 +145,3 @@ jobs:
               repo: context.repo.repo,
               body: `Deployed to **dev** (ns \`gua\`): \`${{ needs.build.outputs.ref }}\`\n\nDev keeps running this build until something else is deployed over it. Merging to main returns dev to main's build.`
             })
-
-  # No deploy-prod job by design. Production is promoted from an artifact that already exists, by
-  # promote-prod.yml, which is also the only route a branch build has, because the `production`
-  # environment is main-only. Build here; promote there.
