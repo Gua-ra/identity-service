@@ -63,8 +63,8 @@ public class AuthorityPolicy {
     }
 
     public boolean mayHoldAuthority(Optional<String> clientId) {
-        List<String> native_ = authority().getNativeClientIds();
-        return clientId.isEmpty() || native_.contains(clientId.get());
+        List<String> nativeClientIds = authority().getNativeClientIds();
+        return clientId.isEmpty() || nativeClientIds.contains(clientId.get());
     }
 
     /** Depends on the purpose only, never on which factors the account holds. */

@@ -338,7 +338,6 @@ public class SecurityController {
         return request == null ? null : request.getRedirectUri();
     }
 
-
     /**
      * Builds the enrollment session both entry points hand out, and returns the one-time URL
      * that opens it.

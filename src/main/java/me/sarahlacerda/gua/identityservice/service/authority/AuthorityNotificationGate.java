@@ -8,10 +8,9 @@ import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-
-import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import org.springframework.util.StringUtils;
 
+import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.AuthorityProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.NotificationProperties;
 
@@ -75,6 +74,7 @@ public class AuthorityNotificationGate {
                 + "Shorter windows are for dev only and need "
                 + "identity.authority.allow-short-windows-for-testing=true.");
     }
+
     private static void requireLoadableKeys(AuthorityProperties authority) {
         NotificationProperties notifications = authority.getNotifications();
         if (StringUtils.hasText(notifications.getApns().getBaseUrl())) {
@@ -98,5 +98,4 @@ public class AuthorityNotificationGate {
                     + "Refusing to start.", ex);
         }
     }
-
 }
