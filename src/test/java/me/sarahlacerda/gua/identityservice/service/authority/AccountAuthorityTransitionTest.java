@@ -214,6 +214,31 @@ class AccountAuthorityTransitionTest {
     }
 
     @Test
+    void aStaleSessionObjectionDoesNotCancelANewerPendingRecord() {
+        String cancelledAdoption = adopt().recordHash();
+        service.oppose(USER, cancelledAdoption, null, null, null, "127.0.0.1");
+        clock.advance(Duration.ofHours(73));
+        AccountAuthorityService.Submitted newer = adoptLabelled("iPad");
+
+        assertThat(refusalFrom(() -> service.oppose(USER, cancelledAdoption, null, null, null, "127.0.0.1")))
+                .isEqualTo("authority_opposition_stale");
+
+        assertThat(head().getPendingHash()).isEqualTo(newer.recordHash());
+        assertThat(recordRepository.findByAccountAndSeq(account(), 1L).orElseThrow().getState())
+                .isEqualTo(AuthorityChainRecord.State.PENDING);
+    }
+
+    @Test
+    void aSessionObjectionNamingNoRecordCancelsNothing() {
+        adopt();
+
+        assertThat(refusalFrom(() -> service.oppose(USER, null, null, null, null, "127.0.0.1")))
+                .isEqualTo("authority_opposition_stale");
+
+        assertThat(head().hasPending()).isTrue();
+    }
+
+    @Test
     void opposingWithNothingPendingIsAnswredTheSameWayAsOpposingSomething() {
         service.oppose(USER, "whatever", null, null, null, "127.0.0.1");
     }
@@ -765,6 +790,14 @@ class AccountAuthorityTransitionTest {
     private AccountAuthorityService.Submitted adopt() {
         String challenge = mint(Purpose.ADOPT);
         byte[] bytes = adoptRootBytes();
+        return service.adopt(USER, Optional.of(NATIVE_CLIENT), SESSION, encode(bytes),
+                sign(firstDevice, AuthorityRecordType.ADOPT_ROOT, challenge, bytes), challenge, true);
+    }
+
+    private AccountAuthorityService.Submitted adoptLabelled(String label) {
+        String challenge = mint(Purpose.ADOPT);
+        byte[] bytes = AuthorityRecords.adoptRootFor(reference, firstDevice.rawPublicKey(),
+                recoveryKey.rawPublicKey(), label, 1, AuthorityRecord.emptyPrevHash());
         return service.adopt(USER, Optional.of(NATIVE_CLIENT), SESSION, encode(bytes),
                 sign(firstDevice, AuthorityRecordType.ADOPT_ROOT, challenge, bytes), challenge, true);
     }

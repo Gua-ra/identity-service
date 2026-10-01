@@ -285,7 +285,7 @@ Every authority endpoint is bearer-only. The web step-up sheet holds a login ses
 | --- | --- |
 | `POST /account/authority/challenge` | Accepts the step-up for a purpose and mints the challenge the record will sign. |
 | `POST /account/authority/adopt` | Records a pending `AdoptRoot` at `seq 1`. Refused on a non-empty chain, on a class `0x01` account, and without the confirmation that the recovery key was stored. |
-| `POST /account/authority/oppose` | Objects to the pending transition on the session alone. Free the first time, then a step-up on any factor at any age. Accepted for an adoption and for the account-recovery path. |
+| `POST /account/authority/oppose` | Objects to the pending transition named by `recordHash`, on the session alone. An objection naming any other record is refused with `409 authority_opposition_stale`. Free the first time, then a step-up on any factor at any age. Accepted for an adoption and for the account-recovery path. |
 | `POST /account/authority/oppose/record` | Objects with a signed `Oppose` from an active, unquarantined device. |
 | `POST /account/authority/device/candidate`, `GET /account/authority/device/candidate` | A new device offers its public key and gets its fingerprint; the granting device reads the account's candidates. |
 | `POST /account/authority/device/grant` | Activates another device key at once. The grantee is quarantined and the grant is opposable for one window. |

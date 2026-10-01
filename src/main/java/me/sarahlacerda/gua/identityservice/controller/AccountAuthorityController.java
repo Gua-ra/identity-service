@@ -136,7 +136,8 @@ public class AccountAuthorityController {
 
     @PostMapping("/oppose")
     @Operation(summary = "Object to the pending transition",
-            description = "Cancels every pending adoption on the account, not only the one named. Needs no factor "
+            description = "Cancels the pending record named by recordHash and no other: an objection naming a "
+                    + "record that is no longer the pending one is refused. Needs no factor "
                     + "beyond the session the first time, because at seq 1 the account holds no authority to "
                     + "weigh; the second and later oppositions need a step-up on any factor at any age. "
                     + "Objecting to a grant or to a device revocation has to come from a device that holds this "
@@ -146,7 +147,8 @@ public class AccountAuthorityController {
             @ApiResponse(responseCode = "204", description = "Cancelled, or nothing was pending"),
             @ApiResponse(responseCode = "403", description = "authority_opposition_device_required or "
                     + "authority_opposition_refused", content = @Content),
-            @ApiResponse(responseCode = "409", description = "authority_step_up_required", content = @Content),
+            @ApiResponse(responseCode = "409", description = "authority_step_up_required or "
+                    + "authority_opposition_stale", content = @Content),
             @ApiResponse(responseCode = "503", description = "authority_disabled", content = @Content)
     })
     public ResponseEntity<Void> oppose(@RequestBody(required = false) AuthorityOpposeRequest request,

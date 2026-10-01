@@ -118,10 +118,7 @@ public class AccountAuthorityService {
                 challengeB64);
     }
 
-    /**
-     * Applies to whatever is pending; the named record hash does not select it. The first opposition needs
-     * no step-up.
-     */
+    /** The first opposition needs no step-up. */
     @Transactional
     public void oppose(String userId, String recordHash, String passkeyStepUpId, JsonNode passkeyCredential,
             String pin, String requesterIp) {
@@ -138,6 +135,9 @@ public class AccountAuthorityService {
         if (!head.hasPending()) {
             // Same answer whether or not anything was pending, so the caller learns nothing about the account.
             return;
+        }
+        if (!head.getPendingHash().equalsIgnoreCase(recordHash)) {
+            throw opposesADifferentStep();
         }
         AuthorityChainRecord pending = requirePending(account, head);
         AuthorityRecord decoded = decodeStored(pending);
@@ -187,15 +187,13 @@ public class AccountAuthorityService {
                 : liveGrant(account, record.opposedRecordHashHex(), now).orElse(null);
         if (opposable == null) {
             if (head.hasPending()) {
-                throw new AuthorityTransitionException(HttpStatus.CONFLICT, "authority_opposition_stale",
-                        "That objection names a different step. Read the chain again.");
+                throw opposesADifferentStep();
             }
             return;
         }
         if (record.seq() != opposable.getSeq()
                 || !record.prevHashHex().equalsIgnoreCase(opposable.getPrevHash())) {
-            throw new AuthorityTransitionException(HttpStatus.CONFLICT, "authority_opposition_stale",
-                    "That objection names a different step. Read the chain again.");
+            throw opposesADifferentStep();
         }
 
         List<AuthorityDevice> devices = deviceRepository.findByAccount(account.reference());
@@ -223,6 +221,11 @@ public class AccountAuthorityService {
         }
         cancelPending(account, head, opposable, decoded, now, "opposed by an active device");
         chargeCancellation(account, decoded, now);
+    }
+
+    private static AuthorityTransitionException opposesADifferentStep() {
+        return new AuthorityTransitionException(HttpStatus.CONFLICT, "authority_opposition_stale",
+                "That objection names a different step. Read the chain again.");
     }
 
     private Optional<AuthorityChainRecord> liveGrant(Resolved account, String recordHash, Instant now) {
