@@ -110,14 +110,13 @@ public class PasskeyService implements CredentialRepository {
                     "Passkey setup requires a verified account");
         }
 
-        // Both fields that leave this server carry the stable principal, never the MXID: `id` is the handle the
-        // authenticator stores and replays, and `name` is what a credential manager shows. An MXID here would
-        // put the account's localpart and homeserver into every synced credential and break it on a placement
-        // change.
+        // The library's user is the principal: its name keys excludeCredentials, the step-up allow list and
+        // the handle mapping, and its id is the handle the authenticator stores and replays. Only the copy the
+        // browser sees is relabelled, in forBrowser; the stored ceremony keeps this one.
         PasskeyPrincipals.Principal principal = requirePrincipal(session.getUserId());
         UserIdentity user = UserIdentity.builder()
                 .name(principal.text())
-                .displayName(displayNameFor(session))
+                .displayName(displayLabel(session))
                 .id(new ByteArray(principal.bytes()))
                 .build();
 
@@ -139,7 +138,7 @@ public class PasskeyService implements CredentialRepository {
                     registrationKey(sessionId),
                     options.toJson(),
                     loginProperties.getPasskeys().getChallengeTtl());
-            return browserPublicKey(options.toCredentialsCreateJson(), "publicKey");
+            return browserPublicKey(forBrowser(options, principal, session).toCredentialsCreateJson(), "publicKey");
         } catch (Exception ex) {
             throw new LoginFlowException(HttpStatus.INTERNAL_SERVER_ERROR, "passkey_options_failed",
                     "Could not create passkey setup options");
@@ -158,6 +157,9 @@ public class PasskeyService implements CredentialRepository {
             throw new LoginFlowException(HttpStatus.CONFLICT, "passkey_user_unknown",
                     "Passkey setup requires a verified account");
         }
+        // Before the ceremony: an account with no principal has no owner to write the credential under, so
+        // its attestation is never parsed.
+        PasskeyPrincipals.Principal principal = requirePrincipal(session.getUserId());
 
         try {
             RegistrationResult result = relyingParty().finishRegistration(FinishRegistrationOptions.builder()
@@ -165,7 +167,6 @@ public class PasskeyService implements CredentialRepository {
                     .response(PublicKeyCredential.parseRegistrationResponseJson(objectMapper.writeValueAsString(credential)))
                     .build());
 
-            PasskeyPrincipals.Principal principal = requirePrincipal(session.getUserId());
             repository.save(PasskeyCredential.builder()
                     // Ownership key. userId is kept for audit and is never read to decide ownership.
                     .accountPrincipal(principal.text())
@@ -578,14 +579,39 @@ public class PasskeyService implements CredentialRepository {
         }
     }
 
-    private String displayNameFor(LoginSession session) {
-        if (StringUtils.hasText(session.getDisplayName())) {
-            return session.getDisplayName();
-        }
+    /**
+     * The options the browser hands the authenticator. The handle is the principal's bytes, exactly as in the
+     * stored options; only the name and display name differ, because a credential manager shows those two.
+     */
+    private PublicKeyCredentialCreationOptions forBrowser(PublicKeyCredentialCreationOptions options,
+            PasskeyPrincipals.Principal principal, LoginSession session) {
+        return options.toBuilder()
+                .user(UserIdentity.builder()
+                        .name(accountLabel(session))
+                        .displayName(displayLabel(session))
+                        .id(new ByteArray(principal.bytes()))
+                        .build())
+                .build();
+    }
+
+    /**
+     * The account's own handle, which is what a credential manager shows for the passkey. Never the Matrix
+     * id, the phone number or the principal: the label is synced to every device and cannot be changed later.
+     */
+    private String accountLabel(LoginSession session) {
         if (StringUtils.hasText(session.getPreferredUsername())) {
-            return session.getPreferredUsername();
+            return "@" + session.getPreferredUsername().trim();
         }
-        return session.getUserId();
+        if (StringUtils.hasText(session.getDisplayName())) {
+            return session.getDisplayName().trim();
+        }
+        return loginProperties.getPasskeys().getRpName();
+    }
+
+    private String displayLabel(LoginSession session) {
+        return StringUtils.hasText(session.getDisplayName())
+                ? session.getDisplayName().trim()
+                : accountLabel(session);
     }
 
     private void ensureEnabled() {
