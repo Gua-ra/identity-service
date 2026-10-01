@@ -61,6 +61,7 @@ class BootstrapAccountIdBackfillTest {
 
     @Test
     void itDoesNotRunOnStartupWhileTheFlagIsOff() {
+        properties.getGenesis().getBootstrapBackfill().setEnabled(false);
         accountsAre("@a:example.org");
 
         backfill.backfillOnStartup();

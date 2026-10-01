@@ -1,7 +1,6 @@
 package me.sarahlacerda.gua.identityservice.service.security;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -59,6 +58,7 @@ public class PasskeyService implements CredentialRepository {
     private static final String STEP_UP_KEY_PREFIX = "passkey:stepup:";
 
     private final PasskeyCredentialRepository repository;
+    private final PasskeyPrincipals principals;
     private final LoginFlowProperties loginProperties;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
@@ -69,7 +69,9 @@ public class PasskeyService implements CredentialRepository {
 
     /** Whether the given account already has at least one registered passkey. */
     public boolean hasPasskey(String userId) {
-        return StringUtils.hasText(userId) && repository.existsByUserId(userId);
+        return principals.forUserId(userId)
+                .map(p -> repository.existsByAccountPrincipal(p.text()))
+                .orElse(false);
     }
 
     /**
@@ -83,7 +85,9 @@ public class PasskeyService implements CredentialRepository {
      */
     @Transactional
     public int removeAllForUser(String userId) {
-        List<PasskeyCredential> credentials = repository.findByUserId(userId);
+        List<PasskeyCredential> credentials = principals.forUserId(userId)
+                .map(p -> repository.findByAccountPrincipal(p.text()))
+                .orElseGet(List::of);
         repository.deleteAll(credentials);
         return credentials.size();
     }
@@ -95,10 +99,12 @@ public class PasskeyService implements CredentialRepository {
                     "Passkey setup requires a verified account");
         }
 
+        // The stored ceremony keys on the principal. forBrowser relabels only the copy the browser sees.
+        PasskeyPrincipals.Principal principal = requirePrincipal(session.getUserId());
         UserIdentity user = UserIdentity.builder()
-                .name(session.getUserId())
-                .displayName(displayNameFor(session))
-                .id(userHandleFor(session.getUserId()))
+                .name(principal.text())
+                .displayName(displayLabel(session))
+                .id(new ByteArray(principal.bytes()))
                 .build();
 
         PublicKeyCredentialCreationOptions options = relyingParty().startRegistration(
@@ -119,7 +125,7 @@ public class PasskeyService implements CredentialRepository {
                     registrationKey(sessionId),
                     options.toJson(),
                     loginProperties.getPasskeys().getChallengeTtl());
-            return browserPublicKey(options.toCredentialsCreateJson(), "publicKey");
+            return browserPublicKey(forBrowser(options, principal, session).toCredentialsCreateJson(), "publicKey");
         } catch (Exception ex) {
             throw new LoginFlowException(HttpStatus.INTERNAL_SERVER_ERROR, "passkey_options_failed",
                     "Could not create passkey setup options");
@@ -138,6 +144,7 @@ public class PasskeyService implements CredentialRepository {
             throw new LoginFlowException(HttpStatus.CONFLICT, "passkey_user_unknown",
                     "Passkey setup requires a verified account");
         }
+        PasskeyPrincipals.Principal principal = requirePrincipal(session.getUserId());
 
         try {
             RegistrationResult result = relyingParty().finishRegistration(FinishRegistrationOptions.builder()
@@ -146,8 +153,9 @@ public class PasskeyService implements CredentialRepository {
                     .build());
 
             repository.save(PasskeyCredential.builder()
+                    .accountPrincipal(principal.text())
                     .userId(session.getUserId())
-                    .userHandle(userHandleFor(session.getUserId()).getBase64Url())
+                    .userHandle(new ByteArray(principal.bytes()).getBase64Url())
                     .credentialId(result.getKeyId().getId().getBase64Url())
                     .publicKeyCose(result.getPublicKeyCose().getBase64Url())
                     .signatureCount(result.getSignatureCount())
@@ -233,7 +241,7 @@ public class PasskeyService implements CredentialRepository {
         }
 
         AssertionRequest request = relyingParty().startAssertion(StartAssertionOptions.builder()
-                .username(userId)
+                .username(requirePrincipal(userId).text())
                 .userVerification(UserVerificationRequirement.REQUIRED)
                 .timeout(loginProperties.getPasskeys().getTimeoutMillis())
                 .build());
@@ -276,6 +284,14 @@ public class PasskeyService implements CredentialRepository {
         }
 
         try {
+            // Judges only the submitted bytes, so the distinct code reveals nothing about stored accounts.
+            // Must run before the ceremony and inside the try, whose finally spends the challenge.
+            Optional<byte[]> replayedHandle = replayedHandleBytes(credential);
+            if (replayedHandle.isPresent() && principals.fromHandleBytes(replayedHandle.get()).isEmpty()) {
+                throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_credential_retired",
+                        "This passkey cannot be used any more. Sign in another way and add it again.");
+            }
+
             AssertionResult result = runAssertion(stored, credential);
 
             if (!result.isSuccess()) {
@@ -294,12 +310,31 @@ public class PasskeyService implements CredentialRepository {
             PasskeyCredential saved = repository.findByCredentialId(result.getCredentialId().getBase64Url())
                     .orElseThrow(() -> new LoginFlowException(HttpStatus.UNAUTHORIZED,
                             "passkey_authentication_failed", "Unknown passkey."));
+
+            String principalText = saved.getAccountPrincipal();
+            if (!StringUtils.hasText(principalText)) {
+                throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_authentication_failed",
+                        "Passkey sign-in was not accepted.");
+            }
+
+            if (!namesPrincipal(storedHandleBytes(saved), principalText)) {
+                throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_authentication_failed",
+                        "Passkey sign-in was not accepted.");
+            }
+            if (replayedHandle.isPresent() && !namesPrincipal(replayedHandle.get(), principalText)) {
+                throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_authentication_failed",
+                        "Passkey sign-in was not accepted.");
+            }
+
             saved.setSignatureCount(result.getSignatureCount());
             saved.setBackupEligible(result.isBackupEligible());
             saved.setBackupState(result.isBackedUp());
             saved.setLastUsedAt(Instant.now());
 
-            return new PasskeyAuthentication(saved.getUserId(), saved.getCreatedAt());
+            String currentUserId = principals.currentUserId(principalText)
+                    .orElseThrow(() -> new LoginFlowException(HttpStatus.UNAUTHORIZED,
+                            "passkey_authentication_failed", "Unknown passkey."));
+            return new PasskeyAuthentication(currentUserId, saved.getCreatedAt());
         } catch (AssertionFailedException ex) {
             throw new LoginFlowException(HttpStatus.UNAUTHORIZED, "passkey_authentication_failed",
                     "Passkey sign-in was not accepted.");
@@ -317,18 +352,7 @@ public class PasskeyService implements CredentialRepository {
         }
     }
 
-    /**
-     * The WebAuthn ceremony on its own, separated from the checks applied to its result.
-     * Behaviour is unchanged: this is the same call that used to sit inline in
-     * {@link #redeemAssertion}.
-     *
-     * <p>
-     * It is a seam, and it exists because the user-verification bar had none. That bar is
-     * the whole of what separates a step-up from a sign-in, and nothing in the suite could
-     * build an assertion that failed it, so switching it off was an edit no test objected
-     * to. Overriding this one method lets a test hand {@link #redeemAssertion} a result whose
-     * {@code isUserVerified()} is false and watch what the bar does with it.
-     */
+    /** Test seam: lets a test supply an assertion result that fails user verification. */
     AssertionResult runAssertion(String storedRequest, JsonNode credential)
             throws AssertionFailedException, IOException {
         return relyingParty().finishAssertion(FinishAssertionOptions.builder()
@@ -340,7 +364,8 @@ public class PasskeyService implements CredentialRepository {
     @Override
     @Transactional(readOnly = true)
     public Set<PublicKeyCredentialDescriptor> getCredentialIdsForUsername(String username) {
-        return repository.findByUserId(username).stream()
+        // The library's username is the principal text.
+        return repository.findByAccountPrincipal(username).stream()
                 .map(this::descriptorFor)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
     }
@@ -348,15 +373,15 @@ public class PasskeyService implements CredentialRepository {
     @Override
     @Transactional(readOnly = true)
     public Optional<ByteArray> getUserHandleForUsername(String username) {
-        return Optional.of(userHandleFor(username));
+        return principals.fromText(username).map(p -> new ByteArray(p.bytes()));
     }
 
     @Override
     @Transactional(readOnly = true)
     public Optional<String> getUsernameForUserHandle(ByteArray userHandle) {
-        return repository.findByUserHandle(userHandle.getBase64Url()).stream()
-                .findFirst()
-                .map(PasskeyCredential::getUserId);
+        // Decoding proves nothing about existence. lookup() establishes the credential.
+        return principals.fromHandleBytes(userHandle.getBytes())
+                .map(PasskeyPrincipals.Principal::text);
     }
 
     @Override
@@ -364,6 +389,7 @@ public class PasskeyService implements CredentialRepository {
     public Optional<RegisteredCredential> lookup(ByteArray credentialId, ByteArray userHandle) {
         return repository.findByCredentialId(credentialId.getBase64Url())
                 .filter(credential -> credential.getUserHandle().equals(userHandle.getBase64Url()))
+                .filter(credential -> namesPrincipal(userHandle.getBytes(), credential.getAccountPrincipal()))
                 .map(this::registeredCredentialFor);
     }
 
@@ -434,18 +460,81 @@ public class PasskeyService implements CredentialRepository {
         }
     }
 
-    private ByteArray userHandleFor(String userId) {
-        return new ByteArray(userId.getBytes(StandardCharsets.UTF_8));
+    /** An account without a principal has not been reached by the bootstrap backfill. */
+    private PasskeyPrincipals.Principal requirePrincipal(String userId) {
+        return principals.forUserId(userId)
+                .orElseThrow(() -> new LoginFlowException(HttpStatus.CONFLICT, "passkey_account_not_ready",
+                        "This account is not ready for passkeys yet. Please try again shortly."));
     }
 
-    private String displayNameFor(LoginSession session) {
-        if (StringUtils.hasText(session.getDisplayName())) {
-            return session.getDisplayName();
+    /** False for bytes that decode to no principal, and for a null principal. */
+    private boolean namesPrincipal(byte[] handleBytes, String principalText) {
+        return principals.fromHandleBytes(handleBytes)
+                .map(PasskeyPrincipals.Principal::text)
+                .filter(decoded -> decoded.equals(principalText))
+                .isPresent();
+    }
+
+    /** Empty bytes for an unreadable column, so the caller refuses instead of answering 500. */
+    private byte[] storedHandleBytes(PasskeyCredential saved) {
+        String stored = saved.getUserHandle();
+        if (!StringUtils.hasText(stored)) {
+            return new byte[0];
         }
+        try {
+            return ByteArray.fromBase64Url(stored).getBytes();
+        } catch (Base64UrlException ex) {
+            return new byte[0];
+        }
+    }
+
+    /**
+     * Read from the response body, because {@code AssertionResult.getUserHandle()} echoes the stored row.
+     * Absent is valid: an allow-list ceremony need not replay a handle.
+     */
+    private Optional<byte[]> replayedHandleBytes(JsonNode credential) {
+        JsonNode handle = credential.path("response").path("userHandle");
+        if (!handle.isTextual() || !StringUtils.hasText(handle.asText())) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(ByteArray.fromBase64Url(handle.asText()).getBytes());
+        } catch (Base64UrlException ex) {
+            throw new LoginFlowException(HttpStatus.BAD_REQUEST, "passkey_response_invalid",
+                    "Passkey sign-in response was invalid.");
+        }
+    }
+
+    /** Relabels the name and display name a credential manager shows. The handle is unchanged. */
+    private PublicKeyCredentialCreationOptions forBrowser(PublicKeyCredentialCreationOptions options,
+            PasskeyPrincipals.Principal principal, LoginSession session) {
+        return options.toBuilder()
+                .user(UserIdentity.builder()
+                        .name(accountLabel(session))
+                        .displayName(displayLabel(session))
+                        .id(new ByteArray(principal.bytes()))
+                        .build())
+                .build();
+    }
+
+    /**
+     * The label a credential manager shows. Never the Matrix id, the phone number or the principal: the label
+     * syncs to every device and cannot be changed later.
+     */
+    private String accountLabel(LoginSession session) {
         if (StringUtils.hasText(session.getPreferredUsername())) {
-            return session.getPreferredUsername();
+            return "@" + session.getPreferredUsername().trim();
         }
-        return session.getUserId();
+        if (StringUtils.hasText(session.getDisplayName())) {
+            return session.getDisplayName().trim();
+        }
+        return loginProperties.getPasskeys().getRpName();
+    }
+
+    private String displayLabel(LoginSession session) {
+        return StringUtils.hasText(session.getDisplayName())
+                ? session.getDisplayName().trim()
+                : accountLabel(session);
     }
 
     private void ensureEnabled() {

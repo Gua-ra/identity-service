@@ -46,7 +46,9 @@ class AccountIdNotReadGuardTest {
             // list below, which is the half of this guard that matters: a placement record must never be
             // read by anything that decides where an account lives or what MAS is told about it.
             "PlacementRecord.java", "PlacementRecordCodec.java", "PlacementRecordSigner.java",
-            "ResolverPlacementClient.java", "PlacementShadowReconciler.java", "PlacementAccountScanner.java");
+            "ResolverPlacementClient.java", "PlacementShadowReconciler.java", "PlacementAccountScanner.java",
+            // A WebAuthn user handle is not a claim, a userinfo field, a directory column or a localpart.
+            "PasskeyPrincipals.java");
 
     /**
      * Files on the paths that must never learn an accountId: everything that decides where an account
