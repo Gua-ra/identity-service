@@ -69,7 +69,7 @@ class AuthorityHeadVectorsTest {
     }
 
     @Test
-    void theLeafPayloadHashIsTheSha256OfThoseBytes() throws Exception {
+    void theLeafPayloadHashIsTheSha256OfTheCanonicalBytes() throws Exception {
         JsonNode head = vectors().path("head");
         byte[] canonical = HEX.parseHex(head.path("canonicalHex").asText());
 

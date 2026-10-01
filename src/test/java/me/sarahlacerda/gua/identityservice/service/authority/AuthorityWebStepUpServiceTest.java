@@ -131,7 +131,7 @@ class AuthorityWebStepUpServiceTest {
     }
 
     @Test
-    void aWebClientOfOursCannotOpenOneOfTheseForItself() {
+    void aWebClientOfOursCannotOpenAStepUpSheetForItself() {
         assertThat(refusalFor(() -> service.requireMayOpen(Optional.of("gua-web"), Purpose.ADOPT)))
                 .isEqualTo("authority_native_session_required");
 

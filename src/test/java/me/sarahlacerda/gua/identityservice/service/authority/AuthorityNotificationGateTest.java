@@ -91,7 +91,7 @@ class AuthorityNotificationGateTest {
     }
 
     @Test
-    void theShippedNotifierIsNotSuchAChannelAndSaysSo() {
+    void theLoggedNotifierIsNotAnOutOfBandChannel() {
         assertThat(new LoggedAuthorityNotifier().isOutOfBand()).isFalse();
     }
 

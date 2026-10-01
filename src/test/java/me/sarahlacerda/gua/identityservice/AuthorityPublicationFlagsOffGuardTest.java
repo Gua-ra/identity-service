@@ -55,7 +55,7 @@ class AuthorityPublicationFlagsOffGuardTest {
     }
 
     @Test
-    void itIsASeparateSwitchFromTheChainItself() {
+    void publicationIsASeparateSwitchFromTheChainItself() {
         untouched.getAuthority().setEnabled(true);
 
         assertThat(untouched.getAuthority().getPublication().isEnabled()).isFalse();

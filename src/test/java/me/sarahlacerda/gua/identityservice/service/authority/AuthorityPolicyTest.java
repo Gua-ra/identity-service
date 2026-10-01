@@ -268,7 +268,7 @@ class AuthorityPolicyTest {
     }
 
     @Test
-    void theRankTableIsTheOneAdm002D2Fixes() {
+    void aRecoveryKeyRecoveryRanksAboveDeviceRecordsAndAccountRecoveryBelow() {
         assertThat(policy.rankOf(AuthorityRecordType.AUTHORITY_RECOVERY,
                 AuthorityRecord.AUTHORIZATION_RECOVERY_KEY)).isEqualTo((short) 2);
         assertThat(policy.rankOf(AuthorityRecordType.DEVICE_GRANT, null)).isEqualTo((short) 1);
@@ -328,7 +328,7 @@ class AuthorityPolicyTest {
     }
 
     @Test
-    void theRecoveryKeyPathRunsAdm002sDelayAndEverythingElseRunsTheOppositionWindow() {
+    void theRecoveryKeyPathRunsTheRecoveryWindowAndEverythingElseRunsTheOppositionWindow() {
         assertThat(policy.windowFor(AuthorityRecordType.AUTHORITY_RECOVERY,
                 AuthorityRecord.AUTHORIZATION_RECOVERY_KEY)).isEqualTo(Duration.ofDays(7));
         assertThat(policy.windowFor(AuthorityRecordType.AUTHORITY_RECOVERY,

@@ -22,7 +22,7 @@ class AuthorityRecordCodecTest {
     }
 
     @Test
-    void everyTypeHasTheLengthTheRecordTables() {
+    void everyTypeHasItsFixedLength() {
         assertThat(AuthorityRecordType.ADOPT_ROOT.length()).isEqualTo(177);
         assertThat(AuthorityRecordType.DEVICE_GRANT.length()).isEqualTo(161);
         assertThat(AuthorityRecordType.DEVICE_REVOKE.length()).isEqualTo(145);
@@ -270,7 +270,7 @@ class AuthorityRecordCodecTest {
     }
 
     @Test
-    void everyTypeHasItsOwnMagicAndLength() {
+    void everyTypeHasItsOwnMagic() {
         assertThat(java.util.Arrays.stream(AuthorityRecordType.values()).map(AuthorityRecordType::magic).toList())
                 .doesNotHaveDuplicates()
                 .containsExactlyInAnyOrder("GUAA", "GUAD", "GUAX", "GUAR", "GUAO");

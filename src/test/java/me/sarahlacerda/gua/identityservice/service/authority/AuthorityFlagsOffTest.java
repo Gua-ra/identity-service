@@ -79,7 +79,7 @@ class AuthorityFlagsOffTest {
     }
 
     @Test
-    void theDefaultsAreOffAndTheWindowsAreTheOnesTheRecordFixes() {
+    void theDefaultsAreOffWithA72HourOppositionWindowAndA7DayRecoveryWindow() {
         assertThat(properties.getAuthority().isEnabled()).isFalse();
         assertThat(properties.getAuthority().isAdoptionPermitted()).isFalse();
         assertThat(properties.getAuthority().isAllowShortWindowsForTesting()).isFalse();
