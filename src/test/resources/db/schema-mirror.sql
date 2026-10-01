@@ -81,9 +81,7 @@ CREATE TABLE IF NOT EXISTS passkey_credentials (
     backup_state BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
     last_used_at TIMESTAMP WITH TIME ZONE,
-    -- V19: the stable Gua account principal that owns the credential. Nullable because rows written
-    -- before the stable model carry an MXID-derived handle that cannot be rewritten server-side; they are
-    -- retired by deletion; the application refuses a credential with no owner.
+    -- V19
     account_principal VARCHAR(64)
 );
 

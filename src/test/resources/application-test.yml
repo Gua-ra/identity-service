@@ -20,5 +20,5 @@ identity:
     enabled: false
   genesis:
     bootstrap-backfill:
-      # The contexts booted on this profile create no tables, and the startup backfill scans the account tables.
+      # The startup backfill scans account tables, which contexts on this profile do not create.
       enabled: false

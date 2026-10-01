@@ -54,10 +54,6 @@ import me.sarahlacerda.gua.identityservice.repository.PasskeyCredentialRepositor
 class PasskeyServiceStepUpTest {
 
     private static final String USER = "@alice:gua.global";
-    /**
-     * The stable principal the account resolves to. Derived rather than hand-written so it is a genuinely
-     * canonical accountId: the ceremony now pins THIS, not the MXID, which is the whole point of the change.
-     */
     private static final me.sarahlacerda.gua.identityservice.account.genesis.AccountId ACCOUNT =
             me.sarahlacerda.gua.identityservice.account.genesis.AccountId.derive(
                     me.sarahlacerda.gua.identityservice.account.genesis.AccountId.CLASS_BOOTSTRAP,
@@ -86,15 +82,11 @@ class PasskeyServiceStepUpTest {
     void setUp() {
         properties = new LoginFlowProperties();
         service = new PasskeyService(repository, principals, properties, redisTemplate, new ObjectMapper());
-        // Every ownership question now goes through the principal, so the seam is stubbed once here.
         lenient().when(principals.forUserId(USER))
                 .thenReturn(java.util.Optional.of(new PasskeyPrincipals.Principal(PRINCIPAL, ACCOUNT.rawBytes())));
         lenient().when(principals.fromText(PRINCIPAL))
                 .thenReturn(java.util.Optional.of(new PasskeyPrincipals.Principal(PRINCIPAL, ACCOUNT.rawBytes())));
-        // A credential resolves to whatever Matrix identity the account has now.
         lenient().when(principals.currentUserId(PRINCIPAL)).thenReturn(java.util.Optional.of(USER));
-        // The handle is now checked against the principal on every assertion, so the seam has to answer for
-        // this account's bytes. Left lenient because the tests that stop at the ceremony never reach it.
         lenient().when(principals.fromHandleBytes(ACCOUNT.rawBytes()))
                 .thenReturn(java.util.Optional.of(new PasskeyPrincipals.Principal(PRINCIPAL, ACCOUNT.rawBytes())));
     }
@@ -110,9 +102,7 @@ class PasskeyServiceStepUpTest {
         ArgumentCaptor<String> stored = ArgumentCaptor.forClass(String.class);
         verify(valueOperations).set(eq("passkey:stepup:step-1"), stored.capture(), any());
         assertThat(stored.getValue()).contains("\"userVerification\":\"required\"");
-        // Pinned to the STABLE PRINCIPAL of the account that asked, not to its Matrix id. That is what lets
-        // the same credential keep working across a change of Matrix identity, and it is what keeps the
-        // account's localpart and homeserver domain out of the ceremony.
+        // Pinned to the account that asked for it, so the assertion cannot resolve elsewhere.
         assertThat(stored.getValue()).contains(PRINCIPAL);
         assertThat(stored.getValue()).doesNotContain(USER);
     }
@@ -301,10 +291,7 @@ class PasskeyServiceStepUpTest {
     private PasskeyCredential credential() {
         return PasskeyCredential.builder()
                 .accountPrincipal(PRINCIPAL)
-                // Audit only.
                 .userId(USER)
-                // What registration writes: this principal's own canonical bytes. The assertion path refuses a
-                // row whose handle names a different principal, so a fixture has to carry the real bytes.
                 .userHandle(new com.yubico.webauthn.data.ByteArray(ACCOUNT.rawBytes()).getBase64Url())
                 .credentialId(CREDENTIAL_ID)
                 .publicKeyCose(CREDENTIAL_ID)

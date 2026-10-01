@@ -185,7 +185,6 @@ class AccountGenesisServiceTest {
         assertThat(new IdentityServiceProperties().getGenesis().isProductionIssuance()).isFalse();
     }
 
-    /** A passkey can only belong to an account that holds a principal, so both ways of minting one are on. */
     @Test
     void genesisAndTheBootstrapBackfillAreOnByDefault() {
         assertThat(new IdentityServiceProperties().getGenesis().isEnabled()).isTrue();

@@ -9,23 +9,15 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import me.sarahlacerda.gua.identityservice.domain.PasskeyCredential;
 
 public interface PasskeyCredentialRepository extends JpaRepository<PasskeyCredential, UUID> {
-    /**
-     * @deprecated ownership is keyed on the account principal. Retained only to retire rows that have no
-     *             principal.
-     */
+    /** @deprecated Ownership is keyed on the account principal. */
     @Deprecated
     List<PasskeyCredential> findByUserId(String userId);
 
-    /** Every credential the stable account principal owns. The ownership query. */
     List<PasskeyCredential> findByAccountPrincipal(String accountPrincipal);
 
-    /** Whether the stable account principal owns any credential. */
     boolean existsByAccountPrincipal(String accountPrincipal);
 
-    /**
-     * No production caller: several credentials of one account share a handle, so no query on this column
-     * can identify an account. A regression test asserts the assertion path never calls it.
-     */
+    /** Cannot identify an account: all credentials of one account share a handle. */
     List<PasskeyCredential> findByUserHandle(String userHandle);
 
     Optional<PasskeyCredential> findByCredentialId(String credentialId);

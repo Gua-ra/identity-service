@@ -219,7 +219,7 @@ Golden vectors live in [`docs/specs/genesis-vectors.v1.json`](docs/specs/genesis
 
 A handle on its own attaches nothing. Anyone can compose an authorize URL, so the hint is attacker-controlled in both directions, and the dangerous shape is an attacker's own genesis in a URL that prefills the victim's number. The attach therefore needs a second proof: when a session carrying a handle reaches the profile step, the server issues 32 CSPRNG bytes held against that login session, and the client signs the fixed-length preimage (27 domain bytes, then the challenge, then the 34 raw accountId bytes) with the committed authority key. identity-service verifies it against the key inside the stored genesis and derives the accountId itself, reading none from the request. Verification happens inside the account-creation transaction, so a handle that fails to attach fails the whole signup rather than silently falling back to a bootstrap id. A signup presenting no handle at all takes the bootstrap branch, which is not a failure.
 
-**Flags.** The master switch and the bootstrap backfill are on by default, because a passkey can only belong to an account that holds a principal; every other flag is off:
+**Flags.** Genesis and the bootstrap backfill are enabled by default; every other flag is off:
 
 | Property | Env | Default | Effect |
 | --- | --- | --- | --- |

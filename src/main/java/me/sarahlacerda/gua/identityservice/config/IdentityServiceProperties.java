@@ -470,23 +470,14 @@ public class IdentityServiceProperties {
     }
 
     /**
-     * Account genesis and the accountId (ADM-008 Phase 3). The master switch and the bootstrap backfill
-     * default to on, because a passkey can only belong to an account that holds a principal; every other
-     * flag defaults to off. With the switch off the registration endpoint answers 503, the {@code gua:}
-     * login-hint grammar is not parsed, and no account gets a genesis row.
-     *
-     * <p>Nothing here is read for routing or for login in this phase.
+     * Account genesis and the accountId. Genesis and bootstrap backfill are enabled by default.
+     * Nothing here is read for routing or for login.
      */
     @Getter
     @Setter
     public static class GenesisProperties {
 
-        /**
-         * Master switch. While it is false the whole feature is inert. When true, clients may register
-         * an {@code AccountGenesis}, a {@code gua:} login hint is parsed, an attach is attempted for a
-         * session that carries a handle, and an account created without one is given a bootstrap
-         * accountId. On by default: passkeys require a principal, so a new account must be given one.
-         */
+        /** Master switch. Off, the whole feature is inert. */
         private boolean enabled = true;
 
         /**
@@ -522,11 +513,7 @@ public class IdentityServiceProperties {
         @Getter
         @Setter
         public static class BootstrapBackfillProperties {
-            /**
-             * Mints a bootstrap accountId for every existing account that has none. Idempotent and
-             * resumable, so it is safe to leave on and safe to rerun. On by default: passkeys require a
-             * principal, so an existing account must be given one.
-             */
+            /** Mints a bootstrap accountId for every existing account that has none. Idempotent and resumable. */
             private boolean enabled = true;
 
             /** Accounts scanned per batch. */

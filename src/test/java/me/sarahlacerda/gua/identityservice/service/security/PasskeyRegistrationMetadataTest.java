@@ -30,13 +30,6 @@ import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.repository.PasskeyCredentialRepository;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 
-/**
- * What a credential manager shows for a Gua passkey, and what the authenticator stores for it.
- *
- * <p>The label is the account's own handle and the stored user handle is the principal's canonical bytes.
- * Neither carries the Matrix id, the phone number or the accountId text: a label is synced to every device the
- * manager reaches and cannot be changed once the credential exists.
- */
 @ExtendWith(MockitoExtension.class)
 class PasskeyRegistrationMetadataTest {
 
@@ -160,10 +153,6 @@ class PasskeyRegistrationMetadataTest {
                 .noneMatch(value -> value.startsWith("@") && value.contains(":"));
     }
 
-    /**
-     * The library's user stays the principal: it keys excludeCredentials, the step-up allow list and the
-     * handle mapping, and the stored ceremony is what finishRegistration verifies against.
-     */
     @Test
     void theStoredCeremonyStillKeysOnThePrincipal() throws Exception {
         service.startRegistration("s-1", session(USERNAME, DISPLAY_NAME));
@@ -176,7 +165,6 @@ class PasskeyRegistrationMetadataTest {
         assertThat(stored.toString()).doesNotContain(USER_ID).doesNotContain(PHONE);
     }
 
-    /** The relabelled copy finishes the stored ceremony: same challenge, same handle. */
     @Test
     void theBrowserCopyAndTheStoredCopyShareTheChallengeAndTheHandle() throws Exception {
         JsonNode options = service.startRegistration("s-1", session(USERNAME, DISPLAY_NAME));
@@ -187,7 +175,6 @@ class PasskeyRegistrationMetadataTest {
         assertThat(options.path("user").path("id").asText()).isEqualTo(stored.path("user").path("id").asText());
     }
 
-    /** Stable handle canonical: what the account is called never reaches the bytes the authenticator keeps. */
     @Test
     void theHandleIsTheSameWhateverTheAccountIsCalled() {
         JsonNode first = service.startRegistration("s-1", session("alice", "Alice"));

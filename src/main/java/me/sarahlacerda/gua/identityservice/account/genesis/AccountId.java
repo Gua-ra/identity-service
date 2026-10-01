@@ -72,12 +72,7 @@ public final class AccountId {
         return new AccountId(PREFIX + Base32.encode(raw), raw);
     }
 
-    /**
-     * Rebuilds an accountId from the 34 canonical bytes {@link #rawBytes()} produced.
-     *
-     * <p>Re-encodes and delegates to {@link #parse}, so bytes are held to the same canonical-spelling,
-     * format-version and root-class checks as text.
-     */
+    /** Inverse of {@link #rawBytes()}, held to the same checks as {@link #parse}. */
     public static AccountId fromRawBytes(byte[] raw) {
         if (raw == null || raw.length != RAW_LENGTH) {
             throw new InvalidGenesisException("bad_account_id",

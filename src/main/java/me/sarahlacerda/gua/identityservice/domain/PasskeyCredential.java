@@ -27,18 +27,11 @@ public class PasskeyCredential {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    /**
-     * The account's Matrix user id when the credential was registered. Audit only, never the ownership
-     * key: placement moves the Matrix identity and this column does not follow. Ownership is
-     * {@link #accountPrincipal}.
-     */
+    /** Matrix user id at registration. Audit only: ownership is {@link #accountPrincipal}. */
     @Column(name = "user_id", nullable = false)
     private String userId;
 
-    /**
-     * The account principal that owns this credential: the canonical accountId spelling, and the same value
-     * {@link #userHandle} carries as its 34 bytes. Null means no owner, and the assertion path refuses it.
-     */
+    /** The owning account principal, in canonical text. Null means no owner, and assertion refuses it. */
     @Column(name = "account_principal", length = 64)
     private String accountPrincipal;
 
