@@ -14,7 +14,6 @@ import me.sarahlacerda.gua.identityservice.domain.AccountGenesisRecord;
 import me.sarahlacerda.gua.identityservice.domain.AccountGenesisRecord.Origin;
 import me.sarahlacerda.gua.identityservice.domain.AccountGenesisRecord.State;
 
-/** No method may update origin. */
 public interface AccountGenesisRepository extends JpaRepository<AccountGenesisRecord, String> {
 
     Optional<AccountGenesisRecord> findByUserId(String userId);

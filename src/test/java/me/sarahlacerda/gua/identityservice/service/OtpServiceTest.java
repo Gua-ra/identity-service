@@ -161,7 +161,6 @@ class OtpServiceTest {
     void verifyOtpRefusesAGuessThatOvertookTheCapWithoutComparing() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(valueOperations.get(CODE_KEY)).thenReturn("654321");
-        // A parallel guess spent the fifth slot between this call's GET and INCR.
         when(valueOperations.increment(ATTEMPTS_KEY)).thenReturn(6L);
 
         assertThatThrownBy(() -> otpService.verifyOtp(PHONE, "654321"))

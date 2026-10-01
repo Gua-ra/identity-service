@@ -1,6 +1,5 @@
 package me.sarahlacerda.gua.identityservice.exception;
 
-/** The wait is measured to the rounded availability time, so it never reveals the exact time of the last sign-in. */
 public class AccountRecoveryCooldownException extends RuntimeException {
 
     private final long remainingSeconds;

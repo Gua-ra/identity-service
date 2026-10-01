@@ -46,7 +46,6 @@ class LocalpartDerivationGuardTest {
 
     private static final Pattern SET_PREFERRED_USERNAME = Pattern.compile("setPreferredUsername\\(([^;]*)\\);");
 
-    /** Allowed argument forms per file, whitespace removed. */
     private static final Map<String, Set<String>> PREFERRED_USERNAME_ALLOWED = Map.of(
             "LoginFlowController.java", Set.of("localpart", "preferredUsername"),
             "SecurityController.java", Set.of("preferredUsername"));
@@ -165,7 +164,6 @@ class LocalpartDerivationGuardTest {
         }
     }
 
-    /** Trimmed source lines with comment-only lines and trailing line comments removed. */
     private static List<String> codeLines(Path file) throws IOException {
         List<String> lines = new ArrayList<>();
         for (String raw : Files.readAllLines(file)) {

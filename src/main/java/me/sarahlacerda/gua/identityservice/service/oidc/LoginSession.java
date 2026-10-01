@@ -83,7 +83,6 @@ public class LoginSession {
     /** An in-app enrollment handoff, not an OIDC login: completion issues no authorization code. */
     private boolean enroll;
 
-    /** Null for every session that is not an enrollment. */
     private EnrollTarget enrollTarget;
 
     /** Null until the enrollment session has proved a factor. */

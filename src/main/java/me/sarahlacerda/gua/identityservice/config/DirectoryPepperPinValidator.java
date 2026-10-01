@@ -12,8 +12,7 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-// Fails startup when the configured directory pepper does not match the pinned fingerprint.
-// Changing the pepper orphans every phone digest.
+// Changing the pepper orphans every phone digest, so a mismatch fails startup.
 @Component
 public class DirectoryPepperPinValidator {
 

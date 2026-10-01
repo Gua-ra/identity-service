@@ -25,8 +25,6 @@ import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
 import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditLogger;
 
-// /start needs a PHONE_CHANGE-scoped reauth token and a non-phone step-up factor; no token-only fallback.
-// A PIN or passkey created inside the fresh-factor hold is refused as the step-up.
 @Service
 @RequiredArgsConstructor
 public class PhoneChangeService {

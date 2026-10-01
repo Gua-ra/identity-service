@@ -5,32 +5,25 @@
 
 # Gua Identity Service
 
-> **Status: CURRENT IMPLEMENTATION.** This README describes what the service does on `main` today, for operators and integrators. The service is not the target authentication boundary. In the target design, login authority moves to each homeserver's own auth service, and this service's remaining role is a follow-up decision. That design appears only under the **TARGET ARCHITECTURE** label in [Relationship to the target architecture](#-relationship-to-the-target-architecture) and the documents linked there. Nothing described there is built.
+> This README describes what the service does on `main` today; the target design lives in the [architecture guide](https://github.com/Gua-ra/gua-resolver/blob/main/docs/architecture/gua-identity-and-federation.md).
 
-The Gua Identity Service is a Spring Boot microservice. Today it handles identity and authentication for every Gua homeserver. It owns:
-
-- phone sign-up and sign-in, including OTP delivery;
-- the account PIN, which is Gua's two-step verification;
-- privileged account operations: deactivation, identity reset and phone-number change;
-- contact discovery by peppered phone hash.
-
-It also runs a self-contained OpenID Connect provider. That provider issues the access tokens that authenticate calls back into this service. It also bridges login into Matrix Authentication Service (MAS) and Synapse.
+The Gua Identity Service is a Spring Boot microservice that handles identity and authentication for every Gua homeserver.
 
 ---
 
 ## ✨ What it does today
 
-- 📱 **Phone sign-up & sign-in**: request OTP → verify OTP → then the factor the account holds: the PIN, or the passkey when it holds only a passkey. A new account must set a PIN or a passkey before it finishes. The SMS code never completes a sign-in on its own.
+- 📱 **Phone sign-up & sign-in**: OTP, then the factor the account holds (PIN or passkey). The SMS code never completes a sign-in on its own.
 - 🔐 **OTP management**: Redis-backed codes with TTL, per-phone and per-IP hourly caps, localized SMS templates (en / pt-BR), optional Twilio delivery.
-- 🔢 **Account PIN (two-step verification)**: set, OTP-protected change with a 24h cooldown, 5-attempt lockout with a 15-minute lock, and audit logging. A NIST-aligned strength policy rejects PINs that are not six digits, all-repeated, sequential, or common.
-- 🛡️ **Privileged account operations**: deactivation, identity-credential reset and phone-number change, each gated by a fresh phone-OTP reauthentication scoped to that operation (modeled on Matrix UIA `m.login.msisdn`). A phone change also requires a stronger factor (a user-verifying passkey assertion, else the account PIN), verifies the **new** number by OTP and enforces a per-account cooldown.
-- 🔑 **OpenID Connect provider**: RS256 authorization-code + PKCE flow with an interactive browser login (phone → OTP → PIN or profile) that MAS redirects into. Includes discovery and JWKS endpoints, plus seeded clients for MAS (confidential) and the Gua apps (public, PKCE-required).
-- 🪪 **Passkeys (WebAuthn)**: after phone verification, the user can register a passkey, either during onboarding or later from settings via `/security/passkey/enroll/start`. They can then sign in with it instead of an SMS code, and an account holding only a passkey must present it after the OTP. Built on Yubico `webauthn-server-core`; credentials live in `passkey_credentials`.
-- 🧩 **Adding a factor needs a step-up**: a bearer session on its own never adds a passkey or a PIN. Enrollment from settings runs in a web session that first confirms the account with the strongest thing it can produce (see [Adding a factor from settings](#adding-a-factor-from-settings)).
-- 🧭 **Delayed account recovery**: a user who proved the number but cannot present any factor the account holds can start a recovery that waits out a dormancy period and a waiting period, is cancelled by any signed-in app or any sign-in with a factor, and on completion sets a new PIN, removes the account's passkeys and signs out every other session.
-- 📇 **Directory lookup**: contact discovery by server-side peppered HMAC of the phone number. The directory stores the digest plus a display-only masked form (e.g. `••••4567`), never the raw number. The shared pepper is the current mechanism and is scheduled for replacement.
-- 📊 **Prometheus metrics**: Micrometer at `/actuator/prometheus` (HTTP/JVM/DB-pool) plus domain counters (`gua_identity_signup_total`, `gua_identity_login_total`, `gua_identity_otp_verify_total`, `gua_identity_sms_send_total{provider,result}`).
-- 🚦 **Built-in rate limiting**: per-endpoint Resilience4j limiters, so the service is safe to run without an upstream WAF.
+- 🔢 **Account PIN (two-step verification)**: set, OTP-protected change, lockout, strength policy and audit logging.
+- 🛡️ **Privileged account operations**: deactivation, identity-credential reset and phone-number change, each gated by a fresh phone-OTP reauthentication scoped to that operation.
+- 🔑 **OpenID Connect provider**: RS256 authorization-code + PKCE flow with an interactive browser login that MAS redirects into.
+- 🪪 **Passkeys (WebAuthn)**: registration during onboarding or from settings, and sign-in without an SMS code. Built on Yubico `webauthn-server-core`.
+- 🧩 **Factor enrollment from settings**, behind a step-up.
+- 🧭 **Delayed account recovery** for a user who proved the number but cannot present a factor.
+- 📇 **Directory lookup**: contact discovery by server-side peppered HMAC of the phone number; the raw number is never stored.
+- 📊 **Prometheus metrics** at `/actuator/prometheus`.
+- 🚦 **Rate limiting**: per-endpoint Resilience4j limiters.
 - 🗄️ **Persistent identities**: PostgreSQL with Flyway migrations.
 - 📚 **OpenAPI/Swagger UI** at `/swagger-ui.html`.
 
@@ -48,59 +41,45 @@ flowchart LR
     IDS --- Redis[("Redis")]
 ```
 
-Today the identity service plays two roles at once. It is the OIDC provider that MAS delegates phone-OTP login to. It also issues and validates the bearer tokens that its own client-facing REST API requires. Together, those two roles make it the single OIDC provider and the sole credential store for every homeserver. That is the current implementation, not the target; see [Relationship to the target architecture](#-relationship-to-the-target-architecture).
-
-Bearer tokens are primarily verified locally against the published JWKS: RS256 signature, issuer, audience and expiry. A token that is not one of this service's own JWTs is checked against Synapse's `/whoami` endpoint instead. That fallback lets a native client reuse its Matrix SDK session token for a subset of endpoints.
-
-Login works like this. MAS redirects the browser to `GET /oauth2/authorize`. The identity service parks the request in a short-lived, Redis-backed login session and hands off to the `gua-idp-web` single-page UI. That UI walks the user through phone, then OTP, then the factor the account holds (returning user) or profile and a first factor (new user), using the `/login/*` API. Only then is an authorization code issued back to MAS.
+The service plays two roles: it is the OIDC provider that MAS delegates phone-OTP login to, and it issues and validates the bearer tokens its own REST API requires. Login runs through the [interactive login flow](#interactive-login-flow).
 
 ---
 
 ## 🔭 Relationship to the target architecture
 
-> **TARGET ARCHITECTURE.** Nothing in this section is built. It records where this service sits relative to the frozen design, so that every other section can be read as current state.
-
-Start with the plain-language guide, [Gua identity and federation](https://github.com/Gua-ra/gua-resolver/blob/main/docs/architecture/gua-identity-and-federation.md). The normative record is [ADM-001](https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md). This README does not repeat its reasoning.
-
-- **Login authority moves to the homeserver.** Today this service is the single OIDC provider and credential store for every homeserver; in the target each homeserver's own auth service decides login, and this service's remaining role is decided in a follow-up record (phase 7 of the [gua-resolver migration plan](https://github.com/Gua-ra/gua-resolver/blob/main/docs/migrations/gua-resolver-migration-plan.md)). The [architecture guide](https://github.com/Gua-ra/gua-resolver/blob/main/docs/architecture/gua-identity-and-federation.md) is the canonical statement.
-- **Placement and identifier binding become federation concerns.** Placement is which homeserver holds an account. Identifier binding is how an identifier, such as a phone number, is tied to that account. In the target, both are verifiable against signed policy, roster state and verifier attestations. This service's local router and directory table are not that model.
-- **The legacy non-interactive branch of `GET /oauth2/authorize` is removed.** An authorization code is issued only by the interactive login flow (ADM-001 L1a); `phone_number`, `otp_code` and `display_name` are no longer accepted.
-- **The resolver directory write client is removed.** Sign-up, sign-in and phone change no longer publish anything to the resolver; see [Federation directory](#-federation-directory-gua-resolver).
-- **The shared directory pepper is the current mechanism.** It is scheduled for replacement.
-- **Existing accounts are the migration input.** Each one is recorded in `directory_entries.homeserver_id`, and its OIDC `sub` is the full Matrix user id. Their migration is tracked in the migration plan.
+Nothing in the target design is built here. See the plain-language guide, [Gua identity and federation](https://github.com/Gua-ra/gua-resolver/blob/main/docs/architecture/gua-identity-and-federation.md), and the normative [decision record](https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md).
 
 ---
 
 ## 🧰 Running it locally
 
-One command starts Redis, Postgres, a disposable Synapse homeserver and a MAS container, then exports the environment variables the service needs:
+`scripts/start-dev-test-stack.sh` starts the dependencies and exports the environment variables the service needs:
 
 ```bash
-# run and export environment variables into the current shell
 source scripts/start-dev-test-stack.sh
 ```
 
-Running the script normally (`bash scripts/start-dev-test-stack.sh`) still launches the containers. It also writes the computed environment variables to `.env.identity-service`. Load them with `source .env.identity-service`, or copy them into IntelliJ.
+Running it with `bash` instead writes the variables to `.env.identity-service`. Load them with `source .env.identity-service`, or copy them into IntelliJ.
 
 The script:
 
-1. Starts all dependencies from `docker-compose.test.yml`: PostgreSQL, Redis, a disposable Synapse homeserver, and a MAS container running the `Gua-ra/gua-auth-service` fork image.
+1. Starts PostgreSQL, Redis, a disposable Synapse homeserver and a MAS container (the `Gua-ra/gua-auth-service` fork image) from `docker-compose.test.yml`.
 2. Waits for Synapse to become healthy.
 3. Creates (or reuses) an admin Matrix user and captures its access token.
-4. Generates a directory pepper at `docker/.identity-pepper` so hashing stays consistent.
+4. Generates a directory pepper at `docker/.identity-pepper`.
 5. Exports every environment variable the identity service needs.
 
-Once the script has been sourced, run the application with `./gradlew bootRun` or from IntelliJ. No further environment setup is needed. To tear everything down:
+Then run `./gradlew bootRun` or start the application from IntelliJ. To tear everything down:
 
 ```bash
 docker compose -f docker-compose.test.yml down
 ```
 
-> ⚠️ **Always source the environment before `bootRun`.** Variables such as `IDENTITY_MATRIX_ADMIN_API_BASE_URL` are interpolated into `WebClient` base URLs. If they are unset, the literal `${...}` placeholder reaches `WebClient`, and every Matrix-admin call fails with `IllegalArgumentException: Not enough variable values available`. Source `.env.identity-service` (or the start script) in the same shell that runs Gradle.
+> ⚠️ Source the environment in the same shell that runs Gradle. Unset, a variable such as `IDENTITY_MATRIX_ADMIN_API_BASE_URL` reaches `WebClient` as a literal `${...}` placeholder, and every Matrix-admin call fails with `IllegalArgumentException: Not enough variable values available`.
 
 ### Local secret files (gitignored, not in the repo)
 
-These files hold development secrets and are intentionally gitignored. The dev stack creates or expects them locally. Never commit them:
+Development secrets the dev stack creates or expects locally. Never commit them:
 
 | File | Purpose |
 | --- | --- |
@@ -108,8 +87,6 @@ These files hold development secrets and are intentionally gitignored. The dev s
 | `docker/.identity-pepper` | Server-side pepper used to hash phone numbers for directory lookup. |
 | `docker/.oidc-jwt-secret` | Local OIDC signing material for the dev stack. |
 | `docker/mas/mas.conf.yaml` | MAS configuration including its signing/encryption secrets and upstream-OIDC client credentials. |
-
-If `OIDC_RSA_PRIVATE_KEY` / `OIDC_RSA_PUBLIC_KEY` are not set, the service generates an ephemeral RSA signing key at startup and logs a warning. That is fine for local development, but tokens will not survive a restart.
 
 ---
 
@@ -128,7 +105,7 @@ Integration and contract tests use **Testcontainers** (PostgreSQL) and **WireMoc
 - **Java 21** (LTS)
 - **Spring Boot 3.5.x**, **Gradle (Groovy DSL)**
 - **Spring Web** (MVC REST controllers) + **Spring WebFlux** (`WebClient` for the Matrix admin API)
-- **Spring Security**: stateless bearer-token auth validated locally against this service's own JWKS
+- **Spring Security**: stateless bearer-token auth
 - **Spring Data JPA / Hibernate** (PostgreSQL dialect) + **Flyway** for migrations
 - **Spring Data Redis**: OTP codes, PIN-change and phone-change challenges, reauth tokens, signup tokens, authorization codes
 - **Nimbus JOSE + JWT**: RS256 token signing & verification
@@ -137,42 +114,25 @@ Integration and contract tests use **Testcontainers** (PostgreSQL) and **WireMoc
 - **springdoc-openapi**: Swagger UI / OpenAPI docs
 - **Bean Validation**: request validation
 
-Testing: **Spring Boot Test**, **Testcontainers** (PostgreSQL), **WireMock** (Matrix admin contract tests). Running `./gradlew test` therefore requires a working Docker daemon.
-
 Infra: **PostgreSQL** (identities), **Redis** (ephemeral tokens), **Synapse** + **MAS** (downstream Matrix), all wired via **Docker Compose**.
 
 ---
 
 ## 🧭 Routing & global usernames
 
-> **CURRENT IMPLEMENTATION.** This section describes the per-deployment routing the service performs today. It is not the placement or identifier-binding model of the target architecture.
+Gua runs a closed set of homeservers, in the style of [Tchap](https://github.com/tchapgouv), and does not join the open Matrix network. This service picks which of its configured homeservers a new account is created on and records that choice in its own directory. Routing before login is the resolver's `POST /resolve`, which the iOS and Android clients call directly.
 
-Gua runs a closed set of homeservers, in the style of [Tchap](https://github.com/tchapgouv), the French government's closed Matrix federation. It does not join the open Matrix network. Today this service picks which of its configured homeservers a new account is created on, and records that choice in its own directory. Routing before login is a separate step: the iOS and Android clients call the resolver's `POST /resolve`, and this service takes no part in that call.
-
-- **Homeserver registry** (`identity.routing.homeservers`): the homeservers this deployment can create accounts on, each with `id`, `domain`, admin URL, region, weight and enabled. Unset, a single homeserver is synthesised from the legacy `identity.matrix.*` properties. The registry is local configuration, not the federation roster.
-- **Routing layer** (`HomeserverRouter`): picks a homeserver for each new account by rule (`single`, `region` or `weighted`) and records it in `directory_entries.homeserver_id`. The choice is local and nothing outside this service can re-derive it. Moving an account between homeservers is not supported: Matrix has no identity-preserving migration, and placement migration is tracked in the gua-resolver migration plan.
-- **Global usernames** are unique within this deployment's directory, case-insensitively (`directory_entries.username` plus a unique index). `GET /directory/resolve?username=` returns the MXID and homeserver for a username. This is a per-deployment guarantee, not a federation one.
-- The UI treats the full Matrix ID `@id:server` as an implementation detail. Users see only their username. The directory maps it to the MXID and homeserver recorded at signup.
-
-> Roadmap: an opaque-MXID model, which decouples the human handle from the MXID, is staged as a follow-up. It changes the chain from MAS `preferred_username` to Synapse provisioning. Today the chosen handle is both the MXID localpart and the recorded global username, and the OIDC `sub` is the full Matrix user id. Do not read this as account portability between homeservers.
+- **Homeserver registry** (`identity.routing.homeservers`): the homeservers this deployment can create accounts on, each with `id`, `domain`, admin URL, region, weight and enabled. Unset, a single homeserver is synthesised from the legacy `identity.matrix.*` properties.
+- **Routing layer** (`HomeserverRouter`): picks a homeserver for each new account by rule (`single`, `region` or `weighted`) and records it in `directory_entries.homeserver_id`. Moving an account between homeservers is not supported.
+- **Global usernames** are unique within this deployment's directory, case-insensitively. Users see only their username; `GET /directory/resolve?username=` returns its MXID and homeserver.
 
 ---
 
 ## 🔀 MAS fork: `Gua-ra/gua-auth-service`
 
-The identity stack uses [`Gua-ra/gua-auth-service`](https://github.com/Gua-ra/gua-auth-service), a fork of [`element-hq/matrix-authentication-service`](https://github.com/element-hq/matrix-authentication-service) (MAS). In the current topology, MAS treats this service as its upstream OIDC issuer. That direction is the current implementation only. In the target architecture, the homeserver's own auth service decides login; see [Relationship to the target architecture](#-relationship-to-the-target-architecture).
+The identity stack uses [`Gua-ra/gua-auth-service`](https://github.com/Gua-ra/gua-auth-service), a fork of [`element-hq/matrix-authentication-service`](https://github.com/element-hq/matrix-authentication-service) (MAS). MAS treats this service as its upstream OIDC issuer.
 
-### Why a fork?
-
-The upstream consent screen ("Continue to {client}?") exposes the homeserver name to users and adds an extra step for first-party clients. Gua-specific handlers live under `crates/handlers/src/gua/` in the fork, which keeps upstream updates cheap to merge. The fork's `main` currently carries no consent-skip configuration, so every login goes through MAS's consent page. Check the fork repository before relying on any `[gua]` config section.
-
-### Docker image
-
-Tag convention: `v<upstream-mas-version>-gua.<patch>` (mirrors [Tchap's approach](https://github.com/tchapgouv/matrix-authentication-service)). The tag the local dev stack runs is pinned in `docker-compose.test.yml`; the fork repository is the source of truth for what each tag contains.
-
-### Upgrading the fork
-
-Follow the fork repository's own documentation for the upgrade runbook.
+The tag the dev stack runs is pinned in `docker-compose.test.yml`; the fork repository documents the rest.
 
 ---
 
@@ -185,39 +145,39 @@ Interactive docs: **`/swagger-ui.html`** (OpenAPI JSON at `/api-docs`). Endpoint
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
 | `POST /otp/send` | Public | Generate and dispatch an OTP to a phone number (rate-limited, localized SMS). |
-| `POST /otp/verify` | Public | Verify an OTP. Returns a `signupToken` (new user) or a `pinChallengeToken` (returning user holding a PIN; the PIN may also be sent inline). An account holding only a passkey is `403 passkey_required` and one holding no factor is `403 factor_setup_required`: this path cannot run a passkey ceremony or set a first factor, so those accounts sign in through the interactive flow. |
+| `POST /otp/verify` | Public | Verify an OTP. Returns a `signupToken` (new user) or a `pinChallengeToken` (returning user holding a PIN; the PIN may also be sent inline). An account holding only a passkey is `403 passkey_required` and one holding no factor is `403 factor_setup_required`; those accounts sign in through the interactive flow. |
 | `POST /account/genesis` | Public³ | Register an on-device `AccountGenesis`, receive its `accountId` and a single-use attach handle. Off unless `identity.genesis.enabled`. See [Account genesis](#account-genesis-accountid). |
 | `GET /signup/check-username` | Public | Real-time username availability check (format/reserved rules + Matrix lookup). Does not mutate state. |
 | `POST /signup/complete` | Public¹ | Exchange a `signupToken` and a PIN for a provisioned Matrix user with chosen username/display name. A missing or blank PIN is `400 pin_required`, and a malformed or weak one `invalid_pin`/`weak_pin`, both checked before the token is consumed. |
 | `POST /signin/verify-pin` | Public¹ | Exchange a `pinChallengeToken` + PIN for a Matrix session (second leg of 2SV sign-in). |
-| `POST /login/passkey/auth/options` | Session² | Start **passkey sign-in** for a returning user: WebAuthn assertion options, offered at the phone and OTP steps and at the PIN step. |
+| `POST /login/passkey/auth/options` | Session² | Start **passkey sign-in** for a returning user: WebAuthn assertion options. |
 | `POST /login/passkey/auth/verify` | Session² | Verify the passkey assertion and complete sign-in without an SMS code. Only ever resolves to an existing account, never creates one. |
 
 ¹ No bearer token, but gated by the single-use token issued from `/otp/verify`.
 
 ² Part of the interactive OIDC login session: requires the login-session cookie plus the CSRF token from `GET /login/context` (see [Interactive login flow](#interactive-login-flow)).
 
-³ No bearer token, and none is possible: registration happens before any OIDC flow exists to authenticate against. The request is self-authenticating instead, carrying a possession proof under the key committed inside the genesis itself.
+³ No bearer token: the request carries a possession proof under the key committed inside the genesis.
 
 ### Account genesis (`accountId`)
 
-Every account gets a permanent `accountId`, derived from an immutable object that commits the account's initial authority key. This is phase 3 (account genesis and accountId) of the [gua-resolver migration plan](https://github.com/Gua-ra/gua-resolver/blob/main/docs/migrations/gua-resolver-migration-plan.md), as decided in [ADM-008](https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-008-account-genesis-and-placement-records.md).
+Every account gets a permanent `accountId`, derived from an immutable genesis object that commits the account's initial authority key.
 
-**Nothing reads the accountId.** Not routing, not login, not a token claim, not a userinfo field, not a directory column. It is derived, stored and audited, and that is all. The reason is specific: MAS derives the Matrix localpart from an arbitrary template over the imported claims, and an accountId is lowercase letters and digits, so it would pass MAS's localpart rules. A claim carrying one would be a single config line away from re-keying accounts. `AccountIdNotReadGuardTest` fails the build if an accountId reaches any file on the routing, login or claim path.
+Nothing reads the accountId: it is never a routing input, a claim or a directory column, and `AccountIdNotReadGuardTest` enforces that.
 
-**The objects.** `AccountGenesis` (suite `0x01`, 87 bytes) commits an Ed25519 authority key, the algorithm identifiers, and an initial recovery authority key and framework. It holds no identifier and no homeserver. `BootstrapGenesis` (suite `0x00`, 22 bytes) commits nothing but random entropy, and marks an account that predates account authority. Both are fixed-layout byte strings, and
+**The objects.** `AccountGenesis` (suite `0x01`, 87 bytes) commits an Ed25519 authority key, the algorithm identifiers, and an initial recovery authority key and framework. It holds no identifier and no homeserver. `BootstrapGenesis` (suite `0x00`, 22 bytes) commits nothing but random entropy, and marks an account that predates account authority. Both are fixed-layout byte strings:
 
 ```
 accountId = "ga1" || base32(0x01 || rootClass || SHA-256(canonical bytes))
 ```
 
-where `rootClass` is `0x01` for a genesis-rooted account and `0x00` for a bootstrap one, so an auditor can tell them apart from the id alone. The digest covers the bytes **as received**, never a re-encoding. An accountId has exactly one spelling: 34 bytes are 272 bits while 55 base32 characters carry 275, so the final character always holds three unused bits and is one of `a`, `i`, `q`, `y`. Decoders match `^ga1[a-z2-7]{54}[aiqy]$`, then decode, re-encode and compare.
+`rootClass` is `0x01` for a genesis-rooted account and `0x00` for a bootstrap one; the digest covers the bytes as received, and decoders match `^ga1[a-z2-7]{54}[aiqy]$`.
 
-Golden vectors live in [`docs/specs/genesis-vectors.v1.json`](docs/specs/genesis-vectors.v1.json): canonical bytes, hashes, accountIds, reproducible signatures under the RFC 8032 published test keys, and every case a conforming decoder must refuse together with the rule that refuses it. The iOS, Android and resolver ports verify against that file, and `GenesisVectorsTest` recomputes every byte of it.
+Golden vectors live in [`docs/specs/genesis-vectors.v1.json`](docs/specs/genesis-vectors.v1.json). The iOS, Android and resolver ports verify against that file, and `GenesisVectorsTest` recomputes it.
 
 **Registration and attach.** The client registers its genesis at `POST /account/genesis` and gets back a single-use attach handle, stored only as a hash and valid for `identity.genesis.pending-ttl`. It then sends `login_hint = "gua:phone=<E.164>;genesis=<handle>"`, which MAS forwards verbatim.
 
-A handle on its own attaches nothing. Anyone can compose an authorize URL, so the hint is attacker-controlled in both directions, and the dangerous shape is an attacker's own genesis in a URL that prefills the victim's number. The attach therefore needs a second proof: when a session carrying a handle reaches the profile step, the server issues 32 CSPRNG bytes held against that login session, and the client signs the fixed-length preimage (27 domain bytes, then the challenge, then the 34 raw accountId bytes) with the committed authority key. identity-service verifies it against the key inside the stored genesis and derives the accountId itself, reading none from the request. Verification happens inside the account-creation transaction, so a handle that fails to attach fails the whole signup rather than silently falling back to a bootstrap id. A signup presenting no handle at all takes the bootstrap branch, which is not a failure.
+A handle alone attaches nothing: the client must also sign a server-issued challenge with the committed authority key, and a failed attach fails the signup.
 
 **Flags** (all off by default, so a deployment that sets none behaves exactly as it did before this feature existed):
 
@@ -229,13 +189,13 @@ A handle on its own attaches nothing. Anyone can compose an authorize URL, so th
 | `identity.genesis.require-for-native` | `IDENTITY_GENESIS_REQUIRE_FOR_NATIVE` | `false` | Refuses a native signup that presents no handle instead of giving it a bootstrap id. Flip only once the clients ship genesis. |
 | `identity.genesis.bootstrap-backfill.enabled` | `IDENTITY_GENESIS_BOOTSTRAP_BACKFILL_ENABLED` | `false` | Mints a bootstrap accountId at startup for every existing account that has none. Idempotent and resumable, so it is safe to leave on. |
 
-**Metrics.** `gua_identity_account_genesis{origin}` splits accounts into `GENESIS` and `BOOTSTRAP`; `gua_identity_accounts_without_genesis` must reach zero and stay there. Both are gauges, so neither name carries the `_total` suffix the Prometheus registry appends to counters, and both counts fall as the backfill runs. Both are read from the database at most once a minute and cached in between, and neither is registered while every flag is off, so a deployment that has not turned the feature on never runs the account scan behind them. An account recovered through the homeserver phone-binding fallback is given its id on the spot, so the second gauge can reach zero without waiting for a restart.
+**Metrics.** `gua_identity_account_genesis{origin}` and `gua_identity_accounts_without_genesis` are gauges registered only while the feature is on; the second must reach zero.
 
-**Rollback.** Turn the flags off: the endpoint returns `503`, attach is skipped and nothing writes a genesis row. The table stays, because an accountId is permanent and nothing reads it. Drop `account_genesis` (and its `flyway_schema_history` row) only on abandoning the feature.
+**Rollback.** Turn the flags off. The `account_genesis` table stays.
 
 ### Which factor applies where
 
-A passkey is the preferred strong factor and the account PIN is the fallback for everyone who cannot use one. `AuthFactorPolicy` is where the answers live, so the interactive login flow, the legacy REST sign-in, the status endpoint and the phone-change step-up cannot each decide them differently. Two of them it decides, and two it states, which is not the same thing:
+`AuthFactorPolicy` decides which factor applies.
 
 | Question | Answer | Where it is used | Decided there? |
 | --- | --- | --- | --- |
@@ -245,38 +205,32 @@ A passkey is the preferred strong factor and the account PIN is the fallback for
 | Step-up for adding a factor | A held passkey: the assertion, and the PIN is not also asked for. A held PIN and no passkey: the PIN. Neither: the account's own number and an OTP sent to it | the `ENROLL_STEP_UP` step of an enrollment session ([Adding a factor from settings](#adding-a-factor-from-settings)) | Read off `loginPolicy`, enforced there |
 | Recovery | Restores the `PIN` after the phone OTP and a waiting period, and removes stored passkeys | written down in the policy; run by `AccountRecoveryService` | Stated, not called |
 
-The step-up rule stays in the enforcing branches because a configuration value able to switch the PIN branch or the final refusal off would turn one edit into a lockout or a bypass; tests hold the published list and the enforced one together. The definitions of *held*, *registered* and *usable on this device*, and why a held passkey can be required without stranding the account, are in the class javadoc of `AuthFactorPolicy`; the way back for an account that cannot produce its factor is the [delayed account recovery](#delayed-account-recovery).
-
-**Where the inventory is published.** `passkeyRegistered` and `preferredFactor` appear in `GET /security/pin/status` (bearer-gated, answering only for the token's subject) and in the interactive login state, but only from a step the flow cannot reach without an OTP or an assertion having resolved the subject (`PIN_REQUIRED`, `PASSKEY_REQUIRED`, `PIN_SETUP`, `PASSKEY_SETUP`, `ENROLL_STEP_UP`). `pinRegistered` appears on the login state at `ENROLL_STEP_UP` only: that session was minted from the caller's own bearer token, and the step-up must know whether to offer the PIN beside the passkey, which `preferredFactor` alone cannot say (it answers `PASSKEY` for a passkey-only and a passkey-and-PIN account alike). The phone and OTP steps publish nothing: a session there holds a number somebody typed and nothing they proved, so answering *does this account hold a passkey* would be an enumeration oracle. The reporting phases are an allow list, and a guard test fails if `PHONE` or `OTP_SENT` ever joins it.
+Factor fields are published only from steps reached after an OTP or an assertion; `pinRegistered` only at `ENROLL_STEP_UP`.
 
 ### Account PIN (two-step verification)
 
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
-| `GET /security/pin/status` | Bearer | Whether the user has a PIN set (drives the "set up two-step verification" nudge), plus `changePhoneCooldownRemainingSeconds` (how long the fresh-2FA hold below still has to run), the account's factor report: `passkeyRegistered`, `preferredFactor` and `phoneChangeStepUpFactors` (see [Which factor applies where](#which-factor-applies-where)), and the recovery banner fields `accountRecoveryPending`, `accountRecoveryCompletableAtEpochSeconds` and `accountRecoveryExpiresAtEpochSeconds` (null when no recovery is live), plus `accountRecoveryDormancySeconds` and `accountRecoveryWaitSeconds`, the two configured waits, which are reported whether or not one is live (see [Delayed account recovery](#delayed-account-recovery)). |
-| `POST /security/pin` | Bearer | **Retired.** Always `403 step_up_required`, naming the flow below. A bearer session on its own must not add a durable factor. |
+| `GET /security/pin/status` | Bearer | Whether the user has a PIN set, plus `changePhoneCooldownRemainingSeconds`, the factor report (`passkeyRegistered`, `preferredFactor`, `phoneChangeStepUpFactors`; see [Which factor applies where](#which-factor-applies-where)) and the recovery fields `accountRecoveryPending`, `accountRecoveryCompletableAtEpochSeconds` and `accountRecoveryExpiresAtEpochSeconds` (null when no recovery is live), `accountRecoveryDormancySeconds` and `accountRecoveryWaitSeconds` (see [Delayed account recovery](#delayed-account-recovery)). |
+| `POST /security/pin` | Bearer | **Retired.** Always `403 step_up_required`, naming the flow below. |
 | `POST /security/pin/enroll/start` | Bearer | Add a PIN from settings: creates an enrollment session pinned to the authenticated user and returns a one-time `enrollUrl`. `409 pin_already_set` when the account has one. See [Adding a factor from settings](#adding-a-factor-from-settings). |
 | `POST /security/pin/change/start` | Bearer | Enforce the 24h change cooldown, authorize with a passkey step-up assertion (`passkeyStepUpId` + `passkeyCredential`, preferred) or the current PIN, and send an OTP. A freshly registered passkey is held (`400 twofa_cooldown_active`) and the PIN path stays available. Returns a challenge id (`425` if cooldown active). |
 | `POST /security/pin/change/complete` | Bearer | Redeem the challenge + OTP to apply the new PIN. |
-| `POST /security/pin/reset` · `…/reset/complete` | Public | **Retired.** Always `410 endpoint_retired`. A lost PIN is recovered inside sign-in now, see [Delayed account recovery](#delayed-account-recovery). |
+| `POST /security/pin/reset` · `…/reset/complete` | Public | **Retired.** Always `410 endpoint_retired`. See [Delayed account recovery](#delayed-account-recovery). |
 
-PIN policy is configurable under `identity.security`: `pin-change-cooldown` (default **24h**), `pin-reset-cooldown` (default **7 days**; the fresh-2FA hold below, and the fallback for both recovery durations), `max-pin-attempts` (default **5**), `pin-lock-duration` (default **15m**), `pin-change-challenge-ttl` (default **5m**).
+PIN policy is configurable under `identity.security`: `pin-change-cooldown` (default **24h**), `pin-reset-cooldown` (default **7 days**), `max-pin-attempts` (default **5**), `pin-lock-duration` (default **15m**), `pin-change-challenge-ttl` (default **5m**).
 
-**The PIN-change code is namespaced to its flow.** `POST /otp/send` is public and unauthenticated, and it writes the per-phone key `otp:code:<E.164>`. A flow that verified against that key would accept a code anyone could ask for, for any reason, and could have a code planted under it before the flow began. The PIN-change code therefore lives under `otp:code:pin-change:<challengeId>`, which the public send cannot reach, so it can only be satisfied by the code that flow itself sent. It keeps the same per-code guess budget, the same per-phone and per-IP send limits and the same TTL as the public path.
+- The PIN-change code lives under `otp:code:pin-change:<challengeId>`, which the public `POST /otp/send` cannot write.
+- A PIN set inside `pin-reset-cooldown` is refused as the phone-change step-up with `400 twofa_cooldown_active` and `retryAfterSeconds`. A passkey registered inside the same window is refused the same way.
+- `changePhoneCooldownRemainingSeconds` reports the PIN hold only.
 
-**A freshly minted second factor cannot move the phone number yet.** A login session can create or recover a PIN, and the phone-change step-up accepts that PIN, so an attacker who reaches a session only has to set a PIN of their own. `POST /account/phone/change/start` therefore refuses a PIN whose `pin_set_at` is inside the fresh-2FA hold (`identity.security.pin-reset-cooldown`, default **7 days**, applied the same way to a PIN obtained through account recovery) with `400 twofa_cooldown_active` and the remaining seconds in `retryAfterSeconds` (mirrored in `Retry-After`); `GET /security/pin/status` reports the same number up front. Nothing is refused permanently and no factor is taken away. The per-account change cooldown (`phone-change-cooldown`, `425`) is a separate, additional refusal.
+**PIN strength** (`PinPolicy`): exactly six digits, not all-repeated (`000000`), not strictly sequential (`123456` / `654321`) and not on a list of common PINs. A failure is `weak_pin`; a wrong PIN at login is `invalid_pin`.
 
-**The same hold applies to a freshly registered passkey, on the same window.** A passkey alone satisfies the phone-change step-up (the PIN is not requested), and `POST /security/passkey/enroll/start` asks a session holder for nothing but the bearer token, so holding only the PIN would price the same takeover at nothing. A step-up assertion whose credential was registered inside the window is refused with the same `400 twofa_cooldown_active` and `retryAfterSeconds`, measured on `passkey_credentials.created_at` and only after the credential is known to belong to the caller. An established credential settles the step-up at once, and the PIN branch stays reachable by retrying with the PIN.
-
-One asymmetry is visible on the wire: `changePhoneCooldownRemainingSeconds` on `GET /security/pin/status` reports the PIN hold only and says nothing about the separate 24h `phone-change-cooldown`. Read it when about to offer the PIN, not as "can I change my number now".
-
-**PIN strength** is enforced by `PinPolicy` across every set/update/change/recovery path: a PIN must be exactly six digits and must not be all-repeated (`000000`), strictly sequential (`123456` / `654321`), or one of a curated list of common PINs. Strength failures surface a distinct `weak_pin` error code (vs `invalid_pin` for a wrong PIN at login). The same rules are mirrored client-side (gua-idp-web, gua-ios) for instant feedback, but the server remains authoritative.
-
-**Username policy** (`UsernamePolicy`, shared by `/signup/check-username`, `/signup/complete`, and the interactive `/login/profile` step): 3 to 30 chars of lowercase letters, digits, dot, underscore or dash; not reserved; and, matching MAS's registration policy, not all-numeric (so a bare phone number can't become a handle).
+**Username policy** (`UsernamePolicy`): 3 to 30 chars of lowercase letters, digits, dot, underscore or dash; not reserved; and not all-numeric, matching MAS's registration policy.
 
 ### Delayed account recovery
 
-The way back for someone who proved the phone number by OTP but cannot present the PIN or passkey the account holds (lost phone, forgotten PIN, credential manager wiped). An SMS code proves possession of a number, which a SIM swap also gives; what separates the account holder from whoever holds the SIM is that the holder still has a signed-in device or a factor. So recovery is slow on purpose, and gives the holder time to use either.
+The way back for someone who proved the phone number by OTP but cannot present the PIN or passkey the account holds.
 
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
@@ -284,28 +238,17 @@ The way back for someone who proved the phone number by OTP but cannot present t
 | `POST /login/recovery/complete` | Session² | `{ "newPin" }`. Completes a `READY` episode and the login. Re-checked under the account row lock: `409 recovery_not_ready` with the fresh `recovery` object when it is still waiting, was cancelled or expired. A malformed or weak PIN is `400 invalid_pin`/`weak_pin` and counts nothing. |
 | `POST /security/recovery/cancel` | Bearer | The account holder's cancel, from the banner every signed-in app shows while a recovery is live. `204` whether or not one was live. |
 
-**The rules.** Both durations fall back to `pin-reset-cooldown` (7 days) when unset.
+**The rules.** Both durations fall back to `pin-reset-cooldown` when unset.
 
 - **Request** only when the account has had no completed sign-in for `account-recovery-dormancy` (`IDENTITY_SECURITY_ACCOUNT_RECOVERY_DORMANCY`).
 - **Finish** only after `account-recovery-wait` (`IDENTITY_SECURITY_ACCOUNT_RECOVERY_WAIT`) has passed since the request.
-- The episode is stamped on `identity_users.pin_reset_requested_at` and is **live** while `now < stamp + wait + max(wait, dormancy)`. That one predicate drives every status, every writer and the status endpoint. A dead stamp is treated as absent, so an abandoned request can never satisfy the wait of the next one.
-- Status, decided in this order: `PENDING` (live, still waiting), `READY` (live, wait over), `TOO_SOON` (not live, signed in inside the dormancy period), `AVAILABLE`. The login state's `recovery` object carries `availableAtEpochSeconds` for `TOO_SOON`, rounded up to the **start of the next UTC day** so nothing about the time of the last sign-in is readable from it (to the next whole minute when `IDENTITY_SECURITY_ACCOUNT_RECOVERY_ALLOW_SHORT_FOR_TESTING=true`, so dev QA can see it move; clients render it as a date either way, and the exact remaining wait is in the `retryAfterSeconds` of `recovery_cooldown_active`); `completableAtEpochSeconds` and `expiresAtEpochSeconds` for `PENDING`/`READY`; and `dormancySeconds` and `waitSeconds`, the two configured waits, at every status. The object is an explicit `null` whenever recovery is not available to the session, which is how the UI knows to hide the link.
+- The episode is stamped on `identity_users.pin_reset_requested_at` and is **live** while `now < stamp + wait + max(wait, dormancy)`. A dead stamp is treated as absent.
+- Status is `PENDING`, `READY`, `TOO_SOON` or `AVAILABLE`; `availableAtEpochSeconds` is rounded up to the next UTC day, and `recovery` is `null` when recovery is unavailable to the session.
 - Startup refuses either duration below **24h** unless `IDENTITY_SECURITY_ACCOUNT_RECOVERY_ALLOW_SHORT_FOR_TESTING=true`, which only a dev deployment may set.
-- The same two waits are on `GET /security/pin/status` as `accountRecoveryDormancySeconds` and `accountRecoveryWaitSeconds`: that response has always carried flat, prefixed recovery fields, while the login state nests a `recovery` object. Same values, one shape per response.
 
-**What ends an episode.** A completed sign-in with the PIN or a passkey; a successful PIN check anywhere; the owner's cancel, which also counts as account activity so whoever started the recovery cannot start another one the next minute; and completion itself.
+**What ends an episode.** A completed sign-in with the PIN or a passkey; a successful PIN check anywhere; the owner's cancel, which also counts as account activity; and completion itself.
 
-**What completion does**, in one transaction under the row lock: sets the new PIN (stamping `pin_set_at`, so the fresh-2FA hold keeps it off a phone change), ends the episode, clears any PIN lock, and removes every stored passkey, because the premise is that they cannot be used and a lost or stolen device must not sign back in with passkey-first sign-in, which asks for no OTP. The user can enroll a new passkey afterwards. After commit it cuts off this service's own access tokens and completes the login, and the ID token of that login carries `gua_end_other_sessions: true`. Signing out the other sessions is done by the authentication service when it sees that claim: identity-service's token cutoff does not reach the MAS and Matrix tokens the apps hold, and identity-service has no MAS admin credential.
-
-**The sign-out survives a login that cannot be finished.** The recovery commits before its login is issued, so the recovery transaction also records the sign-out as owed (`recovery:end-other-sessions:<user>` in Redis, written just before the commit so a Redis failure rolls the recovery back, kept for `account-recovery-wait`). While it is owed, the claim is re-issued on every completed sign-in of the account, whatever factor it used; it is settled when the token endpoint issues an ID token carrying it. Only a completed recovery records it, and after one the only person who can complete a sign-in is whoever set the new PIN. Completion also stamps `last_login_at` in its own transaction, so the account never looks dormant enough for another recovery because the post-commit sign-in record did not run.
-
-**Known limit of the owed sign-out.** Settling records the hand-over, not the sign-out. The authentication service (MAS) exchanges the code for the ID token first and acts on the claim only when it finishes the upstream link page for that login. If it never finishes that page (the browser does not follow the redirect to it, or the page fails), the claim is spent without signing anything out, and no later sign-in re-issues it because the mark is already settled. Closing this would need MAS to confirm the sign-out back to identity-service.
-
-**Every writer takes the row lock.** Start, complete, cancel, the sign-in record, the PIN check, the PIN change and the phone-change stamp all read `identity_users` under `SELECT ... FOR UPDATE`, so a cancel and a completion can never both win and no writer can put back a PIN hash or recovery stamp another one just committed. A row that does not exist yet is inserted and flushed at once, so two sessions creating it meet on the unique `user_id`; in first-factor enrollment the loser gets `409 factor_required`. `AccountRecoveryConcurrencyTest` races them against real Postgres.
-
-**Rollout.** Migration `V12` clears every `pin_reset_requested_at` left by the retired PIN reset endpoints. Those stamps were opened before any code was checked and while no app could show the banner, so read under these rules some would already be `READY`. A user who still needs to recover starts again at sign-in and gets the full wait.
-
-**Known gap, recorded and not fixed here.** A phone-number change calls the same token cutoff, which likewise does not sign out the apps' MAS and Matrix sessions.
+**Completion** sets the new PIN, removes every stored passkey, revokes this service's tokens and completes the login with the ID token claim `gua_end_other_sessions: true`, which stays owed until an ID token carries it. Known limit: MAS does not confirm the sign-out back.
 
 ### Passkeys
 
@@ -317,50 +260,34 @@ Passkey **registration** is normally offered during onboarding (see [Interactive
 | `GET /login/enroll/{token}` · `GET /login/passkey/enroll/{token}` | Public (one-time token) | Redeems the `enrollUrl` in a web view: sets the first-party login cookie and redirects into the sign-in UI, which finds the session at `ENROLL_STEP_UP` (`410 enroll_link_expired` once used or expired). The `/passkey/` spelling is what older links carry and is the same handoff. |
 | `POST /security/passkey/stepup/options` | Bearer | Start a **user-verifying** assertion that may be spent as the step-up factor on a privileged operation. Returns a `stepUpId` and the WebAuthn `publicKey` options. |
 
-The pinned session can only reach the enrollment steps. It can never degrade into an open login or signup, and it stores nothing before the step-up below. Passkey **sign-in** happens inside the interactive login flow via `POST /login/passkey/auth/options` / `…/verify` (see the quick reference above).
+The pinned session can only reach the enrollment steps and stores nothing before the step-up. Passkey **sign-in** happens inside the interactive login flow via `POST /login/passkey/auth/options` / `…/verify`.
 
-**Sign-in and step-up are different bars.** A sign-in assertion proves possession of an unlocked device; the account PIN it would replace on a privileged operation proves knowledge, counts its failures and locks out. So the step-up ceremony asks for `userVerification: required` and refuses the assertion (`403 passkey_user_verification_required`) unless the authenticator data says the user was verified, read off the presented assertion rather than off the stored request. Step-up challenges live in their own Redis namespace (`passkey:stepup:<stepUpId>`) and are pinned to the authenticated account, so a sign-in challenge cannot be spent as a step-up and a step-up challenge cannot complete a login. Every assertion challenge is burned when it is presented, not when it is accepted, so a failed attempt is not a free retry for the rest of the 5 minute TTL. Sign-in and registration stay at `userVerification: preferred`: raising them would refuse authenticators that cannot verify a user, for no gain, since sign-in is not where an assertion replaces a knowledge factor. Signature-counter validation stays off because a passkey in a synced credential manager never increments it, and the counter is not what the step-up bar rests on.
+The step-up ceremony requires user verification (`403 passkey_user_verification_required` otherwise) and uses its own challenge namespace, so a sign-in challenge cannot be spent as a step-up.
 
 ### Adding a factor from settings
 
-A bearer session on its own never adds a durable factor. A session is the thing an attacker gets hold of, and a passkey or a PIN created from one is a second way into the account that outlives the session, so both enrollment entry points hand back a one-time URL for a web session that has proved nothing yet.
+A bearer session on its own never adds a durable factor: both enrollment entry points return a one-time URL for a web session that must pass a step-up first.
 
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
 | `POST /security/passkey/enroll/start` · `POST /security/pin/enroll/start` | Bearer | Create the enrollment session and return its `enrollUrl`. `409` when the account already holds that factor, or `409 step_up_unavailable` when no proof the account could give is one this deployment can run. |
 | `POST /login/enroll/stepup/passkey/options` · `…/passkey/verify` | Session cookie + CSRF | The preferred proof: a **user-verifying** assertion pinned to the session's account. |
 | `POST /login/enroll/stepup/pin` | Session cookie + CSRF | `{ "pin" }`. The proof for an account that holds a PIN and no passkey. Counted and locked out like the sign-in PIN step. `409 pin_not_set` when the account has none. |
-| `POST /login/enroll/stepup/otp/send` · `…/otp/verify` | Session cookie + CSRF | `{ "phoneNumber" }` then `{ "phoneNumber", "code" }`. Only for an account that holds **no** factor: `409 step_up_factor_available` otherwise. The number is checked against the account's own directory binding exactly as [reauthentication](#privileged-account-operations) does, so the refusal for someone else's number says nothing about whose it is. |
+| `POST /login/enroll/stepup/otp/send` · `…/otp/verify` | Session cookie + CSRF | `{ "phoneNumber" }` then `{ "phoneNumber", "code" }`. Only for an account that holds **no** factor: `409 step_up_factor_available` otherwise. The number is checked against the account's own directory binding, as in [reauthentication](#privileged-account-operations). |
 
-The session starts at a new phase `ENROLL_STEP_UP` and publishes the same factor fields as the sign-in factor steps (`passkeyRegistered`, `preferredFactor`, `passkeysEnabled`) plus `enrollment: true`, so the UI offers the right proof instead of guessing. It additionally publishes `pinRegistered`, which no other step does. `recovery` is always `null` there: recovery is the way back for someone who cannot get in, and this session belongs to someone who is already signed in.
+The session starts at `ENROLL_STEP_UP` with `enrollment: true`, and `recovery` is always `null` there.
 
-**Strongest first, and only one of them.** An account that produces a passkey is never also asked for its PIN, for the same reason the phone-change step-up does not ask: demanding the knowledge factor as well from someone who just proved the stronger one would make the stronger one worth less than the weaker one.
+**Strongest first, and only one of them.** An account that produces a passkey is not also asked for its PIN.
 
-**An account with no factor this deployment can verify is refused at the door.** An account holding a passkey and no PIN, on a deployment with passkeys switched off, can produce no proof, so both entry points answer `409 step_up_unavailable` at `enroll/start` instead of opening a session whose own published state points at a step the server will refuse. SMS to the account's own number is accepted only for an account holding no factor at all, because nothing stronger exists for it; it establishes a **login** factor and nothing else (no account-authority transition and no recovery is reachable from an enrollment session). An account that *does* hold a factor is refused the SMS path, because a code sent to the number standing in for a held factor is the SIM-swap downgrade the factor gate exists to refuse. Either account's way back is the [delayed account recovery](#delayed-account-recovery).
+**Nothing is stored before the step-up.** `PASSKEY_SETUP` and `PIN_SETUP` refuse an enrollment session that has not passed it (`403 step_up_required`), and an enrollment session never issues an authorization code.
 
-**Nothing is stored before the step-up.** Only the accepted proof moves the session to `PASSKEY_SETUP` or `PIN_SETUP`, and those steps refuse an enrollment session that has not been through it (`403 step_up_required`). The proof is recorded in its own session field, separate from the one that lets a session finish a sign-in, so an enrollment session still cannot complete a login even if a future route sent it to completion. An enrollment session issues no authorization code, whatever step it finishes at.
+**The fresh-factor hold still applies** to a PIN or passkey created this way (see [Account PIN](#account-pin-two-step-verification)).
 
-**The fresh-factor hold still applies.** A PIN or passkey created this way starts its hold like any other, so it cannot move the phone number for `pin-reset-cooldown` (see [Account PIN](#account-pin-two-step-verification)).
-
-**The enrollment web view redirects back to the app that opened it.** On completion the session echoes back an app-scheme redirect, and each build of the apps answers its own: the store build `global.gua`, a QA build `global.gua.dev`, an Android debug build `global.gua.debug`.
-
-Both enroll-start endpoints therefore take an **optional** body, `{ "redirectUri": "<app scheme>" }`, and the session's redirect is resolved in three steps:
-
-1. **the redirect the caller named**, when it is on the deployment's allowlist;
-2. **the app scheme registered by the OIDC client the bearer token was issued to**, for a token this service minted itself;
-3. **the configured default**, `idp.login.enroll.redirect-uri` (`IDP_LOGIN_ENROLL_REDIRECT_URI`).
-
-Step 2 cannot reach the apps: an app signs in through MAS, so its bearer is a homeserver token validated through `whoami`, and the principal it yields names no OIDC client of ours. Every app bearer therefore falls to step 3 unless the caller names its own scheme, and only the build knows which build it is.
-
-**The allowlist bounds it.** A bearer endpoint that honoured any redirect would hand a session's completion wherever the caller asked. `idp.login.enroll.redirect-uris` (`IDP_LOGIN_ENROLL_REDIRECT_URIS`, comma separated) is the list of redirects a caller may name; the operator writes it, and the caller only says which of the deployment's own entries is asking. Unset, the allowlist is exactly the single `redirect-uri` above. The match is exact, and the configured entry, not the arriving string, is stamped on the session.
-
-A named value not on the list is `400 invalid_redirect_uri`: not echoed, not logged and not stored, so the endpoint cannot reflect a caller-chosen string. Clients retry once with no `redirectUri`, which lands on step 2 or 3.
-
-Only an app scheme is taken from a client registration in step 2: what is being chosen is what the web view opening the sheet is listening for, and a client whose redirects are all web origins, the authentication service among them, is not an app that can be handed back to.
+Both enroll-start endpoints take an optional body, `{ "redirectUri": "<app scheme>" }`. It must exactly match an entry in `idp.login.enroll.redirect-uris` (`IDP_LOGIN_ENROLL_REDIRECT_URIS`, comma separated), else `400 invalid_redirect_uri`. When omitted, the app scheme registered by the token's OIDC client applies, else `idp.login.enroll.redirect-uri` (`IDP_LOGIN_ENROLL_REDIRECT_URI`).
 
 ### Privileged account operations
 
-Each privileged operation requires a fresh **reauth token** proving phone possession, in addition to the bearer token. Reauth tokens are **operation-scoped**: `/account/reauth/verify` takes an `operation` field (`DEACTIVATE` | `IDENTITY_RESET` | `PHONE_CHANGE`; defaults to `DEACTIVATE` for backwards compatibility) and the issued token can only be spent on the matching endpoint: a token minted to authorize a deactivation is not valid for an identity reset or a phone change, and vice versa.
+Each privileged operation requires a fresh **reauth token** proving phone possession, in addition to the bearer token. Reauth tokens are **operation-scoped**: `/account/reauth/verify` takes an `operation` field (`DEACTIVATE` | `IDENTITY_RESET` | `PHONE_CHANGE`; defaults to `DEACTIVATE` for backwards compatibility) and the issued token can only be spent on the matching endpoint.
 
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
@@ -368,16 +295,10 @@ Each privileged operation requires a fresh **reauth token** proving phone posses
 | `POST /account/reauth/verify` | Bearer | `{ "phone", "code", "operation" }`. Exchange the OTP for a single-use reauth token (5-minute TTL) scoped to the requested `operation`. |
 | `POST /account/deactivate` | Bearer + reauth (`DEACTIVATE`) | Deactivate the user's Matrix account (optionally erasing data). |
 | `POST /account/reset-identity-credentials` | Bearer + reauth (`IDENTITY_RESET`) | Rotate the homeserver password and return one-time UIA credentials for `client.resetIdentity`. |
-| `POST /account/phone/change/start` | Bearer + reauth (`PHONE_CHANGE`) + 2SV | Start a phone-number change: spends the reauth token **plus a stronger factor** (a user-verifying passkey assertion, else the account PIN), sends an OTP to the new number, and alerts the old number out of band. Returns a challenge id (`425` while the per-account change cooldown is active). |
-| `POST /account/phone/change/complete` | Bearer | Redeem the challenge + new-number OTP to atomically re-bind the account's phone mapping; all outstanding sessions are revoked. |
+| `POST /account/phone/change/start` | Bearer + reauth (`PHONE_CHANGE`) + 2SV | Start a phone-number change: spends the reauth token and the step-up factor, sends an OTP to the new number, and alerts the old number out of band. Returns a challenge id (`425` while the per-account change cooldown is active). |
+| `POST /account/phone/change/complete` | Bearer | Redeem the challenge + new-number OTP to atomically re-bind the account's phone mapping and revoke this service's tokens. |
 
-**The caller confirms the number; the server never looks one up.** The signed-in user types the number on their own account. It is normalized by `PhoneNumberNormalizer`, digested with the directory pepper and compared with the digests of that account's own `directory_entries` rows, with the same homeserver phone-binding fallback the OTP step of the interactive login uses, so a rotated or drifted pepper does not strand a legitimate account (the fallback is best effort: the admin API is not reliably available under MAS delegated authentication, and a failure there is a miss, never an accepted number). Only a match sends the code, and the code goes to the number that was just proved to be the account's. Three things follow:
-
-- **Nothing is stored.** Verify re-derives everything from the number submitted again, so there is no pending-phone record and no raw number anywhere.
-- **Nothing is revealed.** A number that is not this account's is `403 reauth_phone_mismatch`, in the same words whether it is unknown, belongs to somebody else, or simply is not this one, so the endpoint cannot be used to ask who owns a number. A number that does not parse is `400 invalid_phone_number` from the normalizer, which is a function of the submitted string alone and says nothing about any account.
-- **Guessing is bounded.** The account's own number is the secret being guessed by a stolen session, so wrong numbers are counted per user in Redis and further attempts are refused with `429` once `identity.security.max-reauth-phone-attempts-per-hour` (default **5**) is spent. The attempt is reserved by an atomic increment *before* the comparison, so a burst of parallel guesses is bounded by the same budget as a sequence of them, and it is given back when the number turns out to be the account's own, so the budget is spent by mismatches only and retyping your own number never locks you out of it. Both reauth endpoints also carry their own per-user, per-address [rate limit](#-rate-limiting). Successful sends stay inside the ordinary per-phone and per-address OTP limits.
-
-**Phone changes require two-step verification.** The reauth OTP goes to the *current* number, which a SIM-swap attacker may control, so `/account/phone/change/start` also demands a non-phone factor: a user-verifying passkey assertion from `/security/passkey/stepup/options` settles the step-up on its own, otherwise the account PIN. The step-up never asks whether a passkey is *registered*, only whether this caller *produced* one, so a credential left on a lost phone does not strand the account. An account that produces neither is refused with `403 step_up_required` and must [add a factor](#adding-a-factor-from-settings) first; there is no token-only fallback. Two further refusals apply: an assertion that did not verify the user (`403 passkey_user_verification_required`), and a PIN or passkey created inside the fresh-2FA hold (`400 twofa_cooldown_active`, measured on whichever credential was presented; see [Account PIN](#account-pin-two-step-verification)).
+The submitted number is compared with the account's own directory digests; a mismatch is always `403 reauth_phone_mismatch`, capped per user by `identity.security.max-reauth-phone-attempts-per-hour` (default **5**, then `429`). A phone change also needs a user-verifying passkey assertion or the account PIN; an account that produces neither gets `403 step_up_required`.
 
 **Phone-change cooldown & challenge limits** (configurable under `identity.security`): successful changes are separated by `phone-change-cooldown` (default **24h**). While it is active, `/account/phone/change/start` returns `425` with a `phone_change_cooldown` error code and a `Retry-After` header. Each challenge lives for `phone-change-challenge-ttl` (default **10m**) and allows `max-phone-change-otp-attempts` wrong OTPs (default **5**); at the cap both the challenge and its OTP are destroyed and the flow must restart from `/start`.
 
@@ -390,26 +311,15 @@ Each privileged operation requires a fresh **reauth token** proving phone posses
 
 #### Contact discovery privacy model
 
-`POST /directory/lookup` takes `{"phones": ["+5511999998888", …]}` and returns the subset that
-are on Gua (`phone`, `userId`, `username`, `displayName`). The privacy contract:
+`POST /directory/lookup` takes `{"phones": ["+5511999998888", …]}` and returns the subset that are on Gua (`phone`, `userId`, `username`, `displayName`).
 
-- **Nothing new at rest.** Submitted numbers are digested **in memory** with the same server-side
-  peppered HMAC-SHA256 used by the directory; raw numbers are never persisted and never logged.
-  The directory itself continues to store only `phone_digest` + a display-only mask.
-- **No client-side hashing.** The phone keyspace is small enough that any digest a client could
-  compute with a public key is reversible by dictionary, and shipping the secret pepper to clients
-  would let anyone holding a DB dump reverse the at-rest digests. The defense is TLS plus the
-  server-side pepper.
-- **Enumeration defenses.** Bearer auth required, per-request cap (`identity.directory.max-lookup-batch`,
-  default 1000, error `lookup_batch_too_large`), endpoint rate limit (below), and a per-account
-  `discoverable` opt-out (V6): accounts with `discoverable = false` never appear in results.
-- Invalid/duplicate address-book entries are skipped silently: one bad contact must not fail a sync.
+- Submitted numbers are digested in memory with the directory's server-side peppered HMAC-SHA256. Raw numbers are never persisted or logged, and clients do no hashing.
+- Enumeration defenses: bearer auth, a per-request cap (`identity.directory.max-lookup-batch`, default 1000, error `lookup_batch_too_large`), the endpoint rate limit, and a per-account `discoverable` opt-out.
+- Invalid and duplicate entries are skipped.
 
 ---
 
 ## 🔐 OpenID Connect provider
-
-The service is a self-contained OIDC provider. It issues the access tokens that protect its own REST API and lets [Matrix Authentication Service (MAS)](https://github.com/element-hq/matrix-authentication-service/) delegate user login to its phone OTP flows.
 
 ### Endpoints
 
@@ -417,7 +327,7 @@ The service is a self-contained OIDC provider. It issues the access tokens that 
 | --- | --- |
 | `GET /.well-known/openid-configuration` | Discovery metadata (issuer, authorize/token/userinfo/JWKS URLs, supported response/grant types, `S256` PKCE, `RS256`). |
 | `GET /.well-known/jwks.json` | Publishes the **RSA public** signing key so relying parties can verify RS256 tokens. |
-| `GET /oauth2/authorize` | Authorization-code entry point. Validates `client_id`, `redirect_uri`, `response_type=code`, `scope`, and optional `state`/`nonce`/PKCE `code_challenge`, then starts a login session and **redirects to the interactive login UI**. The optional `login_hint` is either an E.164 phone to pre-fill the phone step or the reserved value `passkey`, which records a passkey sign-in intent on the session and is never treated as a phone number. (An authorization code is issued only by the interactive flow, ADM-001 L1a: the legacy non-interactive branch is removed, and `phone_number`, `otp_code` and `display_name` are ignored if sent.) |
+| `GET /oauth2/authorize` | Authorization-code entry point. Validates `client_id`, `redirect_uri`, `response_type=code`, `scope`, and optional `state`/`nonce`/PKCE `code_challenge`, then starts a login session and **redirects to the interactive login UI**. The optional `login_hint` is either an E.164 phone to pre-fill the phone step or the reserved value `passkey`, which records a passkey sign-in intent on the session and is never treated as a phone number. An authorization code is issued only by the interactive flow; `phone_number`, `otp_code` and `display_name` are ignored if sent. |
 | `POST /oauth2/token` | Exchanges an authorization code (and PKCE `code_verifier`) for a signed access token + ID token. |
 | `GET /userinfo` | Returns the authenticated subject (`sub`), `phone_number`, `phone_number_masked` (display-only, e.g. `••••4567`), and optional `name` / `preferred_username`. |
 
@@ -430,7 +340,7 @@ For browser-based login (the path used by MAS and the Gua apps), the identity se
 
 | Method & path | Purpose |
 | --- | --- |
-| `GET /login/context` | Current step, masked phone, CSRF token, `intent` (`PHONE` or `PASSKEY`, from the `login_hint`; a missing field means `PHONE`), `enrollment` (an in-app factor enrollment rather than a sign-in), and, once the subject is resolved, `passkeyRegistered`, `preferredFactor` and `passkeysEnabled` (deployment capability), plus `pinRegistered` at `ENROLL_STEP_UP` only. At `PIN_REQUIRED` and `PASSKEY_REQUIRED` after an OTP it also carries `recovery` (see [Delayed account recovery](#delayed-account-recovery)); everywhere else `recovery` is `null`. |
+| `GET /login/context` | Current step, masked phone, CSRF token, `intent` (`PHONE` or `PASSKEY`, from the `login_hint`; a missing field means `PHONE`), `enrollment` (true for an in-app factor enrollment), and, once the subject is resolved, `passkeyRegistered`, `preferredFactor` and `passkeysEnabled` (deployment capability), plus `pinRegistered` at `ENROLL_STEP_UP` only. At `PIN_REQUIRED` and `PASSKEY_REQUIRED` after an OTP it also carries `recovery` (see [Delayed account recovery](#delayed-account-recovery)); everywhere else `recovery` is `null`. |
 | `POST /login/phone` | Submit the phone number; dispatches an OTP. |
 | `POST /login/otp` | Verify the OTP; routes a returning account to `PIN_REQUIRED` (holds a PIN), `PASSKEY_REQUIRED` (holds only a passkey) or the passkey offer (holds nothing), and a new user to the profile step. Never completes the login. |
 | `POST /login/pin` | Verify the account PIN at `PIN_REQUIRED`. Refused (`409 unexpected_step`) at `PASSKEY_REQUIRED`. |
@@ -438,18 +348,18 @@ For browser-based login (the path used by MAS and the Gua apps), the identity se
 | `POST /login/pin-setup` | The factor for an account holding none that is not finishing with a passkey, and the PIN being added in an enrollment session. Mandatory: `skip: true`, a missing PIN and a blank PIN are `400 pin_required`. `409 factor_required` when another session gave a signing-in account a factor in the meantime, `409 pin_already_set` for an enrolling one. |
 | `POST /login/passkey/register/options` · `…/register/verify` | Register a passkey for the account (WebAuthn create). |
 | `POST /login/passkey/setup-skip` | Leave the passkey offer without registering one (declined, failed, or no authenticator). A session that already signed in with its PIN completes; an account holding no factor goes on to `PIN_SETUP`. |
-| `POST /login/passkey/auth/options` · `…/auth/verify` | Sign in with an existing passkey (WebAuthn get). Reachable from `PHONE`, `OTP_SENT`, `PIN_REQUIRED` and `PASSKEY_REQUIRED`. |
+| `POST /login/passkey/auth/options` · `…/auth/verify` | Sign in with an existing passkey (WebAuthn get). |
 | `POST /login/recovery/start` · `…/recovery/complete` | The delayed account recovery, from `PIN_REQUIRED` or `PASSKEY_REQUIRED` after an OTP (see [Delayed account recovery](#delayed-account-recovery)). |
 | `POST /login/enroll/stepup/*` | The enrollment step-up, at `ENROLL_STEP_UP` (see [Adding a factor from settings](#adding-a-factor-from-settings)). |
 | `GET /login/enroll/{token}` | One-time web-view handoff for in-app factor enrollment started at `POST /security/passkey/enroll/start` or `POST /security/pin/enroll/start` (see [Adding a factor from settings](#adding-a-factor-from-settings)). |
 
-**No code without a factor.** Every completion requires the session to have authenticated with one: a passkey assertion, the PIN, the account's first factor created in this session, or a completed recovery. Completion refuses anything else with `409 factor_required`, which is also what a login session saved before this rule existed gets. "First factor" is decided under the account's row lock at the moment it is written: two sessions for the same factorless account can both reach setup, and the second to finish finds a factor it did not authenticate with and is refused before storing its own.
+**No code without a factor.** Completion requires the session to have authenticated with a passkey assertion, the PIN, the account's first factor created in this session, or a completed recovery; anything else is `409 factor_required`.
 
-New users are walked through profile → `PASSKEY_SETUP` → done, and reach `PIN_SETUP` only when the passkey does not happen: the offer is left without a credential (declined, refused by the authenticator, or no authenticator to run it), or the deployment has passkeys switched off, in which case the profile step routes straight there. The PIN is the fallback for whoever cannot use a passkey rather than the first thing a new account is asked for, and `PIN_SETUP` cannot be skipped. An older account that holds no factor is routed the same way after its OTP. Returning users who sign in with their PIN reach `PASSKEY_SETUP` unless the account already has a passkey or the deployment has passkeys switched off, and complete when they decline.
+New users go profile → `PASSKEY_SETUP` → done, and reach `PIN_SETUP`, which cannot be skipped, only when no passkey is registered or passkeys are switched off. A returning user who signs in with the PIN is offered `PASSKEY_SETUP` unless the account already has a passkey.
 
-A returning user may instead authenticate with a passkey via the `…/auth/*` endpoints, which are reachable from the phone step, the OTP step, **the PIN step** and `PASSKEY_REQUIRED`. That last one matters: being asked for a PIN is what the flow does to an account that has one, which is exactly the population that would want the stronger factor, and until now the PIN step answered an attempt to use a passkey with a conflict. Admitting it takes nothing away, because the same assertion already completes the same login one step earlier. Two limits hold whatever the step: the profile step is never admitted (an assertion there would reach account creation) and neither is an in-app enrollment session (it carries no OIDC request, so it must keep issuing no authorization code). A session that has already resolved its subject, which is every session at `PIN_REQUIRED` and `PASSKEY_REQUIRED`, additionally requires the assertion to resolve to that same account.
+Passkey sign-in is accepted at the phone, OTP, PIN and `PASSKEY_REQUIRED` steps, never at the profile step or in an enrollment session. Once the session has resolved its subject, the assertion must resolve to that same account.
 
-On success an authorization code is issued, the login session is consumed (and its cookie cleared), and the response carries `redirectUrl` for the UI to navigate back to the client, which exchanges the code at `/oauth2/token`. For new users the chosen handle is emitted as the `preferred_username` claim so MAS uses it as the Matrix localpart on first provisioning. Returning users emit the username stored in the directory at signup, never a value derived from the user id; an account with no stored username falls back to the localpart of a well-formed Matrix user id, and the login is refused with `account_identity_inconsistent` when that value fails the username format or is another account's stored username (the localpart is never derived from the user id, ADM-001 S6). The OIDC `sub` is the account's full Matrix user id on the homeserver chosen at signup (localpart plus homeserver domain). It is stable, but homeserver-scoped rather than opaque, which is why re-keying subjects is an explicit step in the migration plan.
+On success an authorization code is issued, the login session is consumed, and the response carries `redirectUrl` for the UI to navigate back to the client. `preferred_username` is the chosen handle for a new user and the stored directory username for a returning one; `sub` is the full Matrix user id.
 
 Login-flow configuration (`idp.login.*`): `ui-url` (`IDP_LOGIN_UI_URL`, default `/signin`), `session-ttl` (`IDP_LOGIN_SESSION_TTL`, default `PT10M`), `cookie-name` (`IDP_LOGIN_COOKIE_NAME`, default `gua_login`), and `cookie-secure` (`IDP_LOGIN_COOKIE_SECURE`, default `true`; set `false` only for plain-HTTP local development).
 
@@ -457,18 +367,18 @@ Passkey configuration (`idp.login.passkeys.*`): `rp-id` (`IDP_LOGIN_PASSKEYS_RP_
 
 ### Web login gate
 
-An optional invite-only gate for new web accounts, off by default: `idp.login.registration.web-allowlist-enabled` (`IDP_LOGIN_REGISTRATION_WEBALLOWLISTENABLED`). With the flag off, nothing in this section applies.
+An optional invite-only gate for new web accounts, off by default: `idp.login.registration.web-allowlist-enabled` (`IDP_LOGIN_REGISTRATION_WEBALLOWLISTENABLED`).
 
 With it on:
 
 - **OTP send** (`POST /login/phone`, `POST /otp/send`): a web flow gets an OTP only for a known number, meaning one that already has an account or is on `idp.login.registration.web-allowlist` (`IDP_LOGIN_REGISTRATION_WEBALLOWLIST`, E.164 CSV). Anything else gets `403 registration_not_approved` before any SMS is sent.
 - **Account creation** (`POST /login/profile`, `POST /signup/complete`): a new web account is created only for an allowlisted number, whichever path minted the OTP.
 
-Returning users are not blocked as long as their directory row resolves: that number counts as known, so an account created in the apps can also sign in on the web. The OTP step has one extra fallback that account creation does not, the homeserver phone binding. On the interactive flow the profile step recovers the account from that binding and heals the directory row, so the user simply signs in. On the REST path, which has no such recovery, a returning number whose directory row no longer resolves clears the OTP step and is then refused as a new web signup instead of minting a second account.
+A number that already has an account counts as known, so an account created in the apps can also sign in on the web.
 
 **Web or native.** MAS can append `gua_downstream=web|native` to the upstream authorize request (fork settings `forward_downstream_client` and `downstream_client_web_origin`; `native` means the downstream client's `client_uri` host differs from the web origin). A login session is exempt only when the marker equals `idp.login.registration.native-client-marker` (default `native`) exactly. An absent, empty or unrecognised marker is treated as web, and the REST endpoints, which carry no marker, always are.
 
-**Limits.** The marker travels in a browser redirect, so the user can edit it, and MAS derives it from a `client_uri` that a dynamically registered client sets for itself. Treat the native exemption as a convenience for the beta apps, not a security boundary; SMS rate limits remain the defence against credit burn. An unforgeable signal needs a MAS-side change, such as a signed or PAR-carried downstream claim.
+**Limits.** The marker is client-asserted and is not a security boundary.
 
 ### Signing & configuration
 
@@ -481,17 +391,17 @@ Seeded clients (`oidc.clients` in `application.yml`):
 | `mas` | Confidential (`client_secret`) | optional | `openid`, `profile`, `phone` |
 | `gua-ios` | Public | **required** (`S256`) | `openid`, `profile`, `phone` |
 
-Additional first-party app clients (web today, Android in future) are registered as further public, PKCE-required entries under `oidc.clients`.
+Further first-party app clients are public, PKCE-required entries under `oidc.clients`.
 
 ### API authentication
 
-Client-facing REST endpoints require an access token in the `Authorization: Bearer <token>` header. `OidcAccessTokenValidator` first tries to verify the token locally against the published JWKS, checking the RS256 signature, the issuer, that the audience matches a registered client, and that the token has not expired or been revoked. If the token is not one of this service's own JWTs, it falls back to Synapse's `/whoami` endpoint so a native client can reuse its Matrix SDK session token (these tokens are granted no OIDC scopes). Access tokens carry a `jti` and can be invalidated ahead of expiry via a per-user revoke-before cutoff in Redis, which `/account/deactivate`, `/account/reset-identity-credentials`, `/account/phone/change/complete` and a completed account recovery set. That cutoff covers this service's own tokens only; it does not end the MAS and Matrix sessions the apps hold. Authorization codes and other short-lived tokens are stored in Redis to keep the service horizontally scalable.
+`OidcAccessTokenValidator` verifies a bearer token locally against the published JWKS: RS256 signature, issuer, an audience matching a registered client, expiry and revocation. A token that is not one of this service's own JWTs is checked against Synapse's `/whoami` instead, so a native client can reuse its Matrix SDK session token; such tokens carry no OIDC scopes. Access tokens carry a `jti` and can be invalidated early by a per-user revoke-before cutoff in Redis, set by `/account/deactivate`, `/account/reset-identity-credentials`, `/account/phone/change/complete` and a completed account recovery. The cutoff covers this service's own tokens only; it does not end the MAS and Matrix sessions the apps hold.
 
 ---
 
 ## 🛡️ Rate limiting
 
-Every public endpoint is protected by a **Resilience4j**-based rate limiter, so the service can run safely without an upstream proxy or WAF. Defaults live in `application.yml` under `identity.rate-limits` and are individually overridable via `IDENTITY_RATE_LIMIT_<NAME>_{LIMIT,REFRESH,TIMEOUT}` environment variables. A `default-config` applies to any endpoint without a specific rule.
+Every public endpoint is protected by a **Resilience4j**-based rate limiter. Defaults live in `application.yml` under `identity.rate-limits` and are overridable via `IDENTITY_RATE_LIMIT_<NAME>_{LIMIT,REFRESH,TIMEOUT}` environment variables. `default-config` applies to any endpoint without a specific rule.
 
 | Endpoint | Default limit | Window |
 | --- | --- | --- |
@@ -523,9 +433,7 @@ Every public endpoint is protected by a **Resilience4j**-based rate limiter, so 
 | `POST /directory/lookup` | 30 | 5 min |
 | _all others_ | 120 (`default-config`) | 1 min |
 
-**Guess budgets.** The per-address rules bound how fast one client can try a code, not how many guesses a code can absorb across addresses. Every OTP therefore carries its own budget: each guess is counted per phone in Redis (`otp:attempts:<E.164>`, an atomic increment expiring with the code) before it is compared, so at most `identity.otp.max-verify-attempts` guesses (default **5**, `IDENTITY_OTP_MAX_VERIFY_ATTEMPTS`) are ever compared against one code. The last allowed wrong guess deletes the code, a guess past the cap is refused without comparison, and the spent counter is left to expire so only a fresh send can continue. Codes are compared in constant time. This covers every path that redeems a phone OTP, including the namespaced PIN-change code, which counts under the matching `otp:attempts:` key; the new-number OTP of a phone change keeps its own per-challenge cap (`identity.security.max-phone-change-otp-attempts`). The interactive login steps are listed individually because the `default-config` window is too loose for a credential check; they carry no bearer token, so their limiter is keyed by client address.
-
-**Shared addresses.** Unauthenticated login calls are keyed by the client address, which on Kubernetes is the forwarded-for address set by the ingress. Many people can share one public address (carrier-grade NAT is common on mobile networks), so a per-address limit on a login step is sized for a crowd; that is why `/login/recovery/start` and `/login/recovery/complete` allow 30 per hour. Neither limit protects an account: both endpoints need a login session that has passed an OTP, starting involves nothing to guess, and completing needs the episode to be `READY`.
+**Guess budgets.** Each OTP accepts at most `identity.otp.max-verify-attempts` guesses (default **5**, `IDENTITY_OTP_MAX_VERIFY_ATTEMPTS`), counted in Redis before comparison.
 
 Set `IDENTITY_RATE_LIMITS_ENABLED=false` to disable the limiter (e.g., for load testing). Otherwise clients receive HTTP `429` with a JSON body (`{"code":"rate_limited","message":"Rate limit exceeded"}`) and a `Retry-After` header.
 
@@ -533,25 +441,11 @@ Set `IDENTITY_RATE_LIMITS_ENABLED=false` to disable the limiter (e.g., for load 
 
 ## 🌐 Federation directory (gua-resolver)
 
-> **REMOVED.** This service no longer writes to the gua-resolver directory. Members never write the resolver directory ([ADM-001](https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md) L1b): the client that did (`POST /directory/entries`, signed with this homeserver's roster key) let any active member bind any phone number to itself, because the resolver accepted any member's key for any row. The client, its properties and its call sites are deleted, and `ResolverDirectoryPublishRemovedTest` fails the build if the write path comes back.
-
-### What this means
-
-- Sign-up, sign-in (`/otp/verify`, `/signin/verify-pin`) and phone change complete without contacting the resolver. For this deployment's own users they read and write only this service's own [directory](#directory), as they always did.
-- The resolver's read path is unaffected. Clients still route before login through the resolver's `POST /resolve`, in which this service takes no part.
-- Rows this service published earlier are left in place in the resolver directory until placement records replace them. Nothing here removes or rewrites them, including old numbers from past phone changes, which were never unpublished because the resolver had no delete. That migration is tracked in the [gua-resolver migration plan](https://github.com/Gua-ra/gua-resolver/blob/main/docs/migrations/gua-resolver-migration-plan.md).
-- The `identity.resolver.*` properties no longer exist. `IDENTITY_RESOLVER_BASEURL`, `IDENTITY_RESOLVER_HOMESERVERID` and `IDENTITY_RESOLVER_SIGNINGPRIVATEKEY` are ignored if a manifest still sets them: nothing binds those names and unknown environment variables do not fail startup (`IdentityServicePropertiesResolverEnvTest`). Remove them, and the signing-key Secret, from the deployment when convenient.
-
-### Pepper
-
-`IDENTITY_DIRECTORY_PEPPER` is this service's own directory pepper. The resolver has a separate `directory.pepper`. The two services hash the phone number differently, so their digests are not interchangeable even when the pepper value is the same. The shared-pepper model is the current mechanism and is scheduled for replacement.
+This service does not write to the gua-resolver directory, and `IDENTITY_RESOLVER_*` variables are ignored if still set.
 
 ## 📊 Observability
 
-Micrometer exposes Prometheus metrics at **`/actuator/prometheus`** (enable via
-`MANAGEMENT_ENDPOINTS_EXPOSURE=health,info,prometheus`, the default; the endpoint is permitted in
-`SecurityConfig` for in-cluster scraping and tagged `application=identity-service`). Alongside the free
-HTTP/JVM/DB-pool metrics, these domain counters drive the Gua usage/reliability dashboards + alerts:
+Micrometer exposes Prometheus metrics at **`/actuator/prometheus`**, tagged `application=identity-service`: HTTP, JVM and DB-pool metrics plus these domain counters:
 
 | Metric | Meaning |
 | --- | --- |
@@ -578,9 +472,9 @@ An example `docker-compose.identity.yml` is included. Provide environment values
 - `SPRING_DATASOURCE_*`: JDBC details for Postgres
 - `SPRING_DATA_REDIS_*`: Redis host/port
 - `IDENTITY_BASE_URL`: publicly reachable base URL; becomes the OIDC `issuer`
-- `IDENTITY_MATRIX_*`: Synapse admin/client base URLs, homeserver domain, and admin token (used for provisioning; token validation is handled locally)
-- `IDENTITY_DIRECTORY_PEPPER`: server-side secret used to hash phone digests. This is the current mechanism and is scheduled for replacement; rotating it orphans every stored digest
-- `OIDC_RSA_PRIVATE_KEY` / `OIDC_RSA_PUBLIC_KEY`: RSA keypair used to sign and verify RS256 OIDC tokens (an ephemeral key is generated if omitted, not suitable for production)
+- `IDENTITY_MATRIX_*`: Synapse admin/client base URLs, homeserver domain, and admin token (used for provisioning)
+- `IDENTITY_DIRECTORY_PEPPER`: server-side secret used to hash phone digests; rotating it orphans every stored digest
+- `OIDC_RSA_PRIVATE_KEY` / `OIDC_RSA_PUBLIC_KEY`: RSA keypair used to sign and verify RS256 OIDC tokens (see [Signing & configuration](#signing--configuration))
 - `OIDC_CLIENT_MAS_SECRET`: confidential client secret for the MAS OIDC client
 - **SMS delivery (Twilio).** By default SMS is logged, not sent (`LoggingSmsSender`). Set
   `IDENTITY_SMS_TWILIO_ENABLED=true` to send real OTPs via Twilio:

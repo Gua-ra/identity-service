@@ -20,7 +20,6 @@ import org.testcontainers.utility.DockerImageName;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-// Applies the Flyway migrations and the schema mirror to separate schemas and compares the columns.
 // The migrations are Postgres-only, so this needs Docker.
 @Testcontainers
 class SchemaParityTest {

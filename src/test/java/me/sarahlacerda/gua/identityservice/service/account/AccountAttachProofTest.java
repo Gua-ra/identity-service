@@ -29,7 +29,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/** An attach handle is attacker-controlled: anyone can compose an authorize URL carrying one. */
 class AccountAttachProofTest {
 
     private static final String USER_ID = "@alice:example.org";

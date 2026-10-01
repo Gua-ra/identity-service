@@ -112,7 +112,6 @@ class AccountGenesisCodecTest {
 
     @Test
     void anAllZeroKeyIsRejectedEvenThoughItDecodesToAPoint() {
-        // The all-zero encoding is a valid low-order point.
         assertThat(Ed25519Keys.isOnCurve(new byte[32])).isTrue();
 
         byte[] zeroAuthority = valid();

@@ -1,7 +1,6 @@
 name: CI/CD
 
 # Builds, tests and publishes signed images; deploys dev only. Production is promoted by promote-prod.yml.
-# Triggers: push to main, the deploy:dev PR label, and workflow_dispatch (dev or none).
 
 on:
   push:

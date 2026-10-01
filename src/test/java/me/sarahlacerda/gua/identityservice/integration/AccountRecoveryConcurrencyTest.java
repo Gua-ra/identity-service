@@ -32,7 +32,6 @@ import me.sarahlacerda.gua.identityservice.repository.IdentityUserRepository;
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 
-/** Needs Docker for Postgres and Redis. */
 @SpringBootTest
 @Testcontainers(disabledWithoutDocker = true)
 class AccountRecoveryConcurrencyTest {

@@ -260,8 +260,6 @@ public class SecurityController {
                 .toUriString();
     }
 
-    // Resolution order: the caller's redirect if allowlisted, then the app scheme of the token's OIDC client,
-    // then the configured default.
     private String enrollRedirectUri(String requestedRedirectUri) {
         if (StringUtils.hasText(requestedRedirectUri)) {
             return allowlisted(requestedRedirectUri);

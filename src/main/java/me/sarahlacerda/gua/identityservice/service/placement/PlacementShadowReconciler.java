@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.time.Instant;
@@ -66,7 +65,6 @@ public class PlacementShadowReconciler {
         reconcile();
     }
 
-    /** Returns an empty map when the job refused to run. */
     public Map<PlacementShadowResult, Integer> reconcile() {
         ShadowProperties shadow = properties.getPlacement().getShadow();
         if (!shadow.isEnabled()) {
@@ -302,7 +300,6 @@ public class PlacementShadowReconciler {
         return false;
     }
 
-    /** A null or legacy local value means the legacy homeserver. */
     private String directoryFederationId(PlacementAccountScanner.AccountRow row) {
         String registryId = row.directoryHomeserverId();
         if (registryId == null || registryId.isBlank()) {
@@ -319,7 +316,6 @@ public class PlacementShadowReconciler {
         return index;
     }
 
-    /** Null when the deployment has granted neither read path. */
     private MasLinkReader configuredReader() {
         for (MasLinkReader reader : readers) {
             if (reader.isConfigured()) {

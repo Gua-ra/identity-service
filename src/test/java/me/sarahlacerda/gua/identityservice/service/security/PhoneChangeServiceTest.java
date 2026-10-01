@@ -52,7 +52,6 @@ class PhoneChangeServiceTest {
     private static final String NEW_E164 = "+14155550123";
     private static final String CHALLENGE = "chal-1";
     private static final String CHALLENGE_KEY = "phone:change:chal-1";
-    // Old enough that the fresh-factor hold has expired.
     private static final Instant REGISTERED_LONG_AGO = Instant.now().minus(Duration.ofDays(400));
 
     @Mock
@@ -418,7 +417,6 @@ class PhoneChangeServiceTest {
     void completeFifthWrongOtpDeletesBothOtpKeyAndChallengeIpIndependent() {
         properties.getSecurity().setMaxPhoneChangeOtpAttempts(5);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        // attempts already at 4 -> this failure is the 5th.
         when(valueOperations.get(CHALLENGE_KEY)).thenReturn(USER + "|" + NEW_E164 + "|4");
         doThrow(new InvalidOtpException("bad")).when(phoneChangeOtpService).verify(CHALLENGE, "000000");
 

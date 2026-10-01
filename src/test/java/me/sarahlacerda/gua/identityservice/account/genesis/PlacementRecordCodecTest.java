@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.account.genesis;
 
 import java.lang.reflect.RecordComponent;

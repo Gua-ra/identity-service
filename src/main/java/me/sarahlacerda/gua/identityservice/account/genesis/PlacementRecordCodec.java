@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.account.genesis;
 
 import java.nio.charset.StandardCharsets;
@@ -121,7 +120,6 @@ public final class PlacementRecordCodec {
         return out;
     }
 
-    /** ASCII, printable, no whitespace. */
     private static String decodeHomeserverId(byte[] value) {
         for (byte b : value) {
             int c = b & 0xFF;

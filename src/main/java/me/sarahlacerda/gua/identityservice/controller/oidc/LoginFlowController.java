@@ -228,7 +228,6 @@ public class LoginFlowController {
         session.setGenesisAttachChallenge(accountGenesisService.issueAttachChallenge());
     }
 
-    /** Returns null when the feature is off. */
     private AccountCreationService.GenesisAttachment genesisAttachment(LoginSession session, String attachProof) {
         if (!accountGenesisService.isEnabled()) {
             return null;
@@ -256,8 +255,6 @@ public class LoginFlowController {
         session.setDisplayName(entry != null ? entry.getDisplayName() : null);
         session.setPreferredUsername(preferredUsername);
         session.setNewUser(false);
-        // Reads the stored credentials, so switching passkeys off never lets an OTP finish a passkey-only
-        // account.
         AuthFactorPolicy.LoginPolicy policy = authFactorPolicy.loginPolicy(userId);
         if (policy.pinStepRequired()) {
             session.setPhase(Phase.PIN_REQUIRED);
@@ -321,7 +318,6 @@ public class LoginFlowController {
         registrationGuard.assertAllowedForNewUser(session);
 
         String localpart = usernamePolicy.normalizeAndValidate(request.username());
-        // Unique within this deployment's directory only, not federation-wide.
         if (directoryService.isUsernameTaken(localpart)) {
             throw new UsernameTakenException("Username already taken");
         }
@@ -610,7 +606,6 @@ public class LoginFlowController {
         }
         userSecurityService.recordSuccessfulLogin(session.getUserId());
 
-        // Only a completed recovery asks the authentication service to end every other session.
         boolean endOtherSessions = session.getAuthenticatedFactor() == SessionFactor.RECOVERY
                 || endOtherSessionsService.isOwed(session.getUserId());
         if (endOtherSessions && session.getAuthenticatedFactor() != SessionFactor.RECOVERY) {

@@ -104,7 +104,6 @@ public class OidcAuthorizationController {
         clientService.validateScope(client, scopes);
         clientService.validateChallenge(client, codeChallenge, codeChallengeMethod);
 
-        // The interactive login session is the only way to obtain a code.
         LoginSession session = new LoginSession();
         session.setClientId(clientId);
         session.setRedirectUri(redirectUri);
@@ -205,7 +204,6 @@ public class OidcAuthorizationController {
         return new ClientCredentials(clientIdParam, clientSecretParam);
     }
 
-    /** prompt=login without a verifiable id_token_hint is rejected. */
     private String resolveReauthUserId(String prompt, String idTokenHint) {
         boolean promptLogin = prompt != null && containsPromptValue(prompt, "login");
         boolean hasHint = idTokenHint != null && !idTokenHint.isBlank();

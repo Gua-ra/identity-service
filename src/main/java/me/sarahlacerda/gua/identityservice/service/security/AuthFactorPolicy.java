@@ -24,7 +24,6 @@ public class AuthFactorPolicy {
         return passkeyService.hasPasskey(userId);
     }
 
-    /** Deployment capability read from configuration, not account state. */
     public boolean passkeysSupported() {
         return passkeyService.isEnabled();
     }
@@ -94,7 +93,6 @@ public class AuthFactorPolicy {
             return !passkeyHeld && !pinHeld;
         }
 
-        /** Never true for the phone OTP. */
         public boolean completesWith(AuthFactor factor) {
             return switch (factor) {
                 case PASSKEY -> passkeyHeld;
@@ -112,7 +110,6 @@ public class AuthFactorPolicy {
             return accepted.contains(factor);
         }
 
-        /** False unless both are accepted. */
         public boolean outranks(AuthFactor candidate, AuthFactor other) {
             int first = accepted.indexOf(candidate);
             int second = accepted.indexOf(other);

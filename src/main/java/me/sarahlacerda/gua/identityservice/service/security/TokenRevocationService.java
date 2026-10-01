@@ -21,7 +21,6 @@ public class TokenRevocationService {
         redisTemplate.opsForValue().set(KEY_PREFIX + userId, Long.toString(cutoff));
     }
 
-    /** A missing issuedAt is treated as revoked. */
     public boolean isRevoked(String userId, Instant issuedAt) {
         if (issuedAt == null) {
             return true;

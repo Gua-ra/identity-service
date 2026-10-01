@@ -81,7 +81,6 @@ public class DirectoryService {
                 .findFirst();
     }
 
-    /** A null value leaves the existing column untouched. */
     @Transactional
     public DirectoryEntry assignRouting(String phoneDigest, String homeserverId, String username) {
         DirectoryEntry entry = repository.findByPhoneDigest(phoneDigest)

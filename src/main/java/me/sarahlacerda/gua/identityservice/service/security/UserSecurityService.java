@@ -292,7 +292,6 @@ public class UserSecurityService {
                 .orElseThrow(() -> new UnknownUserException("Unknown user: " + userId));
     }
 
-    /** The stamp is pin_reset_requested_at. */
     void openRecoveryEpisode(IdentityUser user, Instant requestedAt) {
         user.setPinResetRequestedAt(requestedAt);
     }

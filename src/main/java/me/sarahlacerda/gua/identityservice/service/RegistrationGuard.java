@@ -14,8 +14,6 @@ import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 
-// Gates web OTP sends and web signups while idp.login.registration.web-allowlist-enabled is on.
-// The native marker is client-asserted: a convenience, with every other value treated as web.
 @Component
 @RequiredArgsConstructor
 public class RegistrationGuard {

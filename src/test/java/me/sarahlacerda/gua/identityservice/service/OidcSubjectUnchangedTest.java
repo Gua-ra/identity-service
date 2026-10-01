@@ -104,7 +104,6 @@ class OidcSubjectUnchangedTest {
 
     @Test
     void theGuardPatternWouldActuallyCatchAnAccountId() {
-        // Guards that cannot fail are worthless: this shows the pattern used above matches a real id.
         assertThat(ACCOUNT_ID.matcher(
                 AccountId.derive(AccountId.CLASS_GENESIS, "bytes".getBytes()).value()).matches()).isTrue();
     }

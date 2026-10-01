@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.nio.charset.StandardCharsets;
@@ -11,7 +10,6 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Home
 
 final class PlacementTestFixtures {
 
-    /** Reserved documentation domain, so no real host name appears in a test. */
     static final String DOMAIN = "example.test";
     static final String LOCAL_ID = "primary";
     static final String FEDERATION_ID = "fed-primary";
@@ -43,7 +41,6 @@ final class PlacementTestFixtures {
         return homeserver;
     }
 
-    /** No explicit federationId, so the roster id comes from the alias map or the local id. */
     static HomeserverConfig homeserverWithoutFederationId(String localId, String domain, String signingKey) {
         return homeserver(localId, domain, null, signingKey);
     }

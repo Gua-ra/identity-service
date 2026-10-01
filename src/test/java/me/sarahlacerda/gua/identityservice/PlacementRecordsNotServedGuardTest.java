@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice;
 
 import java.io.IOException;
@@ -62,7 +61,6 @@ class PlacementRecordsNotServedGuardTest {
 
     @Test
     void theRoutingAndLoginFilesThisGuardsReallyExist() throws IOException {
-        // A guard that silently matched nothing would pass forever after a rename.
         List<String> present = mainSources().stream()
                 .map(path -> path.getFileName().toString())
                 .filter(ROUTING_AND_LOGIN_PATH::contains)

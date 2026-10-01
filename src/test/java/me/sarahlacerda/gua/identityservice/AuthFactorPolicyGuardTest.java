@@ -22,7 +22,6 @@ class AuthFactorPolicyGuardTest {
         assertThat(redeem).doesNotContain("UserVerificationRequirement");
     }
 
-    /** A synced passkey's counter may never move, so validating it would lock those accounts out. */
     @Test
     void signatureCounterValidationStaysOff() throws IOException {
         String source = read(MAIN.resolve("service/security/PasskeyService.java"));
@@ -524,7 +523,6 @@ class AuthFactorPolicyGuardTest {
         assertThat(config.substring(open, config.indexOf(");", open))).doesNotContain("/security/pin/reset");
     }
 
-    /** Brace-counted, skipping double-quoted strings, so assertions never run over a truncated fragment. */
     private static String methodBody(String source, String signature) {
         int start = source.indexOf(signature);
         assertThat(start).as("method %s", signature).isPositive();

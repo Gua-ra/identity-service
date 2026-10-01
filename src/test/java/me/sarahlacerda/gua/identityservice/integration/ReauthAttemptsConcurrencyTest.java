@@ -27,7 +27,6 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
-/** Needs Docker for Postgres and Redis. */
 @SpringBootTest
 @Testcontainers(disabledWithoutDocker = true)
 class ReauthAttemptsConcurrencyTest {

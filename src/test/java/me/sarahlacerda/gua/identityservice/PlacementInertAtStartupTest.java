@@ -19,7 +19,6 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.service.placement.PlacementSchedulingConfig;
 import me.sarahlacerda.gua.identityservice.service.placement.ResolverPlacementClient;
 
-/** Boots the application context: reflection checks alone cannot catch a startup failure. */
 @SpringBootTest
 @ActiveProfiles("test")
 class PlacementInertAtStartupTest {

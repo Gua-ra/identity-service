@@ -14,7 +14,6 @@ import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 
-/** Scans every compiled class for the strings the removed directory-publishing client needed. */
 class ResolverDirectoryPublishRemovedTest {
 
     private static final String SERVICE_CLASSES = "classpath*:me/sarahlacerda/gua/identityservice/**/*.class";

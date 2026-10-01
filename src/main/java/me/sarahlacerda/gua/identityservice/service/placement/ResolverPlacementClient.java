@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.time.Duration;
@@ -21,7 +20,6 @@ import me.sarahlacerda.gua.identityservice.account.genesis.PlacementRecordCodec;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import reactor.core.publisher.Mono;
 
-/** A placement record binds an accountId, never a phone digest, and nothing is served from the records. */
 @Component
 public class ResolverPlacementClient {
 

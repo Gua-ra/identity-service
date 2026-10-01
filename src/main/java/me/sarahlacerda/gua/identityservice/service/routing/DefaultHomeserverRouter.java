@@ -49,7 +49,6 @@ public class DefaultHomeserverRouter implements HomeserverRouter {
     private Homeserver weightedPick(List<Homeserver> candidates) {
         int totalWeight = candidates.stream().mapToInt(hs -> Math.max(0, hs.weight())).sum();
         if (totalWeight <= 0) {
-            // All weights zero/negative: fall back to a uniform pick.
             return candidates.get(ThreadLocalRandom.current().nextInt(candidates.size()));
         }
         int target = ThreadLocalRandom.current().nextInt(totalWeight);
