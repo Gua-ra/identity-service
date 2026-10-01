@@ -74,6 +74,8 @@ class AccountGenesisMetricsTest {
 
     @Test
     void withEveryFlagOffNothingIsRegisteredAndTheAccountTablesAreNeverScanned() {
+        properties.getGenesis().setEnabled(false);
+        properties.getGenesis().getBootstrapBackfill().setEnabled(false);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
         new AccountGenesisMetrics(registry, repository, scanner, properties);
