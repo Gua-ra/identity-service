@@ -24,13 +24,12 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Shad
 import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRegistry;
 
 /**
- * Compares, for every account, where this service thinks it lives against where it actually lives, and
- * publishes a generation-1 placement record for the accounts whose evidence is unambiguous (ADM-008
- * decision 9, Phase 4).
+ * Compares, for every account, where this service thinks it lives against where it lives, and publishes
+ * a generation-1 placement record for the accounts whose evidence is unambiguous. This is shadow mode:
+ * compute, publish, compare, serve nothing (ADM-008 decision 9; migration plan phase 4).
  *
- * <p>This runs here because identity-service is the only component holding both halves of the join: the
- * phone digest to Matrix user id to accountId mapping, and its own homeserver choice. Neither the
- * resolver nor any MAS can make this comparison alone.
+ * <p>It runs here because identity-service is the only component holding both halves of the join: the
+ * phone digest to Matrix user id to accountId mapping, and its own homeserver choice.
  *
  * <h2>What is compared</h2>
  * <ul>
@@ -50,9 +49,8 @@ import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRegistry;
  * reads the MAS column that holds a phone in the deployed configuration; see {@link MasSqlLinkReader}.
  *
  * <p>Nothing here feeds the resolution path. A published record is read for comparison and for the
- * re-issue decision, and for nothing else; the directory heal, when it is switched on, takes its value
- * from the MAS link and never from a record, so no routing decision can be traced back to placement
- * state. That is the explicit non-goal of this phase, and the guard test holds it.
+ * re-issue decision only; the directory heal, when switched on, takes its value from the MAS link and
+ * never from a record. {@code PlacementRecordsNotServedGuardTest} holds this.
  */
 @Component
 public class PlacementShadowReconciler {

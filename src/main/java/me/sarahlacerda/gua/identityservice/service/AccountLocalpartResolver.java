@@ -16,8 +16,8 @@ import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 
 /**
  * Chooses the localpart an existing account presents as the {@code preferred_username}
- * claim, which MAS imports as the Matrix localpart on a first delegated login
- * (ADM-001 S6).
+ * claim, which MAS imports as the Matrix localpart on a first delegated login. The value
+ * is read from the directory and never derived from the user id (ADM-001 spike S6).
  *
  * <p>The source is the username stored in the directory: the handle reserved at signup
  * under the directory's case-insensitive unique index, which no code path changes once

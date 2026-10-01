@@ -15,7 +15,8 @@ import io.micrometer.core.instrument.Tags;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 
 /**
- * The series the Phase 4 shadow window is judged by. These are the exact names a scrape exposes:
+ * The series the shadow comparison window (migration plan phase 4) is judged by. These are the exact
+ * names a scrape exposes:
  *
  * <ul>
  *   <li>{@code gua_identity_placement_shadow_total{result}}, one counter per classification;</li>
@@ -30,26 +31,23 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
  *       classify at all.</li>
  * </ul>
  *
- * <p>Both counters carry a <b>closed</b> label set, because a panel or an alert is written against the
- * literal values. {@code result} on the publish counter is one of the four {@code PublishOutcome} values,
+ * <p>The publish and failures counters carry a <b>closed</b> label set, because a panel or an alert is
+ * written against the literal values. {@code result} on the publish counter is one of the four {@code PublishOutcome} values,
  * {@code published}, {@code conflict}, {@code rejected} and {@code unavailable}, or one of the three
  * reasons the reconciler skips an account before ever calling the resolver, {@code no_signing_key},
  * {@code bad_account_id} and {@code origin_mismatch}. {@code reason} on the failures counter is
  * {@code unknown_homeserver} or {@code error}. Adding a value to either is a deliberate edit here.
  *
- * <p>The failures counter exists because the run used to die on the first unreadable account, which
- * stopped {@code last_success_timestamp} advancing and so read as "the job is not running" rather than
- * as "these accounts could not be compared". The run now completes, the timestamp advances, and this is
- * the series an alert watches.
+ * <p>A run completes and {@code last_success_timestamp} advances even when accounts fail to classify;
+ * those accounts are counted on the failures counter under {@code reason}, which is the series an alert
+ * watches.
  *
- * <p>Prometheus appends {@code _total} to counters and never to gauges, so the two scanned/timestamp
- * gauges carry no such suffix and the two counters do. {@code PlacementShadowMetricsTest} pins every
- * name against a real scrape, because a panel or an alert built on a name that does not exist reads as
- * "no data" rather than as an error.
+ * <p>Prometheus appends {@code _total} to counters and never to gauges, so the gauges carry no such
+ * suffix and the counters do. {@code PlacementShadowMetricsTest} pins every name against a real scrape,
+ * because an alert built on a name that does not exist reads as "no data", not as an error.
  *
  * <p>Every counter for the closed result vocabulary is registered eagerly, so a fresh pod serves zeros
- * from its first scrape instead of nothing. Nothing is registered at all while the feature is off: a
- * deployment that has not turned this on pays for none of it.
+ * from its first scrape. Nothing is registered while the feature is off.
  */
 @Component
 public class PlacementShadowMetrics {

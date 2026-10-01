@@ -19,10 +19,9 @@ import java.util.HexFormat;
  * provider (JDK 15+). No new dependency: the account objects store the bare 32-byte key, and the JDK
  * KeyFactory wants X.509 {@code SubjectPublicKeyInfo}, so the fixed 12-byte SPKI prefix is prepended here.
  *
- * <p>{@link #isOnCurve(byte[])} is what backs ADM-008 decision 1's "a key failing Ed25519 point decoding"
- * rule. It is deliberately separate from the all-zero check: the all-zero encoding decodes to a valid
- * low-order point, so point decoding alone would let it through, which is exactly why ADM-008 lists the
- * two rules separately.
+ * <p>{@link #isOnCurve(byte[])} backs the strict-decoding rule that a key failing Ed25519 point decoding
+ * is refused (ADM-008 decision 1). It is separate from the all-zero check because the all-zero encoding
+ * decodes to a valid low-order point, so point decoding alone would let it through.
  */
 public final class Ed25519Keys {
 
@@ -39,7 +38,7 @@ public final class Ed25519Keys {
      * Turns a raw 32-byte Ed25519 public key into a JDK {@link PublicKey}, and checks that it really is
      * a curve point.
      *
-     * <p>The point check is deliberately not left to {@link KeyFactory}. On this JVM
+     * <p>The point check is not left to {@link KeyFactory}. On this JVM
      * {@code generatePublic} only parses the encoding: it accepts a y coordinate larger than the field
      * prime and one that is not on the curve, and defers both checks to the first
      * {@link Signature#initVerify}. ADM-008 decision 1 requires the decoder itself to refuse such a key,

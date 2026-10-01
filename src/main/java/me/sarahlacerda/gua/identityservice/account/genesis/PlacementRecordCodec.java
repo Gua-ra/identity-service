@@ -25,16 +25,15 @@ import java.util.Arrays;
  * 66+n          end
  * </pre>
  *
- * <p>Fixed layout with a single one-byte length prefix on the one variable field, big-endian, no
- * delimiters: the same two ADM-001 L4 rules the genesis objects obey, for the same reason. The decoder
- * refuses an unknown version or generation, a wrong length, a length prefix that does not agree with the
- * buffer, a non-printable or over-long homeserver id, an origin byte that disagrees with the class byte
- * inside the accountId, and a window that is inverted or longer than the 400 days ADM-008 decision 7
- * fixes. Bytes are kept verbatim on the decoded object so a verifier checks the signature against what
- * arrived rather than against a re-encoding.
+ * <p>Fixed layout, big-endian, one one-byte length prefix on the single variable field, no delimiters:
+ * one canonical byte representation, signed as such (ADM-001 L4). The decoder refuses an unknown version
+ * or generation, a wrong length, a length prefix that disagrees with the buffer, a non-printable or
+ * over-long homeserver id, an origin byte that disagrees with the class byte inside the accountId, and a
+ * window that is inverted or longer than the 400-day validity ADM-008 decision 7 fixes. Bytes are kept
+ * verbatim on the decoded object so a verifier checks the signature against what arrived.
  *
- * <p>There is no identifier, phone, phone hash or Matrix user id in this layout, and no room for one:
- * every offset is accounted for above. See {@link PlacementRecord} for why that is load-bearing.
+ * <p>The layout has no identifier, phone, phone hash or Matrix user id, and no room for one; see
+ * {@link PlacementRecord}.
  */
 public final class PlacementRecordCodec {
 
@@ -47,7 +46,7 @@ public final class PlacementRecordCodec {
     private static final int OFFSET_HOMESERVER_LENGTH = 41;
     private static final int OFFSET_HOMESERVER_ID = 42;
 
-    /** ADM-008 decision 7: validity is 400 days. A longer window is refused, not clamped. */
+    /** Validity is at most 400 days (ADM-008 decision 7). A longer window is refused, not clamped. */
     public static final Duration MAX_VALIDITY = Duration.ofDays(400);
 
     private PlacementRecordCodec() {
@@ -82,7 +81,7 @@ public final class PlacementRecordCodec {
         byte origin = bytes[OFFSET_ORIGIN];
         if (origin != accountId.rootClass()) {
             // The record's audit marker and the one baked into the id must agree, or a bootstrap
-            // account could be published as a rooted one (ADM-001 L5's third audit marker).
+            // account could be published as a rooted one (the bootstrap audit marker, ADM-001 L5).
             throw new InvalidGenesisException("origin_class_mismatch",
                     "the origin byte disagrees with the accountId root class");
         }

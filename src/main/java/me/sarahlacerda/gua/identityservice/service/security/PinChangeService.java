@@ -25,7 +25,7 @@ import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditL
  * Kept out of {@link UserSecurityService} on purpose. That service owns PIN recovery, which must
  * not consult passkeys until a recovery protocol exists (see {@link AuthFactorPolicy}), and a
  * source guard holds it to that. The account checks, the PIN validation and lockout, the scoped
- * code and its audit line all stay there; this class only decides which factor is weighed.
+ * code and its audit line all stay there; this class only decides which factor is checked.
  */
 @Service
 @RequiredArgsConstructor

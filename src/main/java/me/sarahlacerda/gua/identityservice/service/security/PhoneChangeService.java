@@ -29,33 +29,25 @@ import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditL
  * Two-step orchestration for changing an account's verified phone number.
  *
  * <p>
- * Security posture (see {@code FINAL DESIGN}):
+ * Security rules:
  * <ul>
- * <li><b>/start</b> is gated by a {@code PHONE_CHANGE}-scoped, single-use reauth
- * token <em>and</em> a mandatory non-phone step-up factor. The reauth token alone
- * proves only a current-phone OTP, which a SIM-swap attacker could control, hence
- * the extra factor. Which factors count, and in which order, is
- * {@link AuthFactorPolicy#stepUpFor(ReauthOperation)}: a user-verifying passkey
- * assertion first, the account PIN as the fallback for everyone who cannot produce
- * one, and accounts that can produce neither are rejected with
- * {@code step_up_required} (403) and must set up two-step verification first;
- * there is no token-only fallback.</li>
- * <li>The new-number OTP is namespaced per challenge
- * ({@link PhoneChangeOtpService}) so the public {@code /otp/send} cannot
- * overwrite or race it.</li>
- * <li>A passkey offered as the step-up factor must come from the dedicated,
- * user-verifying step-up ceremony ({@code POST /security/passkey/stepup/options}).
- * A possession-only assertion is refused: it would stand in for a factor that
- * counts failures and locks out, while carrying neither.</li>
- * <li>A PIN that was just created, changed or reset is refused as the step-up
- * factor until the fresh-2FA hold elapses, because the permissive login side can
- * mint a PIN and that PIN would otherwise re-point the number immediately. This
- * is an ADDITIONAL refusal; the per-account change cooldown and the reset
- * dormancy gates are untouched and still run.</li>
- * <li>{@code /complete} enforces an IP-independent per-challenge wrong-OTP cap,
- * then performs one atomic directory swap that carries
- * displayName/discoverable/username/homeserverId forward, then post-commit
- * revokes all tokens, audits and notifies.</li>
+ * <li>{@code /start} needs a {@code PHONE_CHANGE}-scoped, single-use reauth token <em>and</em> a
+ * non-phone step-up factor. The reauth token alone proves only a current-phone OTP, which a
+ * SIM-swap attacker could control. The accepted factors and their order are
+ * {@link AuthFactorPolicy#stepUpFor(ReauthOperation)}: a user-verifying passkey assertion first,
+ * the account PIN as the fallback, and {@code 403 step_up_required} for an account that produces
+ * neither. There is no token-only fallback.</li>
+ * <li>The new-number OTP is namespaced per challenge ({@link PhoneChangeOtpService}), so the
+ * public {@code /otp/send} cannot overwrite or race it.</li>
+ * <li>A passkey offered as the step-up must come from the user-verifying step-up ceremony
+ * ({@code POST /security/passkey/stepup/options}). A possession-only assertion is refused: it
+ * would stand in for a factor that counts failures and locks out while doing neither.</li>
+ * <li>A PIN or passkey created inside the fresh-2FA hold is refused as the step-up factor, because
+ * a login session can mint either and would otherwise re-point the number at once. This refusal
+ * is additional to the per-account change cooldown, which still runs.</li>
+ * <li>{@code /complete} enforces an IP-independent per-challenge wrong-OTP cap, performs one atomic
+ * directory swap that carries displayName, discoverable, username and homeserverId forward, then
+ * post-commit revokes all tokens, audits and notifies.</li>
  * </ul>
  */
 @Service
@@ -196,7 +188,7 @@ public class PhoneChangeService {
         // Idempotent exclusive binding on the homeserver, then the atomic swap.
         matrixProvisioningService.ensureExclusivePhoneBinding(userId, newE164);
 
-        // Delegate to a separate bean so the @Transactional proxy engages — a same-bean
+        // Delegate to a separate bean so the @Transactional proxy engages: a same-bean
         // self-call would bypass it and the swap would NOT be atomic.
         phoneDirectorySwapService.swap(userId, newE164);
 
@@ -246,18 +238,13 @@ public class PhoneChangeService {
                 auditLogger.reauthFailed(userId, ReauthOperation.PHONE_CHANGE.name(), requesterIp);
                 throw new InvalidPinException("Passkey does not belong to the calling account");
             }
-            // Accepted, and now held for its own age rather than for the PIN's. The hold on a
-            // freshly minted PIN exists because a session can create one and spend it minutes
-            // later on exactly this operation. A session can mint a passkey just as cheaply:
-            // POST /security/passkey/enroll/start needs only the bearer token and asks for no
-            // second factor, and the assertion that follows settles this step-up alone, with
-            // the PIN never asked for. Holding one factor and not the other would price the
-            // same takeover at seven days or at nothing depending on which one the attacker
-            // picked, so both are held, on the same window and with the same expiring refusal.
-            //
-            // It is the credential that answered that is weighed, not the account: an
-            // established passkey still settles the step-up at once, and a caller refused here
-            // keeps the PIN branch below by retrying with the PIN.
+            // Accepted, and now held for its own age. A session can mint a passkey as cheaply as
+            // a PIN (enroll/start needs only the bearer token), and the assertion settles this
+            // step-up alone, so both factors are held on the same window with the same expiring
+            // refusal; holding one and not the other would price the same takeover at seven days
+            // or at nothing. The hold is checked against the credential that answered, not the
+            // account: an established passkey still settles the step-up at once, and a caller
+            // refused here keeps the PIN branch below.
             userSecurityService.enforceFreshFactorHold(assertion.credentialRegisteredAt());
             return;
         }
@@ -273,10 +260,9 @@ public class PhoneChangeService {
                 throw ex;
             }
             // The PIN is the factor being accepted here, so the fresh-2FA hold applies to it.
-            // Deliberately inside this branch and after the check that accepts the PIN: an
-            // account that proved a passkey returned above and is never held for a fresh PIN
-            // it did not use, having already been weighed on the age of the credential it
-            // did use.
+            // Inside this branch and after the check that accepts the PIN: an account that
+            // proved a passkey returned above and is never held for a fresh PIN it did not
+            // use; the hold was already applied to the registration age of the passkey it used.
             userSecurityService.enforcePhoneChangePinHold(userId);
             return;
         }

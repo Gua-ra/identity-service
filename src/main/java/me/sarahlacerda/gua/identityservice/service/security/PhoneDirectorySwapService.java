@@ -19,12 +19,10 @@ import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
  * The single atomic directory mapping switch for a phone-number change.
  *
  * <p>
- * Isolated in its own bean <em>on purpose</em>: the swap must run inside one
- * transaction, and a self-invocation from {@link PhoneChangeService} would be
- * routed straight to the target method, bypassing Spring's transactional proxy
- * and silently degrading the "atomic swap" into several independent auto-commit
- * transactions. Calling it across this bean boundary makes the proxy — and the
- * single transaction — actually engage.
+ * Isolated in its own bean because the swap must run inside one transaction: a
+ * self-invocation from {@link PhoneChangeService} would bypass Spring's transactional
+ * proxy and split the swap into several auto-commit transactions. Calling across this
+ * bean boundary engages the proxy.
  */
 @Service
 @RequiredArgsConstructor
@@ -48,7 +46,7 @@ public class PhoneDirectorySwapService {
 
         // Reject up-front when the target number already belongs to ANOTHER account.
         // upsertByDigest would otherwise find the foreign row and reassign its userId
-        // via an UPDATE — the phone_digest is unchanged, so the UNIQUE constraint never
+        // via an UPDATE: the phone_digest is unchanged, so the UNIQUE constraint never
         // fires and the caller would silently hijack the victim's mapping. (Mirrors the
         // ownership guard the signup/login paths apply.)
         directoryService.findByDigest(newDigest)
@@ -59,7 +57,7 @@ public class PhoneDirectorySwapService {
 
         List<DirectoryEntry> currentEntries = directoryService.findByUserId(userId);
 
-        // Carry-forward source: prefer a row that actually has the values populated
+        // Carry-forward source: prefer a row that has the values populated
         // (the @Builder used by upsert omits username/homeserverId/discoverable).
         String displayName = firstNonBlank(currentEntries, DirectoryEntry::getDisplayName);
         String username = firstNonBlank(currentEntries, DirectoryEntry::getUsername);

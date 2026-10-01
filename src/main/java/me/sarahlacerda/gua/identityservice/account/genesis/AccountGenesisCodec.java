@@ -19,25 +19,18 @@ import java.util.Arrays;
  * 87      end
  * </pre>
  *
- * <h2>Why a fixed layout instead of ADM-007's {@code gua-lp.v1}</h2>
- * <p>ADM-007 fixes {@code gua-lp.v1} for the roster, member and governance objects: a u32 length before
- * every field and a schema tag opening every object. Where it already defines a primitive this package
- * follows it rather than inventing a second rule, which is why the placement timestamps these objects
- * will later travel with are epoch milliseconds in 8 big-endian bytes, and why an object hash is SHA-256
- * over the canonical bytes.
- *
- * <p>The account objects themselves keep fixed layouts, for the reason ADM-008 gives in its
- * "Relationship to ADM-007" section. They have no optional fields, no sets and no free strings, so
- * length prefixes would describe nothing that is not already constant. More importantly the accountId is
- * a permanent hash of these bytes, so the bytes that are hashed must be the bytes that crossed the wire;
- * a framing with a parse-then-re-serialize step invites exactly the re-encoding this must never do.
- * Both families still obey the same two ADM-001 L4 rules: one canonical byte representation, and
- * signatures over those bytes. They cannot be confused either, because a {@code gua-lp.v1} object opens
- * with a u32 length whose first byte is 0x00 while an account object opens with ASCII {@code GUA}.
+ * <p>Fixed layout, big-endian, no delimiters, no length prefixes: one canonical byte representation,
+ * with signatures over those bytes (ADM-001 L4). The accountId is a permanent hash of these bytes, so
+ * the bytes hashed must be the bytes received; the decoder keeps them verbatim and never re-encodes.
+ * Account objects do not use ADM-007's {@code gua-lp.v1} framing; ADM-008 "Relationship to ADM-007"
+ * gives the reasons. The two families cannot be confused: a {@code gua-lp.v1} object opens with a u32
+ * length whose first byte is 0x00, an account object with ASCII {@code GUA}. Primitives ADM-007 already
+ * defines are reused as is: timestamps are epoch milliseconds in 8 big-endian bytes and an object hash
+ * is SHA-256 over the canonical bytes.
  *
  * <p>The decoder rejects an unknown version, suite or framework, a wrong length, an all-zero key, equal
  * authority and recovery keys, and a key that fails Ed25519 point decoding. The all-zero rule is separate
- * from point decoding on purpose: the all-zero encoding decodes to a valid low-order point.
+ * from point decoding because the all-zero encoding decodes to a valid low-order point.
  */
 public final class AccountGenesisCodec {
 
@@ -57,7 +50,7 @@ public final class AccountGenesisCodec {
      * Strictly decodes canonical bytes. The returned object keeps the bytes exactly as passed in, so the
      * accountId is derived from what was received.
      *
-     * @throws InvalidGenesisException on any rule ADM-008 decision 1 states
+     * @throws InvalidGenesisException on any strict-decoding rule (ADM-008 decision 1)
      */
     public static AccountGenesis decode(byte[] bytes) {
         if (bytes == null || bytes.length != AccountGenesis.LENGTH) {

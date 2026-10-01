@@ -3,16 +3,16 @@ package me.sarahlacerda.gua.identityservice.domain;
 /**
  * A homeserver that this deployment can create accounts on.
  *
- * <p>Current implementation: this service picks a homeserver for a new account
- * from its configured registry and records that choice in its own directory, so
- * returning users (and username/phone lookups) resolve to the same place. That is
- * a local, per-deployment choice, not the federation placement model. Under
- * <a href="https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md">ADM-001</a> (L2, L6) placement is coordinated by the federation
- * and verifiable against signed policy and roster state; allocation is not
- * delegated to this service.
+ * <p>This service picks a homeserver for a new account from its configured registry and
+ * records the choice in its own directory, so returning users and username/phone lookups
+ * resolve to the same place. That is a local, per-deployment choice. In the target
+ * architecture placement is coordinated by the federation and verifiable against signed
+ * policy and roster state
+ * (<a href="https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md">ADM-001</a>,
+ * L2 and L6); allocation is not delegated to this service.
  *
- * <p>This is a closed-federation concept (à la Tchap): the homeservers listed
- * here are the ones Gua operates. It is NOT the open Matrix federation.
+ * <p>The registry is closed-federation configuration, in the style of Tchap: the homeservers
+ * Gua operates, not the open Matrix federation.
  *
  * @param id              stable identifier used in the directory (never the domain, so a
  *                        homeserver can be re-addressed without rewriting rows)

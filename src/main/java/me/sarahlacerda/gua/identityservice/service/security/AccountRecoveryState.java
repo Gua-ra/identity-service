@@ -13,15 +13,10 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * @param status                    see {@link Status}
  * @param availableAtEpochSeconds   {@link Status#TOO_SOON} only: when recovery may be requested.
  *                                  Rounded up to the start of the next UTC day, so it does not
- *                                  give away the time of the account's last sign-in and the
- *                                  clients can show a date with no clock time. The exception is a
- *                                  deployment with
- *                                  {@code account-recovery-allow-short-for-testing} on, where it
- *                                  stays rounded up to the next whole minute, because a day would
- *                                  dwarf the durations dev QA runs with. The clients render it as
- *                                  a date whatever the rounding, so on such a deployment a
- *                                  two-minute wait still reads as a date, which is the price of
- *                                  having a value that moves at all while QA watches it
+ *                                  reveal the time of the account's last sign-in; rounded up to
+ *                                  the next whole minute when
+ *                                  {@code account-recovery-allow-short-for-testing} is on, so QA
+ *                                  can see the value move. Clients render it as a date either way
  * @param completableAtEpochSeconds {@link Status#PENDING} and {@link Status#READY}: when the wait
  *                                  is over
  * @param expiresAtEpochSeconds     {@link Status#PENDING} and {@link Status#READY}: when the
@@ -29,11 +24,9 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * @param dormancySeconds           how long the account must go unused before a recovery may be
  *                                  started, and
  * @param waitSeconds               how long a started recovery waits before it can be finished.
- *                                  Both are configuration rather than episode state, so both are
- *                                  present at every status: the screen that explains the two
- *                                  waits has to say what this deployment actually enforces, and
- *                                  hardcoding them left the dev target, where they are minutes,
- *                                  claiming seven days
+ *                                  Both are configuration, not episode state, so both are present
+ *                                  at every status: the screen that explains the two waits must
+ *                                  state what this deployment enforces
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record AccountRecoveryState(

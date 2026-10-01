@@ -22,41 +22,25 @@ import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
 import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditLogger;
 
 /**
- * The OTP reauthentication that gates the sensitive account operations (phone change,
- * deactivation, identity reset). The caller is already authenticated for the session but must
- * prove possession of the number on the account before the request is honoured, in the spirit
- * of the Matrix {@code m.login.msisdn} UIA stage.
+ * OTP reauthentication for the sensitive account operations (phone change, deactivation,
+ * identity reset): the caller already holds a session and must additionally prove possession
+ * of the number on the account, in the spirit of the Matrix {@code m.login.msisdn} UIA stage.
  *
  * <p>
- * The number is supplied by the caller and checked against the account, rather than looked up
- * and used. The signed-in user types their current number; it is normalized, digested with the
- * directory's peppered HMAC, and compared with the digests of that account's own
+ * The caller supplies the number; it is never looked up. It is normalized, digested with the
+ * directory's peppered HMAC and compared with the digests of the account's own
  * {@code directory_entries} rows. Only a match sends the code, and the code goes to the number
- * that was just proved to be the account's.
+ * just proved to be the account's. Nothing is persisted between start and verify: verify
+ * re-derives everything from the number submitted again. The refusal is identical whether the
+ * number is unknown, belongs to somebody else or is simply not this account's, so the endpoint
+ * cannot be used to ask who owns a number. The homeserver's threepid bindings are not consulted:
+ * they would put every raw MSISDN on the homeserver, and the directory already holds the
+ * authoritative binding.
  *
  * <p>
- * Three properties fall out of doing it this way, and all three were the point:
- * <ul>
- * <li>No raw number is stored and nothing new is written. Verification re-derives everything
- * from the number the caller submits again, so there is no pending-phone record to leak or to
- * get stale.</li>
- * <li>Nothing is revealed about any other account. The refusal is identical whether the number
- * is unknown, belongs to somebody else, or is simply not this account's, so it cannot be used
- * to ask who owns a number.</li>
- * <li>It does not depend on the homeserver's threepid bindings, which would have put the raw
- * MSISDN of every account on the homeserver and which the admin API serves unreliably under
- * MAS delegated authentication. The directory already holds the authoritative binding.</li>
- * </ul>
- *
- * <p>
- * Two-step interface so the client UI can show progress between the SMS send and the code
- * entry:
- * <ol>
- * <li>{@link #startReauth(String, String, String, String)} sends a fresh OTP to the number the
- * caller proved is the account's.</li>
- * <li>{@link #verifyReauth(String, String, String, ReauthOperation, String)} exchanges the code
- * for a single-use, operation-scoped reauth token spent on a privileged endpoint.</li>
- * </ol>
+ * {@link #startReauth(String, String, String, String)} sends the OTP;
+ * {@link #verifyReauth(String, String, String, ReauthOperation, String)} exchanges the code for a
+ * single-use, operation-scoped reauth token.
  */
 @Service
 @RequiredArgsConstructor

@@ -9,21 +9,16 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.HomeserverConfig;
 
 /**
- * The one place a homeserver's federation roster id is worked out.
+ * Derives a homeserver's federation roster id.
  *
  * <p>Two namespaces meet in the shadow comparison. The local registry id is what this deployment calls a
  * homeserver and what {@code directory_entries.homeserver_id} holds; the roster id is federation state and
- * is what a placement record carries. Every part of the comparison has to agree on that mapping, because
- * the job indexes the configured homeservers by roster id and then looks up the roster id a MAS reader
- * returned. If the two sides computed it differently the lookup would miss, and a missed lookup is not a
- * loud failure: it silently skips the cross-checks and reports the account as a benign data-quality
- * finding instead of the correctness event it is.
- *
- * <p>That is exactly what happened while this logic existed three times over. The signer consulted
- * {@code identity.placement.federation-id-aliases} and the two MAS readers did not, so a homeserver with
- * no explicit {@code federationId} but an alias for its local id was one id to the signer and another to
- * the reader. Keeping the rule in one collaborator is what makes that class of bug unrepresentable, and
- * {@code PlacementRecordsNotServedGuardTest} fails if a reader grows its own copy again.
+ * is what a placement record carries. The job indexes the configured homeservers by roster id and then
+ * looks up the roster id a MAS reader returned, so the signer and every reader must derive it the same
+ * way, {@code identity.placement.federation-id-aliases} included. A reader with its own copy of the rule
+ * would silently miss the cross-checks and report the account as a benign data-quality finding instead
+ * of the correctness event it is. {@code PlacementRecordsNotServedGuardTest} fails if a reader grows its
+ * own copy.
  */
 @Component
 public class FederationIds {

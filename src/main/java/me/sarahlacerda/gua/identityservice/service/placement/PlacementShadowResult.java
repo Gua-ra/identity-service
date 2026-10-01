@@ -5,7 +5,8 @@ import java.util.Locale;
 
 /**
  * The closed classification vocabulary of the shadow comparison (ADM-008 decision 9). Every account
- * lands in exactly one of these, and the Phase 4 exit criteria are stated in these words.
+ * lands in exactly one of these, and the shadow-window exit criteria (migration plan phase 4) are
+ * stated in these words.
  *
  * <p>The brief's definitions overlap: an account with one MAS link, an agreeing directory and no
  * published record satisfies both {@code agree} and {@code record_missing}, and one with a stale
@@ -64,7 +65,7 @@ public enum PlacementShadowResult {
     }
 
     /**
-     * True for the results that block the Phase 4 exit until explained, and that stop a record being
+     * True for the results that block the shadow-window exit until explained, and that stop a record being
      * published for the account.
      */
     public boolean isCorrectnessEvent() {

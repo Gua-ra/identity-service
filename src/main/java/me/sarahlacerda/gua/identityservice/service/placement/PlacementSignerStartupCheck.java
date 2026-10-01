@@ -28,16 +28,14 @@ import me.sarahlacerda.gua.identityservice.service.placement.ResolverPlacementCl
  * published key. Any of them being wrong produces records the resolver silently rejects, or worse,
  * records naming a homeserver this deployment is not.
  *
- * <p>Checked once at startup and failed fast, in the pattern the directory pepper pin already uses: a
- * misconfiguration that only shows up as a rejection rate on a nightly job is a misconfiguration nobody
- * notices for a week.
+ * <p>Checked once at startup and failed fast, like the directory pepper pin: a misconfiguration that only
+ * shows up as a rejection rate on a nightly job goes unnoticed.
  *
- * <p>Two namespaces meet here, which is the trap this guards. The local registry id is what
- * {@code directory_entries.homeserver_id} holds; the roster id is what a record carries. They are joined
- * on the Matrix domain, which is unique in the roster. The legacy synthesised homeserver has no roster
- * identity at all, so publishing requires an explicit {@code identity.routing.homeservers} list rather
- * than silently inventing one; the alias map exists only so that comparisons can read legacy directory
- * values, never so that a record can be signed for a guessed homeserver.
+ * <p>Two namespaces meet here. The local registry id is what {@code directory_entries.homeserver_id}
+ * holds; the roster id is what a record carries. They are joined on the Matrix domain, which is unique in
+ * the roster. The legacy synthesised homeserver has no roster identity, so publishing requires an explicit
+ * {@code identity.routing.homeservers} list; the alias map lets comparisons read legacy directory values
+ * and never lets a record be signed for a guessed homeserver.
  *
  * <p>Inert unless {@code identity.placement.publish.enabled} is on. A deployment that only runs the
  * comparison never reaches this check, and one that has turned the feature off entirely never reads the
@@ -101,13 +99,9 @@ public class PlacementSignerStartupCheck {
     }
 
     /**
-     * The configured window has to be one the codec will actually encode.
-     *
-     * <p>{@code recordValidity} is a freely configurable {@code Duration} while ADM-008 decision 7 fixes
-     * validity at 400 days and {@link PlacementRecordCodec} refuses anything longer. Without this check a
-     * value of, say, {@code P401D} is accepted at boot and then throws on every single signature, which
-     * surfaces at 03:20 as a job that failed rather than as the misconfiguration it is. Refusing here
-     * costs a restart; the alternative costs a night of the 14-day exit window.
+     * The configured window must be one the codec encodes: validity is at most 400 days (ADM-008
+     * decision 7) and {@link PlacementRecordCodec} refuses anything longer. Checked at boot so a bad
+     * value fails startup instead of failing every nightly signature.
      */
     private void verifyValidityWindow() {
         Duration validity = properties.getPlacement().getRecordValidity();

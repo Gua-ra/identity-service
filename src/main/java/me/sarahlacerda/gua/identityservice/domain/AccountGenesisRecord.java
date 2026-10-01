@@ -19,7 +19,7 @@ import lombok.Setter;
  * (ADM-008 decision 2, ADM-001 L3 and L5).
  *
  * <p>The row is local to identity-service and is not replicated: the MXID to accountId link stays
- * private here. Nothing in Phase 3 reads it for routing or for login.
+ * private here. Nothing reads it for routing or for login.
  *
  * <p>An accountId is permanent. Deactivating an account leaves this row in place (L3), and no code path
  * updates {@link #origin}: a bootstrap account is not adopted into a rooted one in this phase.
@@ -121,8 +121,8 @@ public class AccountGenesisRecord {
     }
 
     /**
-     * A genesis row after its attach: the shape {@code AccountGenesisRepository.attach} leaves behind,
-     * with the handle and the window burned and the account named.
+     * A genesis row after {@code AccountGenesisRepository.attach}: the handle is consumed, the attach
+     * window closed and the account set.
      */
     public static AccountGenesisRecord attachedGenesis(String accountId, String userId, short version, short suite,
             String genesisB64, String authorityKeyB64, Instant attachedAt) {

@@ -7,83 +7,49 @@ import org.springframework.stereotype.Service;
 import lombok.RequiredArgsConstructor;
 
 /**
- * The one place that answers which authentication factor applies to what.
+ * Decides which authentication factor each flow requires.
  *
  * <p>
- * Four questions. Two of them it decides for every caller that used to decide them
- * locally, and two it states rather than enforces. Which is which is worth knowing before
- * editing any of them, because a reader who takes all four for enforcement will change a
- * declaration and expect the server to follow it:
+ * Four questions. Two are decided here; two are only published, so editing a published value
+ * does not change what the server enforces:
  * <ol>
- * <li>{@link #registeredFactors(String)}, and {@link #preferredFactor(String)} for one of
- * its halves: what the account holds and which of it ranks highest. Decided here, and read
- * by the status endpoint and by the interactive login state.</li>
- * <li>{@link #loginPolicy(String)}: which factor finishes a sign-in after the phone OTP.
- * Decided here; the interactive login flow and the legacy {@code /otp/verify} path both
- * take their routing from it and keep none of their own. Its
- * {@code factorSetupRequired} half is also what confines the SMS proof of the enrollment
+ * <li>{@link #registeredFactors(String)} and {@link #preferredFactor(String)}: what the account
+ * holds and which factor ranks highest. Decided here; read by the status endpoint and by the
+ * interactive login state.</li>
+ * <li>{@link #loginPolicy(String)}: which factor finishes a sign-in after the phone OTP. Decided
+ * here; the interactive login flow and the legacy {@code /otp/verify} path keep no routing of
+ * their own. Its {@code factorSetupRequired} half also confines the SMS proof of the enrollment
  * step-up to accounts that hold nothing stronger.</li>
- * <li>{@link #stepUpFor(ReauthOperation)}: what a privileged operation accepts. Published,
- * not enforced. {@code GET /security/pin/status} hands the list to clients as
- * {@code phoneChangeStepUpFactors}, while {@code PhoneChangeService.enforceStepUp} carries
- * the same rule in its own branches and never asks for it. That is deliberate, and the
- * reason is on {@link #stepUpFor(ReauthOperation)}: a value that could switch the PIN
- * branch or the final refusal off would turn one configuration edit into either a lockout
- * or a bypass. The price is that the two can drift, with nothing but tests holding them
- * together, so editing either one alone makes the server misdescribe what it will
- * take.</li>
- * <li>{@link #recoveryFor(String)}: what recovering an account restores and removes.
- * Written down here, called nowhere. The delayed recovery runs in
- * {@link AccountRecoveryService}; a guard test freezes this method's body as a statement
- * that branches on nothing.</li>
+ * <li>{@link #stepUpFor(ReauthOperation)}: what a privileged operation accepts. Published to
+ * clients as {@code phoneChangeStepUpFactors}; {@code PhoneChangeService.enforceStepUp} carries
+ * the same rule in its own branches and never reads this value, because a value that could
+ * switch the PIN branch or the final refusal off would turn one configuration edit into a
+ * lockout or a bypass. Tests hold the two in agreement.</li>
+ * <li>{@link #recoveryFor(String)}: what recovering an account restores and removes. Stated
+ * here, run by {@link AccountRecoveryService}; a guard test freezes this method's body.</li>
  * </ol>
  *
- * <h2>Held, registered and usable</h2>
- *
  * <p>
- * Three different things, and each question above reads exactly one of them:
+ * Three distinct states; each question reads exactly one of them:
  * <ul>
- * <li><b>Held</b>: a credential row exists. {@link #passkeyHeld(String)} and
- * {@link #pinRegistered(String)}. This is what sign-in routing, the legacy REST checks and
- * recovery read, and it ignores whether this deployment currently has passkeys switched on.
- * Switching passkeys off must not turn a passkey-only account into one that an SMS code
- * alone can finish, because that account's next step would be setting a PIN of the SMS
- * holder's choosing.</li>
- * <li><b>Registered</b>: held AND this deployment can assert it.
- * {@link #passkeyRegistered(String)}. This is what the published status fields report, so a
- * client is never offered a ceremony the server cannot run.</li>
+ * <li><b>Held</b> ({@link #passkeyHeld(String)}, {@link #pinRegistered(String)}): a credential
+ * row exists, whether or not this deployment has passkeys switched on. Sign-in routing, the
+ * legacy REST checks and recovery read this. Switching passkeys off must not turn a
+ * passkey-only account into one an SMS code finishes, because its next step would be a PIN of
+ * the SMS holder's choosing.</li>
+ * <li><b>Registered</b> ({@link #passkeyRegistered(String)}): held and assertable on this
+ * deployment. The published status fields report this, so a client is never offered a
+ * ceremony the server cannot run.</li>
  * <li><b>Usable on this device</b>: only the client knows, and anyone holding a session can
- * claim it. It is never reported, accepted or inferred here. There is no field anywhere for a
- * client to say "my passkey is unavailable" and be given a weaker path; that claim costs an
- * attacker nothing.</li>
+ * claim it. No field lets a client declare its passkey unavailable and receive a weaker
+ * path.</li>
  * </ul>
  *
- * <h2>Why a held passkey can now be required</h2>
- *
  * <p>
- * An account that holds a passkey and no PIN must present the passkey after the OTP. That
- * used to be refused here as permanent lockout, since a credential left on a lost phone
- * could not be removed or replaced. It is no longer lockout, because the account has a way
- * back that does not need the credential: the delayed recovery in
- * {@link AccountRecoveryService}. Recovery waits out a dormancy period and a waiting period,
- * is cancelled by any sign-in with a factor and by any signed-in app, and on completion sets a
- * new PIN and removes the passkeys it assumed were lost. The wait is what proves the stronger
- * factor is really gone: an account holder who still has it has a week to use it.
- *
- * <p>
- * The PIN stays the fallback underneath a held passkey. An account holding both is asked for
- * the PIN and may present the passkey instead; a held passkey never removes the PIN step's
- * availability, and a PIN never makes the passkey unacceptable.
- *
- * <h2>Acquiring a factor</h2>
- *
- * <p>
- * Adding one from settings is not free either: an already-signed-in user goes through the
- * enrollment step-up, which asks for the strongest thing the account can produce and accepts a
- * code sent to the account's own number only from an account that holds nothing at all. A bearer
- * session is what an attacker gets hold of, and a factor created from one outlives it. The
- * account that can produce nothing it holds is not stranded by that: its way back is the delayed
- * recovery, which waits, rather than a weaker enrollment, which does not.
+ * A held passkey can be required without stranding the account: whoever cannot produce it has
+ * the delayed recovery in {@link AccountRecoveryService}. Adding a factor from settings goes
+ * through the enrollment step-up in {@link LoginFactorEnrollmentService}; a bearer session alone
+ * never adds one.
  */
 @Service
 @RequiredArgsConstructor
@@ -144,7 +110,7 @@ public class AuthFactorPolicy {
     }
 
     /**
-     * The strongest factor the account actually holds, which is what a client should offer
+     * The strongest factor the account holds, which is what a client should offer
      * first. Falls back to {@link AuthFactor#PHONE_OTP}, which every account has by
      * construction, since an account is reached through a verified number.
      */
@@ -187,12 +153,11 @@ public class AuthFactorPolicy {
      * What a privileged operation demands, as a function of the operation and nothing else.
      *
      * <p>
-     * Deliberately not a function of the account. Narrowing the accepted set by what an
-     * account happens to hold is how a bare existence check turns into a lockout: an
-     * account whose only accepted factor has become unusable would have no way through at
-     * all. The accepted set is fixed per operation, and which of those factors a given
-     * account can actually produce is settled at the call site, where failing to produce
-     * one still leaves the others.
+     * Not a function of the account: narrowing the accepted set by what an account holds
+     * turns an existence check into a lockout, since an account whose only accepted factor
+     * became unusable would have no way through. The accepted set is fixed per operation;
+     * which factor a given account can produce is settled at the call site, where failing
+     * to produce one still leaves the others.
      *
      * <p>
      * {@code DEACTIVATE} and {@code IDENTITY_RESET} are reported as they are enforced

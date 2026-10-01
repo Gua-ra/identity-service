@@ -7,30 +7,22 @@ import io.micrometer.core.instrument.MeterRegistry;
 import me.sarahlacerda.gua.identityservice.service.SmsSender;
 
 /**
- * Eagerly registers every {@code gua_identity_*} counter family at startup so
- * the metric names are present on {@code /actuator/prometheus} from the very
- * first scrape of a fresh pod:
+ * Eagerly registers every {@code gua_identity_*} counter family at startup, so the
+ * names are present on {@code /actuator/prometheus} from a fresh pod's first scrape:
  * <ul>
  *   <li>{@code gua_identity_signup_total{result="success",country="unknown"}}</li>
  *   <li>{@code gua_identity_login_total{result="success"}}</li>
  *   <li>{@code gua_identity_otp_verify_total{result="valid"|"invalid"|"exhausted",flow=&lt;where the code was spent&gt;}}</li>
  *   <li>{@code gua_identity_sms_send_total{provider=&lt;wired sender&gt;,result="sent"|"failed"}}</li>
  * </ul>
- * Micrometer counters are otherwise created lazily on first increment (see
- * {@code IdentityOrchestrationService} and {@code OtpService}), so a freshly
- * rolled pod exposed no {@code gua_identity_*} series until the first
- * signup/login/OTP/SMS event and the Grafana panels built on them showed
- * "no data" instead of 0. gua-resolver registers its meters eagerly at bean
- * construction ({@code RosterMetrics}, {@code ResolveController}) and its
- * panels never go blank; this mirrors that pattern.
+ * Micrometer otherwise creates a counter on its first increment, so a panel built on
+ * a series nothing has incremented yet reads "no data" instead of 0.
  * <p>
- * Registration is idempotent: the increment call sites are unchanged, and
- * {@link MeterRegistry#counter} returns these same instances for the same
- * name + tags. Only tag values the increment call sites can already produce
- * are used ({@code country="unknown"} is the existing fallback bucket of
- * {@code IdentityOrchestrationService#regionOf}, not a fabricated ISO code),
- * so tag cardinality is identical to before; real per-country series still
- * appear on the first signup from each country.
+ * Registration is idempotent: {@link MeterRegistry#counter} returns these same
+ * instances to the increment call sites for the same name and tags. Only tag values
+ * those call sites already produce are registered ({@code country="unknown"} is the
+ * existing fallback bucket of {@code IdentityOrchestrationService#regionOf}), so
+ * cardinality is unchanged.
  */
 @Component
 public class IdentityMetricsInitializer {
@@ -56,7 +48,7 @@ public class IdentityMetricsInitializer {
         }
 
         // provider matches whichever SmsSender bean is wired (twilio in prod,
-        // logging in dev) — the same value OtpService tags its increments with.
+        // logging in dev), the same value OtpService tags its increments with.
         String provider = SmsSender.providerTag(smsSender);
         Counter.builder("gua.identity.sms.send").tag("provider", provider).tag("result", "sent").register(metrics);
         Counter.builder("gua.identity.sms.send").tag("provider", provider).tag("result", "failed").register(metrics);

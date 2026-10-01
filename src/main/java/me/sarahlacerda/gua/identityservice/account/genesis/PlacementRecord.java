@@ -7,17 +7,15 @@ import java.time.Instant;
  * A generation-1 placement record: one accountId bound to one roster homeserver id, signed by that
  * homeserver's roster membership key (ADM-008 decision 7, ADM-001 L6 generation 1).
  *
- * <p><b>What it deliberately does not carry.</b> There is no identifier, no phone number, no phone hash
- * and no Matrix user id anywhere in this type or in the bytes {@link PlacementRecordCodec} produces.
- * That is ADM-001 L15 (routing-key privacy in replicated state) and L4, and it is the whole reason this
- * per-account object is publishable where the deleted {@code phone -> homeserver} directory write was
- * not: it binds nothing to an identifier. The accountId is a 256-bit hash, the origin byte is an audit
- * marker, the homeserver id is a roster id, and the three timestamps are a validity window. Adding a
- * field that identifies the human would reopen L15, so {@code PlacementRecordCodecTest} fails if this
- * record grows one.
+ * <p>It carries no identifier, no phone number, no phone hash and no Matrix user id, in the type or in
+ * the bytes {@link PlacementRecordCodec} produces: replicated state holds no raw identifier (ADM-001
+ * L15, L4). That is what makes this per-account object publishable where the deleted
+ * {@code phone -> homeserver} directory write was not. {@code PlacementRecordCodecTest} fails if the
+ * record grows an identifying field.
  *
- * <p>The record is homeserver-asserted. Generation 1 is not the five-step transaction of L6, and it
- * improves no compromise condition (ADM-008 consequences); it records where an account already lives.
+ * <p>The record is homeserver-asserted. Generation 1 is not the five-step committed placement
+ * transaction (ADM-001 L6) and improves no compromise condition; it records where an account already
+ * lives.
  *
  * @param version       format version, {@value #VERSION}
  * @param generation    placement generation, {@value #GENERATION_ONE}

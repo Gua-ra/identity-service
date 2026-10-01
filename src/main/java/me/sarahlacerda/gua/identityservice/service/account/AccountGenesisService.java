@@ -36,7 +36,7 @@ import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.repository.AccountGenesisRepository;
 
 /**
- * Registration, attach and bootstrap for account genesis (ADM-008 Phase 3).
+ * Registration, attach and bootstrap for account genesis (migration plan phase 3, decided in ADM-008).
  *
  * <p>Nothing here is read for routing or for login. The accountId is derived, stored and audited; it
  * never becomes a claim, a localpart or a directory column, because the MAS localpart template is
@@ -95,8 +95,9 @@ public class AccountGenesisService {
                     "The registration proof does not verify under the committed authority key.");
         }
 
-        // ADM-008 decision 4. Framework 0x01 commits one recovery key and no delay bounds, and that key
-        // shares the device store with the key it would veto, so production issuance waits on ADM-002.
+        // Framework 0x01 issuance stays off outside dev (ADM-008 decision 4): it commits one recovery key
+        // and no delay bounds, and that key shares the device store with the key it would veto, so
+        // production issuance waits on ADM-002.
         if (genesis.recoveryFrameworkId() == AccountGenesis.RECOVERY_FRAMEWORK_COMMITTED_KEY
                 && !genesisProperties().isProductionIssuance()) {
             throw new GenesisRegistrationException(HttpStatus.FORBIDDEN, "genesis_issuance_not_permitted",
@@ -160,10 +161,10 @@ public class AccountGenesisService {
     /**
      * Attaches a registered genesis to a newly created account, inside the caller's transaction.
      *
-     * <p>{@link Propagation#MANDATORY} is the point: ADM-008 decision 6 requires the verification to
-     * happen inside the account-creation transaction, so this refuses to run outside one. A failure here
-     * therefore rolls the account back with it, rather than leaving an account attached to nothing or a
-     * genesis attached to an account that was never written.
+     * <p>Attach-proof verification must run inside the account-creation transaction (ADM-008 decision
+     * 6), so {@link Propagation#MANDATORY} refuses to run outside one. A failure here rolls the account
+     * back with it, instead of leaving an account attached to nothing or a genesis attached to an
+     * account that was never written.
      *
      * @param attachHandle the handle carried by the login session, never one read from the request body
      * @param challengeB64 the challenge held against that session, never one supplied by the client
@@ -237,7 +238,8 @@ public class AccountGenesisService {
     }
 
     /**
-     * Mints a bootstrap accountId for an account that presented no handle (ADM-001 L5 path B1).
+     * Mints a bootstrap accountId for an account that presented no handle. A bootstrap account holds no
+     * authority key and is marked so an audit can tell it from a rooted one (ADM-001 L5).
      *
      * <p>Idempotent: an account that already holds a genesis row keeps it, so this is safe on a retry
      * and safe to call from the backfill.

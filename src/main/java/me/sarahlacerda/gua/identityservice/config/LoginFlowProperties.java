@@ -79,14 +79,13 @@ public class LoginFlowProperties {
          * ({@code IDP_LOGIN_ENROLL_REDIRECT_URIS}, comma separated).
          *
          * <p>
-         * Each build of the apps answers its own scheme, the store build {@code global.gua}, a
-         * QA build {@code global.gua.dev}, an Android debug build {@code global.gua.debug}, and
-         * the only party that knows which build is asking is the build itself: its bearer token
-         * is a homeserver token, so it names no client of ours to read the scheme off. The value
-         * therefore has to be able to come from the caller, and this list is what stops that
-         * from turning a bearer endpoint into one that hands a session's completion wherever the
-         * caller asks. A named value is compared against these entries exactly; anything else is
-         * refused with {@code invalid_redirect_uri} and never stamped on a session.
+         * Each build of the apps answers its own scheme ({@code global.gua}, {@code global.gua.dev},
+         * {@code global.gua.debug}) and only the build knows which one is asking: its bearer token
+         * is a homeserver token and names no client of ours to read a scheme off. So the value may
+         * come from the caller, and this allowlist keeps a bearer endpoint from handing a session's
+         * completion wherever the caller asks. A named value is compared against these entries
+         * exactly; anything else is refused with {@code invalid_redirect_uri} and never stamped on
+         * a session.
          *
          * <p>
          * Unset means the allowlist is exactly {@link #redirectUri}, so no deployment changes
@@ -145,7 +144,7 @@ public class LoginFlowProperties {
         /**
          * Phone numbers (E.164) permitted to start a new web signup while
          * {@link #webAllowlistEnabled} is on. Numbers that already have an account do
-         * not need to be listed — they are recognised automatically, which is how an
+         * not need to be listed; they are recognised automatically, which is how an
          * app-registered number can also log in on the web. Normalized before
          * comparison, so entries lacking a country code use the default region.
          */

@@ -92,7 +92,7 @@ public class OtpService {
         redisTemplate.opsForValue().set(codeKey, code, ttl);
         try {
             smsSender.send(e164PhoneNumber, messageBody);
-            // gua_identity_sms_send_total{provider,result} — SMS usage + delivery failures.
+            // gua_identity_sms_send_total{provider,result}: SMS usage and delivery failures.
             metrics.counter("gua.identity.sms.send", "provider", smsProvider, "result", "sent").increment();
         } catch (RuntimeException ex) {
             metrics.counter("gua.identity.sms.send", "provider", smsProvider, "result", "failed").increment();
@@ -118,7 +118,7 @@ public class OtpService {
     private void verify(String codeKey, String attemptsKey, String code, OtpVerifyFlow flow) {
         String storedCode = redisTemplate.opsForValue().get(codeKey);
         if (!StringUtils.hasText(storedCode)) {
-            // gua_identity_otp_verify_total{result} — wrong/expired codes (auth friction / abuse signal).
+            // gua_identity_otp_verify_total{result}: wrong/expired codes (auth friction / abuse signal).
             metrics.counter("gua.identity.otp.verify", "result", "invalid", "flow", flow.tagValue()).increment();
             throw new InvalidOtpException("Invalid or expired verification code");
         }
@@ -193,13 +193,11 @@ public class OtpService {
      * Picks the SMS template for the language the caller asked for, keyed by BCP-47 tag.
      *
      * <p>
-     * The underscore is folded to a hyphen first because the platform locale APIs the apps reach
-     * for hand out the ICU identifier, {@code pt_BR}, rather than the language tag, {@code pt-BR}.
-     * Without the fold that value matches no key and carries no hyphen either, so the
-     * primary-tag fallback below never runs and a Brazilian caller is texted in English. The
-     * clients send a proper tag now, but the cost of accepting the other spelling is one
-     * replacement and what it buys is that no app can silently drop a user back to English by
-     * reaching for the wrong locale property.
+     * The underscore is folded to a hyphen first because the platform locale APIs hand out the ICU
+     * identifier, {@code pt_BR}, rather than the language tag, {@code pt-BR}. Without the fold that
+     * value matches no key and carries no hyphen, so the primary-tag fallback below never runs and a
+     * Brazilian caller is texted in English. Accepting both spellings costs one replacement, so no
+     * app can silently fall back to English by reading the wrong locale property.
      */
     private String resolveTemplate(String requestedLanguage) {
         String defaultTemplate = properties.getOtp().getSmsTemplate();

@@ -12,15 +12,14 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.domain.Homeserver;
 
 /**
- * Default per-deployment routing choice for a new account, in the current
- * implementation. It selects one of this deployment's configured homeservers by a
- * local rule; the result is recorded in this service's directory and nothing
- * outside this service can re-derive it. In the target architecture it is
- * superseded by the committed, verifiable placement of
- * <a href="https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md">ADM-001</a>
- * L6, under which the target homeserver also authenticates the account itself
- * (L2); neither is implemented here. Supports three strategies (config
- * {@code identity.routing.strategy}):
+ * Default per-deployment routing choice for a new account. It selects one of this
+ * deployment's configured homeservers by a local rule; the result is recorded in this
+ * service's directory and nothing outside this service can re-derive it. The target
+ * architecture replaces it with committed, verifiable placement, under which the holding
+ * homeserver also authenticates the account
+ * (<a href="https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md">ADM-001</a>
+ * L6 and L2); neither is implemented here. Three strategies
+ * ({@code identity.routing.strategy}):
  *
  * <ul>
  *   <li><b>single</b> (default): always the registry's default homeserver. This
