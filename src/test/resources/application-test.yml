@@ -18,3 +18,7 @@ identity:
       enabled: false
   rate-limits:
     enabled: false
+  genesis:
+    bootstrap-backfill:
+      # The contexts booted on this profile create no tables, and the startup backfill scans the account tables.
+      enabled: false
