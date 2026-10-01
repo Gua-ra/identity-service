@@ -17,26 +17,12 @@ import me.sarahlacerda.gua.identityservice.service.placement.ResolverPlacementCl
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Phase 4 computes, publishes and compares placement records, and serves nothing from them. That is an
- * explicit non-goal of the phase rather than an oversight, and this is the test the brief asks for.
- *
- * <p>The hazard is the obvious next step. Once an accountId-to-homeserver mapping exists in federation
- * state, reading it to answer a routing question is a small, tempting change; and it is exactly the
- * change no later phase may make until every shadow-mode exit criterion holds, because a record that is
- * merely published has been checked by nobody. So the resolution and login paths must not learn that
- * placement records exist at all, and there is deliberately no flag that would turn serving on.
- *
- * <p>The resolver enforces its own half, that its resolution path never reads the placement table. This
- * is the identity-service half: nothing that decides where an account lives, who it is, or what MAS is
- * told about it may reach a placement record.
- */
+/** Nothing that decides where an account lives, who it is, or what MAS is told may reach a placement record. */
 class PlacementRecordsNotServedGuardTest {
 
     private static final Path MAIN_SOURCES = Path.of("src", "main", "java");
     private static final Path MAIN_RESOURCES = Path.of("src", "main", "resources");
 
-    /** Everything that decides where an account lives, who it is, or what MAS is told about it. */
     private static final Set<String> ROUTING_AND_LOGIN_PATH = Set.of(
             "OidcTokenService.java", "OidcAuthorization.java", "OidcAuthorizationService.java",
             "OidcUserInfoController.java", "OidcAuthorizationController.java", "LoginFlowController.java",
@@ -47,11 +33,8 @@ class PlacementRecordsNotServedGuardTest {
             "AccountCreationService.java", "IdentityOrchestrationService.java", "ContactDiscoveryService.java",
             "SignInController.java", "SignupController.java");
 
-    /**
-     * The placement types by name. Matching these rather than the word "placement" is deliberate: the
-     * routing code has always had an {@code AccountPlacementContext}, which is the local choice of a
-     * homeserver for a new account and has nothing to do with a signed record.
-     */
+    // Matched by type name, not the word "placement": AccountPlacementContext is the unrelated local routing
+    // choice.
     private static final List<String> PLACEMENT_RECORD_TYPES = List.of(
             "PlacementRecord", "PlacementRecordCodec", "PlacementRecordSigner", "ResolverPlacementClient",
             "PlacementShadowReconciler", "PlacementAccountScanner", "PlacementShadowResult",
@@ -113,9 +96,6 @@ class PlacementRecordsNotServedGuardTest {
                 .sorted()
                 .toList();
 
-        // Reading the roster, reading one record back to compare, and publishing one. In particular
-        // there is no call that would append a transparency-log leaf per record: anchoring is the
-        // resolver's periodic checkpoint, and one leaf per record would churn its fallback placement.
         assertThat(methods).containsExactlyInAnyOrder("fetchRoster", "findRecord", "publish", "isConfigured");
     }
 
@@ -145,14 +125,12 @@ class PlacementRecordsNotServedGuardTest {
                 .orElseThrow();
         String body = methodBody(Files.readString(reconciler), "private void maybeHeal(");
 
-        // Healing writes routing state. If it ever read a published record, a routing decision would be
-        // derived from placement state, which is the whole thing this phase does not do.
         assertThat(body).isNotBlank();
         assertThat(body).doesNotContain("published");
         assertThat(body).doesNotContain("PlacementRecord");
         assertThat(body).doesNotContain("findRecord");
-        // Naming the record's homeserver would satisfy every assertion above while still deriving
-        // routing state from a record, so that spelling is refused explicitly.
+        // Naming the record's homeserver would pass every assertion above, so that spelling is refused
+        // explicitly.
         assertThat(body).doesNotContain("recordHome");
         assertThat(body).contains("masHome");
     }
@@ -176,8 +154,6 @@ class PlacementRecordsNotServedGuardTest {
             }
         }
 
-        // The named-file guard above catches a rename or a deletion but cannot catch a routing file
-        // nobody has written yet. This one holds for every file that will ever be added.
         assertThat(offenders).isEmpty();
     }
 
@@ -196,19 +172,10 @@ class PlacementRecordsNotServedGuardTest {
             }
         }
 
-        // This mapping existed three times over, and the two copies in the MAS readers left out the
-        // alias map. A homeserver with no explicit federation id was therefore one roster id to a
-        // reader and another to the comparison, the lookup missed, both cross-checks were silently
-        // skipped, and the account was reported as a benign data-quality finding.
         assertThat(offenders).isEmpty();
     }
 
-    /**
-     * Source of one method, from its signature to the line that closes it at method indentation, with
-     * comment lines removed. The comments are stripped because they are where this rule gets explained:
-     * a sentence saying "no published record is consulted" would otherwise trip the assertion that the
-     * code consults no published record.
-     */
+    /** Comment lines are stripped so prose explaining the rule cannot trip the assertions. */
     private static String methodBody(String code, String signature) {
         int start = code.indexOf(signature);
         if (start < 0) {

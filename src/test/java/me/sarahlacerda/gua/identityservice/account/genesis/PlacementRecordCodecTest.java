@@ -16,7 +16,6 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** The generation-1 placement record wire format (ADM-008 encoding tables, decision 7). */
 class PlacementRecordCodecTest {
 
     private static final String HOMESERVER = "fed-primary";
@@ -37,8 +36,6 @@ class PlacementRecordCodecTest {
                 now.plus(400, ChronoUnit.DAYS));
     }
 
-    // --- The layout ----------------------------------------------------------
-
     @Test
     void aRecordRoundTripsAndKeepsTheBytesItWasGiven() {
         AccountId accountId = genesisRootedId();
@@ -56,7 +53,6 @@ class PlacementRecordCodecTest {
         assertThat(decoded.issuedAt()).isEqualTo(now);
         assertThat(decoded.notBefore()).isEqualTo(now);
         assertThat(decoded.notAfter()).isEqualTo(notAfter);
-        // The signature covers what arrived, so the decoded object must hand back exactly that.
         assertThat(decoded.canonicalBytes()).isEqualTo(bytes);
     }
 
@@ -79,8 +75,6 @@ class PlacementRecordCodecTest {
         assertThat(bytes[7]).isEqualTo(AccountId.CLASS_GENESIS);
         assertThat(bytes[40]).isEqualTo(AccountId.CLASS_GENESIS);
     }
-
-    // --- The rejection rules -------------------------------------------------
 
     @Test
     void aShortBufferIsRefused() {
@@ -123,7 +117,6 @@ class PlacementRecordCodecTest {
         assertThatThrownBy(() -> PlacementRecordCodec.decode(bytes))
                 .isInstanceOf(InvalidGenesisException.class)
                 .extracting("reason").isEqualTo("origin_class_mismatch");
-        // And the encoder refuses to build one in the first place.
         assertThatThrownBy(() -> PlacementRecordCodec.encode(genesisRootedId(), AccountId.CLASS_BOOTSTRAP,
                 HOMESERVER, now, now, now.plus(1, ChronoUnit.DAYS)))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -152,8 +145,6 @@ class PlacementRecordCodecTest {
     void aTrailingByteIsRefused() {
         byte[] bytes = valid();
         byte[] longer = Arrays.copyOf(bytes, bytes.length + 1);
-        // Otherwise one record would have several spellings and a signature over the longer buffer would
-        // still verify.
         assertThatThrownBy(() -> PlacementRecordCodec.decode(longer))
                 .isInstanceOf(InvalidGenesisException.class)
                 .extracting("reason").isEqualTo("wrong_length");
@@ -211,14 +202,8 @@ class PlacementRecordCodecTest {
                 .extracting("reason").isEqualTo("unknown_account_id_version");
     }
 
-    // --- The decoder rules the encoder cannot reach --------------------------
-    //
-    // The encoder is the trusted side: this service builds those bytes itself. The decoder is the side
-    // that sees whatever arrives, and ResolverPlacementClient.findRecord runs it over bytes fetched from
-    // the resolver, swallowing the failure and logging only the reason. A missing or wrong reason there
-    // is invisible, so each rule below is pinned by its exact token. The buffers are assembled by hand
-    // because the encoder refuses to produce them, which is why encode-based tests could never have
-    // covered these branches.
+    // Buffers are assembled by hand because the encoder refuses to produce them. Each rule is pinned by its
+    // exact reason token.
 
     @Test
     void aZeroLengthHomeserverIdPrefixIsRefusedByTheDecoder() {
@@ -236,8 +221,7 @@ class PlacementRecordCodecTest {
         byte[] bytes = handBuilt(overLong.length(), overLong, now.toEpochMilli(), now.toEpochMilli(),
                 now.plus(1, ChronoUnit.DAYS).toEpochMilli());
 
-        // Sized to match its own prefix, so only the range check can refuse it and a wrong_length here
-        // would mean the range check had been removed.
+        // Sized to match its own prefix, so only the range check can refuse it.
         assertThat(bytes).hasSize(PlacementRecord.LENGTH_WITHOUT_HOMESERVER_ID + overLong.length());
         assertThatThrownBy(() -> PlacementRecordCodec.decode(bytes))
                 .isInstanceOf(InvalidGenesisException.class)
@@ -260,7 +244,6 @@ class PlacementRecordCodecTest {
         long instant = now.toEpochMilli();
         byte[] bytes = handBuilt(HOMESERVER.length(), HOMESERVER, instant, instant, instant);
 
-        // notAfter must be strictly after notBefore, so a zero-length window is refused too.
         assertThatThrownBy(() -> PlacementRecordCodec.decode(bytes))
                 .isInstanceOf(InvalidGenesisException.class)
                 .extracting("reason").isEqualTo("inverted_window");
@@ -283,16 +266,9 @@ class PlacementRecordCodecTest {
         byte[] bytes = handBuilt(HOMESERVER.length(), HOMESERVER, start, start,
                 now.plus(400, ChronoUnit.DAYS).toEpochMilli());
 
-        // The boundary is inclusive, so the tests above fail for the rule they name and not for an
-        // off-by-one in the hand-built buffer.
         assertThat(PlacementRecordCodec.decode(bytes).homeserverId()).isEqualTo(HOMESERVER);
     }
 
-    /**
-     * Canonical bytes assembled directly, so the decoder can be handed a buffer the encoder would refuse
-     * to build. Everything except the length prefix and the three timestamps is well formed, so each
-     * test above fails for exactly the rule it names.
-     */
     private byte[] handBuilt(int lengthPrefix, String homeserverId, long issuedAt, long notBefore,
             long notAfter) {
         byte[] idBytes = homeserverId.getBytes(StandardCharsets.US_ASCII);
@@ -317,8 +293,6 @@ class PlacementRecordCodecTest {
         }
     }
 
-    // --- Nothing in a record identifies the human (ADM-001 L15) ---------------
-
     @Test
     void aRecordCarriesNoIdentifierNoPhoneNoPhoneHashAndNoMatrixUserId() {
         String userId = "@alice:example.test";
@@ -337,11 +311,7 @@ class PlacementRecordCodecTest {
         assertThat(indexOf(bytes, sha256(phone))).isEqualTo(-1);
     }
 
-    /**
-     * The structural half of the same rule. A field added to this record is a field that would travel in
-     * replicated federation state, so the list is pinned: growing it has to be a deliberate edit here,
-     * with ADM-001 L15 in front of whoever makes it.
-     */
+    /** A field added to this record would travel in replicated federation state, so the list is pinned. */
     @Test
     void theRecordTypeHasExactlyTheFieldsAdm008Lists() {
         List<String> components = Arrays.stream(PlacementRecord.class.getRecordComponents())

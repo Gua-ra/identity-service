@@ -22,21 +22,7 @@ import org.springframework.core.type.classreading.SimpleMetadataReaderFactory;
 
 import me.sarahlacerda.gua.identityservice.domain.MatrixIds;
 
-/**
- * Regression guard for ADM-001 S6. Returning users used to present
- * {@code localpartOf(userId)} to MAS as {@code preferred_username}: the text before the
- * first colon of whatever the user id was. With the MAS claims import set to
- * {@code on_conflict: add}, re-keying {@code user_id} to a colon-bearing value, or any
- * other change that gives two accounts one localpart, links each such account onto a
- * single MAS user. The localpart now comes from the username stored in the directory,
- * chosen by {@code AccountLocalpartResolver}, with {@code MatrixIds} as its strict
- * fallback parser.
- *
- * <p>The guard fails if a localpart derivation from a user id comes back: a class
- * declaring its own {@code localpartOf}, main code splitting a user id on its colon, a
- * caller of the parser other than the resolver, or a {@code setPreferredUsername} whose
- * value comes from anywhere but the resolver or the handle a new user just chose.
- */
+/** Fails if main code derives a localpart from a user id anywhere but AccountLocalpartResolver and MatrixIds. */
 class LocalpartDerivationGuardTest {
 
     private static final String SERVICE_CLASSES = "classpath*:me/sarahlacerda/gua/identityservice/**/*.class";
@@ -48,15 +34,11 @@ class LocalpartDerivationGuardTest {
     private static final String RESOLVE_CALL = "accountLocalparts.forExistingAccount(";
     private static final String NEW_HANDLE_CALL = "usernamePolicy.normalizeAndValidate(";
 
-    /** A user-id-like expression followed by string surgery on it. */
     private static final Pattern USER_ID_SURGERY = Pattern.compile(
             "\\b(?:\\w*[uU]serId|\\w*[mM]xid|\\w*[mM]atrixId|subject)(?:\\(\\))?\\s*\\.\\s*"
                     + "(?:indexOf|lastIndexOf|split|substring|replaceFirst|replaceAll|replace)\\s*\\(");
 
-    /**
-     * Reviewed exceptions. These lines read the server name after the colon (the Matrix
-     * domain reported for legacy directory rows), never the localpart.
-     */
+    /** Reviewed exceptions: these lines read the server name after the colon, never the localpart. */
     private static final Map<String, Set<String>> SURGERY_ALLOWED = Map.of(
             "DirectoryController.java", Set.of(
                     "int colon = userId.indexOf(':');",
@@ -64,11 +46,7 @@ class LocalpartDerivationGuardTest {
 
     private static final Pattern SET_PREFERRED_USERNAME = Pattern.compile("setPreferredUsername\\(([^;]*)\\);");
 
-    /**
-     * The only argument forms allowed per file, whitespace removed. {@code localpart} is
-     * the handle a brand-new user just chose in {@code /login/profile}; {@code
-     * preferredUsername} must be assigned from the resolver (checked below).
-     */
+    /** Allowed argument forms per file, whitespace removed. */
     private static final Map<String, Set<String>> PREFERRED_USERNAME_ALLOWED = Map.of(
             "LoginFlowController.java", Set.of("localpart", "preferredUsername"),
             "SecurityController.java", Set.of("preferredUsername"));
@@ -169,7 +147,6 @@ class LocalpartDerivationGuardTest {
         assertThat(resolverSourced).as("resolver-sourced preferredUsername assignments").isPositive();
     }
 
-    /** Right-hand sides (whitespace removed) of every plain assignment to {@code variable}. */
     private static List<String> assignedFrom(String code, String variable) {
         Matcher assignment = Pattern.compile("\\b" + variable + "\\s*=(?!=)\\s*([^;]*);").matcher(code);
         List<String> sources = new ArrayList<>();

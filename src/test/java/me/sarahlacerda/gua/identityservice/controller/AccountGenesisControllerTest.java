@@ -23,7 +23,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** The HTTP contract of {@code POST /account/genesis}. */
 @WebMvcTest(AccountGenesisController.class)
 @AutoConfigureMockMvc(addFilters = false)
 class AccountGenesisControllerTest {

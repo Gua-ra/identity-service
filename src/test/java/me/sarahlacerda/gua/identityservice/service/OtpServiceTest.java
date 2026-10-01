@@ -87,7 +87,6 @@ class OtpServiceTest {
 
         otpService.sendOtp(PHONE, "127.0.0.1", null);
 
-        // Counter gone first, so the new code never inherits the old code's wrong guesses.
         InOrder inOrder = Mockito.inOrder(redisTemplate, valueOperations);
         inOrder.verify(redisTemplate).delete(ATTEMPTS_KEY);
         inOrder.verify(valueOperations).set(eq(CODE_KEY), eq("123456"), eq(properties.getOtp().getTtl()));
@@ -101,7 +100,6 @@ class OtpServiceTest {
 
         otpService.verifyOtp(PHONE, "654321");
 
-        // Counted before it is compared: a right guess spends a slot like a wrong one.
         InOrder inOrder = Mockito.inOrder(redisTemplate, valueOperations);
         inOrder.verify(valueOperations).increment(ATTEMPTS_KEY);
         inOrder.verify(redisTemplate).delete(CODE_KEY);
@@ -129,7 +127,6 @@ class OtpServiceTest {
         }
         verify(redisTemplate, never()).delete(CODE_KEY);
 
-        // The right code takes the fifth and last slot, which is within the budget.
         otpService.verifyOtp(PHONE, "654321");
 
         verify(valueOperations, times(5)).increment(ATTEMPTS_KEY);
@@ -151,14 +148,10 @@ class OtpServiceTest {
         }
 
         verify(redisTemplate).delete(CODE_KEY);
-        // The spent counter stays until it expires, so a guess that fetched the code
-        // before the cap tripped cannot start over at 1.
         verify(redisTemplate, never()).delete(ATTEMPTS_KEY);
         assertThat(count("exhausted")).isEqualTo(1.0);
         assertThat(count("invalid")).isEqualTo(5.0);
 
-        // The right code is now worthless: only a new send restores it, and nothing is
-        // counted against a code that no longer exists.
         assertThatThrownBy(() -> otpService.verifyOtp(PHONE, "654321")).isInstanceOf(InvalidOtpException.class);
         verify(valueOperations, times(5)).increment(ATTEMPTS_KEY);
         assertThat(count("valid")).isZero();
@@ -175,7 +168,6 @@ class OtpServiceTest {
                 .isInstanceOf(InvalidOtpException.class)
                 .hasMessage("Too many incorrect verification codes; request a new code");
 
-        // Even the right code is refused unseen: nothing was compared, so nothing succeeded.
         verify(redisTemplate).delete(CODE_KEY);
         verify(redisTemplate, never()).delete(ATTEMPTS_KEY);
         assertThat(count("valid")).isZero();
@@ -309,8 +301,6 @@ class OtpServiceTest {
         verify(smsSender).send("+5511666666666", "Código Gua: 555555");
     }
 
-    // -------------------- scoped codes --------------------
-
     @Test
     void aScopedSendWritesOutsideTheKeyThePublicSendOwns() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
@@ -318,14 +308,11 @@ class OtpServiceTest {
 
         otpService.sendScopedOtp(OtpScope.PIN_CHANGE, "chal-1", PHONE, "127.0.0.1", null);
 
-        // Keyed to the challenge, so POST /otp/send, which only ever writes the per-phone key,
-        // can neither plant a code here ahead of the flow nor have one of its codes accepted.
         verify(valueOperations).set(eq("otp:code:pin-change:chal-1"), eq("123456"),
                 eq(properties.getOtp().getTtl()));
         verify(valueOperations, never()).set(eq(CODE_KEY), anyString(), any());
         verify(redisTemplate).delete("otp:attempts:pin-change:chal-1");
         verify(redisTemplate, never()).delete(ATTEMPTS_KEY);
-        // Same send limits as the public path: namespacing the code is not an exemption.
         verify(rateLimiter).checkRate("otp:rate:phone:" + PHONE,
                 properties.getOtp().getMaxRequestsPerPhonePerHour(), Duration.ofHours(1));
         verify(rateLimiter).checkRate("otp:rate:ip:127.0.0.1", properties.getOtp().getMaxRequestsPerIpPerHour(),
@@ -338,13 +325,10 @@ class OtpServiceTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(valueOperations.get("otp:code:pin-change:chal-1")).thenReturn(null);
 
-        // A code the public send minted for this number is presented to the PIN change flow.
         assertThatThrownBy(() -> otpService.verifyScopedOtp(OtpScope.PIN_CHANGE, "chal-1", "654321"))
                 .isInstanceOf(InvalidOtpException.class);
 
-        // The per-phone key is never even read, so whatever lives under it is irrelevant.
         verify(valueOperations, never()).get(CODE_KEY);
-        // And nothing is counted: there is no scoped code to guess at.
         verify(valueOperations, never()).increment(anyString());
     }
 
@@ -361,8 +345,6 @@ class OtpServiceTest {
                     .isInstanceOf(InvalidOtpException.class);
         }
 
-        // The cap burns the scoped code exactly as it burns a per-phone one, and the spent
-        // counter is left to expire with it.
         verify(redisTemplate).delete(codeKey);
         verify(redisTemplate, never()).delete(attemptsKey);
         assertThat(count("exhausted")).isEqualTo(1.0);

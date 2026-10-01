@@ -11,10 +11,6 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * The names a scrape exposes. The shadow-window exit criteria are quoted in these names, so a panel or
- * an alert built on a name that does not exist would read as "no data" rather than as an error.
- */
 class PlacementShadowMetricsTest {
 
     private IdentityServiceProperties enabled() {
@@ -56,7 +52,6 @@ class PlacementShadowMetricsTest {
 
         new PlacementShadowMetrics(registry, enabled());
 
-        // A fresh pod serves zeros from its first scrape rather than nothing at all.
         String scrape = registry.scrape();
         for (PlacementShadowResult result : PlacementShadowResult.values()) {
             assertThat(scrape).contains("result=\"" + result.tag() + "\"");
@@ -99,8 +94,6 @@ class PlacementShadowMetricsTest {
 
         metrics.failed("unknown_homeserver");
 
-        // This is the series that alerts when accounts cannot be compared. Before it existed, one bad
-        // row ended the run and the only symptom was a success timestamp that quietly stopped moving.
         String scrape = registry.scrape();
         assertThat(scrape).contains("gua_identity_placement_shadow_failures_total{");
         for (String reason : PlacementShadowMetrics.FAILURE_REASONS) {

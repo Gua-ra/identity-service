@@ -19,7 +19,6 @@ class IdentityMetricsInitializerTest {
     static final class DummySmsSender implements SmsSender {
         @Override
         public void send(String e164PhoneNumber, String messageBody) {
-            // no-op
         }
     }
 
@@ -42,10 +41,6 @@ class IdentityMetricsInitializerTest {
 
     @Test
     void everyFlowsVerifyCounterSurvivesOnARegistryThatRefusesAMixedTagSet() {
-        // Prometheus keys a meter by name alone: a name first registered with one tag set answers
-        // a later registration carrying a different one with a warning and a counter that records
-        // nothing. That is what happened to the phone-change flow, whose verify counter added a
-        // "flow" tag the others lacked, so it counted into a hole for as long as it existed.
         PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
         new IdentityMetricsInitializer(registry, new DummySmsSender());
 
@@ -73,8 +68,6 @@ class IdentityMetricsInitializerTest {
 
         new IdentityMetricsInitializer(registry, new DummySmsSender());
 
-        // What a fresh pod serves on /actuator/prometheus before any traffic:
-        // every dashboard-referenced metric name must already be there.
         assertThat(registry.scrape())
                 .contains("gua_identity_signup_total")
                 .contains("gua_identity_login_total")
@@ -87,7 +80,6 @@ class IdentityMetricsInitializerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         new IdentityMetricsInitializer(registry, new DummySmsSender());
 
-        // Same idiom the services use when an event happens, flow tag included.
         registry.counter("gua.identity.otp.verify", "result", "valid", "flow", OtpVerifyFlow.PHONE.tagValue())
                 .increment();
 
@@ -97,7 +89,6 @@ class IdentityMetricsInitializerTest {
                 .counter()
                 .count())
                 .isEqualTo(1.0);
-        // Still exactly the pre-registered series, three results for each flow, no duplicates.
         assertThat(registry.find("gua.identity.otp.verify").counters())
                 .hasSize(3 * OtpVerifyFlow.values().length);
     }

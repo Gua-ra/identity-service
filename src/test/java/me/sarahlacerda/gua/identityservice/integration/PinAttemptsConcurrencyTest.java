@@ -108,9 +108,6 @@ class PinAttemptsConcurrencyTest {
 
         assertThat(unexpected).as("no unexpected exceptions").isEmpty();
         assertThat(invalid.get() + locked.get()).isEqualTo(threads);
-        // With maxPinAttempts=5, first 5 wrong attempts increment failure_count then
-        // trip lock on the 5th.
-        // Subsequent attempts must observe the locked state.
         assertThat(invalid.get()).isGreaterThanOrEqualTo(5);
         assertThat(locked.get()).as("subsequent attempts after lockout must be rejected with PinLockedException")
                 .isGreaterThanOrEqualTo(1);

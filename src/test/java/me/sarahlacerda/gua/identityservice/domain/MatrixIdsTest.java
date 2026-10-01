@@ -17,11 +17,6 @@ class MatrixIdsTest {
         assertThat(MatrixIds.localpartOf("@alice.b_c-d:dev.local:8448")).isEqualTo("alice.b_c-d");
     }
 
-    /**
-     * The old helper returned the text before the first colon of any string, so
-     * {@code ga1abc:x} and {@code ga1abc:y} both became {@code ga1abc}. Anything that is not
-     * {@code @localpart:server} is refused instead.
-     */
     @ParameterizedTest
     @NullAndEmptySource
     @ValueSource(strings = { "ga1abc:x", "ga1abc:y", "u1", "alice", "alice:dev.local", "@alice", "@:dev.local",

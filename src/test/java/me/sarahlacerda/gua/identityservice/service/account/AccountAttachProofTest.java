@@ -29,15 +29,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/**
- * The attack cases the attach proof exists to stop (ADM-008 decision 6).
- *
- * <p>The premise throughout: anyone can compose an authorize URL, so an attach handle is
- * attacker-controlled in both directions. The dangerous shape is an attacker's own genesis carried in a
- * URL that prefills the victim's number, which the victim's OTP then passes. What stops it is that the
- * attach also needs a signature over bytes the server chose for this session, under the key committed
- * inside the registered genesis.
- */
+/** An attach handle is attacker-controlled: anyone can compose an authorize URL carrying one. */
 class AccountAttachProofTest {
 
     private static final String USER_ID = "@alice:example.org";
@@ -80,7 +72,6 @@ class AccountAttachProofTest {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(value);
     }
 
-    /** A challenge the server issued for one session. */
     private String challenge() {
         return service.issueAttachChallenge();
     }
@@ -105,9 +96,6 @@ class AccountAttachProofTest {
 
     @Test
     void aChallengeRelayedFromAnotherSessionDoesNotAttach() {
-        // The attacker completes a profile step of their own, captures the challenge issued there, and
-        // relays it into the victim's session. The victim's session holds different bytes, and the
-        // server signs nothing it was handed: it reads the challenge from its own session state.
         String attackersChallenge = challenge();
         String victimsChallenge = challenge();
         String proof = proofOver(attackersChallenge, accountId, authority.privateKey());
@@ -125,7 +113,6 @@ class AccountAttachProofTest {
         String proof = proofOver(challenge, accountId, authority.privateKey());
         service.attach(handle, challenge, proof, USER_ID);
 
-        // The successful attach cleared the handle, so the same proof finds no pending registration.
         when(repository.findByAttachHandleHash(AccountGenesisService.sha256Hex(handle)))
                 .thenReturn(Optional.empty());
 
@@ -137,8 +124,7 @@ class AccountAttachProofTest {
     void aProofIsNotReplayableAgainstARowThatIsNoLongerPending() {
         String challenge = challenge();
         String proof = proofOver(challenge, accountId, authority.privateKey());
-        // The row this handle names has already been attached: the shape the compare-and-set leaves
-        // behind, built here rather than mutated, since the state is not settable from outside.
+        // Built in the attached state because it is not settable from outside.
         when(repository.findByAttachHandleHash(AccountGenesisService.sha256Hex(handle)))
                 .thenReturn(Optional.of(AccountGenesisRecord.attachedGenesis(accountId.value(), USER_ID,
                         (short) 1, (short) 1, row.getGenesisB64(), row.getAuthorityKeyB64(), Instant.now())));
@@ -150,8 +136,6 @@ class AccountAttachProofTest {
 
     @Test
     void aChallengeReusedAcrossTwoSessionsDoesNotAttachTwice() {
-        // One challenge, two sessions. Even if a client reuses the value, the compare-and-set means only
-        // the first attach wins; the second updates no row.
         String challenge = challenge();
         String proof = proofOver(challenge, accountId, authority.privateKey());
         when(repository.attach(anyString(), anyString(), anyString(), any(), any(), any()))
@@ -165,8 +149,6 @@ class AccountAttachProofTest {
 
     @Test
     void aProofSignedOverAnotherAccountIdDoesNotAttach() {
-        // The client signs a well-formed proof, but over a different accountId than the one the stored
-        // genesis derives. The server reads no accountId from the request, so the preimages differ.
         String challenge = challenge();
         AccountId someoneElse = AccountId.derive(AccountId.CLASS_GENESIS, "another account".getBytes());
         String proof = proofOver(challenge, someoneElse, authority.privateKey());
@@ -178,8 +160,6 @@ class AccountAttachProofTest {
 
     @Test
     void aProofUnderAnyOtherKeyDoesNotAttach() {
-        // The planted-handle case: the attacker holds the handle but not the key committed inside the
-        // genesis it names.
         String challenge = challenge();
         String proof = proofOver(challenge, accountId, TestEd25519.generate().privateKey());
 
@@ -191,7 +171,6 @@ class AccountAttachProofTest {
     void twoSessionsRacingOnOneHandleResolveToASingleAttach() {
         String first = challenge();
         String second = challenge();
-        // Both hold a valid proof for their own session; the database decides which one lands.
         when(repository.attach(anyString(), anyString(), anyString(), any(), any(), any()))
                 .thenReturn(1).thenReturn(0);
 

@@ -173,10 +173,6 @@ class AccountControllerTest {
                 .andExpect(MockMvcResultMatchers.jsonPath("$.code", is("step_up_required")));
     }
 
-    /**
-     * The signed-in user confirms the number on their own account, and the send is accepted.
-     * Nothing is stored between this call and the verify.
-     */
     @Test
     void startReauthPassesTheSubmittedNumberAndAnswers202() throws Exception {
         when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn(USER);
@@ -201,7 +197,6 @@ class AccountControllerTest {
                 .startReauth(any(), any(), any(), any());
     }
 
-    /** One refusal, whoever the number belongs to. */
     @Test
     void startReauthMapsAMismatchTo403WithTheNeutralCode() throws Exception {
         when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn(USER);

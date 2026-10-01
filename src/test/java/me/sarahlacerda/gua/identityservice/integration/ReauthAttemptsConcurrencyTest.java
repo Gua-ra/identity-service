@@ -27,16 +27,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
-/**
- * Pins the budget of wrong numbers against a real Redis under a parallel burst. The account's
- * own number is what a stolen session guesses at, and the cap only bounds that guessing if the
- * attempt is reserved atomically before the number is compared: a read followed by a later
- * increment bounds a sequence of guesses and lets a burst of them all read the same value, all
- * pass the gate and all get compared.
- *
- * <p>
- * Needs Docker for Postgres and Redis, and is skipped where Docker is not available.
- */
+/** Needs Docker for Postgres and Redis. */
 @SpringBootTest
 @Testcontainers(disabledWithoutDocker = true)
 class ReauthAttemptsConcurrencyTest {
@@ -99,8 +90,6 @@ class ReauthAttemptsConcurrencyTest {
         List<Throwable> unexpected = new ArrayList<>();
 
         for (int i = 0; i < threads; i++) {
-            // A different candidate number per thread, which is the shape of the attack: one
-            // stolen session working through numbers to find the account's own.
             String candidate = String.format("+1202555%04d", 200 + i);
             executor.submit(() -> {
                 try {
@@ -128,18 +117,12 @@ class ReauthAttemptsConcurrencyTest {
         executor.shutdown();
 
         assertThat(unexpected).as("no unexpected outcomes").isEmpty();
-        // Only the reservations inside the budget reached a comparison, however many arrived at
-        // once. Everything past it was refused without the account being consulted at all.
         assertThat(compared.get()).as("numbers compared against the account").isEqualTo(max);
         assertThat(compared.get() + refusedByTheCap.get()).isEqualTo(threads);
 
-        // Every attempt is counted, the refused ones included, and the window the in-budget ones
-        // opened is still running, so the budget refills an hour after it opened and not later.
         assertThat(redisTemplate.opsForValue().get(MISMATCH_KEY)).isEqualTo(String.valueOf(threads));
         assertThat(redisTemplate.getExpire(MISMATCH_KEY)).isPositive();
 
-        // And the cap is a cap on the account: once it is spent, the next number is refused
-        // before anything is compared, whoever it belongs to.
         assertThatThrownBy(() -> accountReauthService.startReauth(USER, "+12025550123", REQUESTER_IP, null))
                 .isInstanceOf(RateLimiterException.class)
                 .hasMessageNotContaining(USER);

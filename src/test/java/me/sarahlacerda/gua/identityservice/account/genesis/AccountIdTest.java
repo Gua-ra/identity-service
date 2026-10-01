@@ -8,10 +8,6 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/**
- * ADM-008 decision 2: an accountId is {@code "ga1" || base32(0x01 || class || SHA-256(bytes))} and has
- * exactly one canonical spelling.
- */
 class AccountIdTest {
 
     private static final HexFormat HEX = HexFormat.of();
@@ -39,7 +35,6 @@ class AccountIdTest {
         assertThat(genesis.isGenesisRooted()).isTrue();
         assertThat(bootstrap.rawBytes()[1]).isEqualTo(AccountId.CLASS_BOOTSTRAP);
         assertThat(bootstrap.isGenesisRooted()).isFalse();
-        // Same bytes, different class: a bootstrap id is never confusable with a rooted one.
         assertThat(genesis.value()).isNotEqualTo(bootstrap.value());
     }
 

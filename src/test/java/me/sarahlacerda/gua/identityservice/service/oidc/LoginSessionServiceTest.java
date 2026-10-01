@@ -19,11 +19,8 @@ import org.springframework.data.redis.core.ValueOperations;
 
 import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 
-/**
- * The login session is stored as JSON in Redis and survives deployments, so a
- * field added to it must read back sensibly from payloads written before it
- * existed, and payloads written by a newer build must not break an older one.
- */
+// Sessions are stored as JSON in Redis and survive deployments, so payloads from older and newer builds must
+// both read back.
 @ExtendWith(MockitoExtension.class)
 class LoginSessionServiceTest {
 

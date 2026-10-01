@@ -68,7 +68,6 @@ class ContactDiscoveryServiceTest {
         String digest = hasher.digest(phone);
         when(directoryService.findDiscoverableByDigests(Set.of(digest))).thenReturn(List.of());
 
-        // duplicate and garbage entries must not fail the sync (cap counts raw entries)
         service.match(java.util.Arrays.asList(phone, phone, "not-a-phone"));
 
         @SuppressWarnings("unchecked")

@@ -37,10 +37,6 @@ import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditLogger;
 
-/**
- * The PIN change start over a real {@link UserSecurityService}, so the cooldown, the number
- * ownership check, the PIN attempt accounting and the scoped send are the application's own.
- */
 class PinChangeServiceTest {
 
     private static final String USER = "@user:gua.global";
@@ -228,7 +224,6 @@ class PinChangeServiceTest {
                 .isInstanceOf(IllegalStateException.class);
 
         verify(auditLogger).reauthFailed(USER, "PIN_CHANGE", IP);
-        // A refused assertion does not quietly fall back to the PIN that came with it.
         verify(repository, never()).findByUserIdForUpdate(any());
         assertThat(user.getPinFailureCount()).isZero();
         verify(otpService, never()).sendScopedOtp(any(), any(), any(), any(), any());

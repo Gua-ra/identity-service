@@ -18,15 +18,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/**
- * The published golden vectors (docs/specs/genesis-vectors.v1.json) are the contract the iOS and
- * Android ports and gua-resolver verify against, so every byte of them is recomputed here: canonical
- * bytes, object hashes, accountIds, the two deterministic proof signatures, and every case a conforming
- * decoder must refuse together with the rule that refuses it.
- *
- * <p>The keys are the RFC 8032 section 7.1 test constants, which is what lets the signatures be
- * reproducible. They are published values and sign nothing real.
- */
+// Recomputes docs/specs/genesis-vectors.v1.json, the contract the client ports and gua-resolver verify against.
+// The keys are the published RFC 8032 section 7.1 test constants.
 class GenesisVectorsTest {
 
     private static final Path VECTORS = Path.of("docs/specs/genesis-vectors.v1.json");
@@ -90,7 +83,6 @@ class GenesisVectorsTest {
                     .as(name).isEqualTo(vector.get("sha256Hex").asText());
             assertThat(genesis.accountId().value()).as(name).isEqualTo(vector.get("accountId").asText());
 
-            // Deterministic Ed25519: the published proof is reproducible, and it verifies.
             String seed = seedOf(root, vector.get("authorityPublicKeyHex").asText());
             String signature = sign(seed, GenesisProofs.genesisProofPreimage(canonical));
             assertThat(signature).as(name).isEqualTo(vector.get("genesisProofSignatureB64").asText());

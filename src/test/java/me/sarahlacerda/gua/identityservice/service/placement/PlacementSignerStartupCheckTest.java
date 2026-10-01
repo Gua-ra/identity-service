@@ -21,13 +21,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-/**
- * The startup consistency check: a deployment may not publish placement records under an identity the
- * roster does not agree with.
- *
- * <p>Each case here is a way the three things could fail to line up. Together they are what stops this
- * service signing records for a homeserver it is not, or with a key nobody will verify against.
- */
 class PlacementSignerStartupCheckTest {
 
     private final TestEd25519.Pair pair = PlacementTestFixtures.keyPair();
@@ -63,8 +56,6 @@ class PlacementSignerStartupCheckTest {
 
     @Test
     void anX509SpellingOfTheSameKeyAlsoPasses() {
-        // The roster may publish the bare key or the X.509 wrapper; a check that understood one spelling
-        // would report a mismatch that is not there.
         String spki = java.util.Base64.getEncoder()
                 .encodeToString(hexToBytes("302a300506032b6570032100") == null ? new byte[0] : concat(
                         hexToBytes("302a300506032b6570032100"), pair.rawPublicKey()));
@@ -88,7 +79,6 @@ class PlacementSignerStartupCheckTest {
         IdentityServiceProperties properties = new IdentityServiceProperties();
         properties.getPlacement().getPublish().setEnabled(true);
 
-        // It has no roster identity, so there is no id a record could name and no key to sign one with.
         assertThatThrownBy(() -> check(properties).verifyPlacementSigningIdentity())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("identity.routing.homeservers");
@@ -205,21 +195,15 @@ class PlacementSignerStartupCheckTest {
                 .count()).isEqualTo(1);
     }
 
-    // --- The configured validity window ---------------------------------------
-
     @Test
     void aValidityWindowLongerThanTheCodecAcceptsIsRefusedAtStartup() {
         IdentityServiceProperties properties = publishing();
         properties.getPlacement().setRecordValidity(Duration.ofDays(401));
 
-        // record-validity is a freely configurable Duration while the codec refuses anything over 400
-        // days. Left unchecked it is accepted at boot and then throws on every single signature, which
-        // shows up at 03:20 as a job that failed rather than as the misconfiguration it is.
         assertThatThrownBy(() -> check(properties).verifyPlacementSigningIdentity())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("record-validity");
 
-        // Refused before anything is read, so a bad window is caught even if the roster is unreachable.
         verifyNoInteractions(resolver);
     }
 
@@ -228,7 +212,6 @@ class PlacementSignerStartupCheckTest {
         IdentityServiceProperties properties = publishing();
         properties.getPlacement().setReissueAfter(Duration.ofDays(400));
 
-        // A record that is re-issued no sooner than it expires is a record that lapses.
         assertThatThrownBy(() -> check(properties).verifyPlacementSigningIdentity())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("reissue-after");

@@ -34,14 +34,6 @@ import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryState.Status;
 import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditLogger;
 
-/**
- * The delayed account recovery against a clock the test moves, so every status is pinned at the
- * exact instant it changes rather than somewhere around it.
- *
- * <p>
- * The real {@link UserSecurityService} runs underneath over a mocked repository, so the row the
- * recovery reads and writes is the row the rest of the service would see.
- */
 class AccountRecoveryServiceTest {
 
     private static final String USER = "@alice:gua.global";
@@ -83,20 +75,12 @@ class AccountRecoveryServiceTest {
         when(repository.findByUserIdForUpdate(USER)).thenReturn(Optional.of(user));
     }
 
-    // -------------------- status, at every boundary --------------------
-
     @Test
     void anAccountThatNeverSignedInAndHasNoEpisodeIsAvailable() {
         assertThat(service.stateFor(USER)).isEqualTo(
                 new AccountRecoveryState(Status.AVAILABLE, null, null, null, DORMANCY.toSeconds(), WAIT.toSeconds()));
     }
 
-    /**
-     * The two waits ride along at every status, because the screen that explains them has to say
-     * what this deployment enforces and not what the defaults happen to be. They are read through
-     * the getters, so a deployment that configures neither reports the pin-reset-cooldown
-     * fallback rather than nothing.
-     */
     @Test
     void everyStatusCarriesTheConfiguredWaits() {
         user.setLastLoginAt(T0.minus(DORMANCY).plusSeconds(60));
@@ -134,11 +118,6 @@ class AccountRecoveryServiceTest {
         assertThat(service.stateFor(USER).status()).isEqualTo(Status.AVAILABLE);
     }
 
-    /**
-     * The published time is rounded up to the start of the next UTC day: the clients say "try
-     * again after Sep 14" and never a clock time, so nothing about the account's last sign-in is
-     * readable from it.
-     */
     @Test
     void tooSoonPublishesTheStartOfTheNextDayAfterTheDormancyEnds() {
         user.setLastLoginAt(Instant.parse("2026-09-01T10:15:30Z"));
@@ -161,10 +140,6 @@ class AccountRecoveryServiceTest {
                 .isEqualTo(Instant.parse("2026-09-08T00:00:00Z").getEpochSecond());
     }
 
-    /**
-     * With short testing durations a whole day would dwarf a dormancy of minutes, leaving dev QA
-     * with nothing to watch, so the published time is rounded up to the next whole minute instead.
-     */
     @Test
     void underShortTestingDurationsTooSoonPublishesTheNextWholeMinute() {
         useShortTestingDurations();
@@ -216,7 +191,6 @@ class AccountRecoveryServiceTest {
         clock.set(stamp.plus(LIFE).minusNanos(1));
         assertThat(service.stateFor(USER).status()).isEqualTo(Status.READY);
 
-        // A dead stamp is treated as absent: nothing about it may satisfy a later wait.
         clock.set(stamp.plus(LIFE));
         assertThat(service.stateFor(USER).status()).isEqualTo(Status.AVAILABLE);
     }
@@ -257,8 +231,6 @@ class AccountRecoveryServiceTest {
         properties.getSecurity().setAccountRecoveryDormancy(Duration.ofDays(7));
         assertThat(properties.getSecurity().getAccountRecoveryEpisodeLife()).isEqualTo(Duration.ofDays(9));
     }
-
-    // -------------------- start --------------------
 
     @Test
     void startingOnAnAvailableAccountStampsNowAndAuditsIt() {
@@ -307,7 +279,6 @@ class AccountRecoveryServiceTest {
         verify(auditLogger, never()).accountRecoveryRequested(any(), any(), any());
     }
 
-    /** The retry-after under short testing durations points at the same whole minute that is published. */
     @Test
     void underShortTestingDurationsStartingTooSoonRetriesAtThePublishedMinute() {
         useShortTestingDurations();
@@ -332,8 +303,6 @@ class AccountRecoveryServiceTest {
         assertThat(service.start(USER, "••••4567", "203.0.113.9").status()).isEqualTo(Status.PENDING);
     }
 
-    // -------------------- complete --------------------
-
     private void readyEpisode() {
         user.setPinResetRequestedAt(T0.minus(WAIT));
         user.setPinFailureCount(3);
@@ -352,17 +321,11 @@ class AccountRecoveryServiceTest {
         assertThat(user.getPinResetRequestedAt()).isNull();
         assertThat(user.getPinFailureCount()).isZero();
         assertThat(user.getPinLockedUntil()).isNull();
-        // pin_set_at is stamped, so the fresh-factor hold keeps the recovered PIN off a phone change.
         assertThat(user.getPinSetAt()).isNotNull();
         verify(passkeyService).removeAllForUser(USER);
         verify(auditLogger).accountRecoveryCompleted(USER, 2);
     }
 
-    /**
-     * The owed sign-out must survive a login that cannot be finished after the commit, and the
-     * account must not
-     * look dormant because the sign-in record after the commit never ran.
-     */
     @Test
     void completingARecoveryRecordsTheOwedSignOutAndCountsAsActivity() {
         readyEpisode();
@@ -424,8 +387,6 @@ class AccountRecoveryServiceTest {
         verifyNoInteractions(passkeyService, endOtherSessionsService);
     }
 
-    // -------------------- cancel --------------------
-
     @Test
     void theOwnersCancelEndsALiveEpisodeAndCountsAsActivity() {
         user.setPinResetRequestedAt(T0.minus(Duration.ofDays(1)));
@@ -436,7 +397,6 @@ class AccountRecoveryServiceTest {
         assertThat(user.getPinResetRequestedAt()).isNull();
         assertThat(user.getLastLoginAt()).isEqualTo(T0);
         verify(auditLogger).accountRecoveryCancelled(USER, "198.51.100.4");
-        // E4: whoever started it cannot start another one the next minute.
         clock.set(T0.plusSeconds(60));
         assertThat(service.stateFor(USER).status()).isEqualTo(Status.TOO_SOON);
     }
@@ -464,8 +424,6 @@ class AccountRecoveryServiceTest {
         assertThat(service.cancel(USER, "198.51.100.4")).isFalse();
     }
 
-    // -------------------- the other cancel sources --------------------
-
     @Test
     void aSignInWithAFactorEndsTheEpisode() {
         user.setPinResetRequestedAt(T0.minus(Duration.ofDays(1)));
@@ -485,8 +443,6 @@ class AccountRecoveryServiceTest {
 
         assertThat(user.getPinResetRequestedAt()).isNull();
     }
-
-    // -------------------- the banner --------------------
 
     @Test
     void pendingForReportsOnlyALiveEpisode() {
@@ -508,7 +464,6 @@ class AccountRecoveryServiceTest {
                 new PinPolicy());
     }
 
-    /** A clock the test moves by hand. */
     private static final class MutableClock extends Clock {
         private Instant now;
 

@@ -32,15 +32,7 @@ import me.sarahlacerda.gua.identityservice.repository.IdentityUserRepository;
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 
-/**
- * The recovery writers against real row locks. Cancel and complete race for the same ready
- * episode, and a finished sign-in races a completion; whichever order the database picks, the
- * account ends in one consistent state: never both cancelled and completed, and a recovered PIN
- * hash is never written back over.
- *
- * <p>
- * Needs Docker for Postgres and Redis, and is skipped where Docker is not available.
- */
+/** Needs Docker for Postgres and Redis. */
 @SpringBootTest
 @Testcontainers(disabledWithoutDocker = true)
 class AccountRecoveryConcurrencyTest {
@@ -91,7 +83,6 @@ class AccountRecoveryConcurrencyTest {
     @Autowired
     PasswordEncoder passwordEncoder;
 
-    /** A PIN account whose recovery was requested long enough ago to be ready now. */
     private String accountWithAReadyRecovery() {
         String userId = "@" + UUID.randomUUID() + ":example.com";
         userSecurityService.setInitialPin(userId, OLD_PIN);
@@ -171,8 +162,8 @@ class AccountRecoveryConcurrencyTest {
             boolean completed = outcomes.get(1).get() instanceof Integer;
             IdentityUser after = userRepository.findByUserId(userId).orElseThrow();
 
-            // The sign-in may end the episode first, in which case the completion is refused; if the
-            // completion commits first, the sign-in must not put the old PIN hash back.
+            // Either order is valid: the sign-in ends the episode and the completion is refused,
+            // or the completion commits and the old PIN hash must not return.
             assertThat(after.getPinResetRequestedAt()).isNull();
             assertThat(passwordEncoder.matches(completed ? NEW_PIN : OLD_PIN, after.getPinHash()))
                     .as("round %d, completed=%s", round, completed)

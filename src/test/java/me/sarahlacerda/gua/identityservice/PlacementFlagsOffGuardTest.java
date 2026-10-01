@@ -27,16 +27,6 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 
-/**
- * Every new path is behind a flag that defaults to false, and with the flags off this service behaves
- * exactly as it did before placement records existed.
- *
- * <p>"Exactly as before" is meant literally, which is why the scheduler is part of this test. Nothing in
- * this application scheduled anything until now: the genesis expiry sweep runs on a write path precisely
- * so no scheduler had to exist. An unconditional {@code @EnableScheduling} would start a thread pool in
- * every deployment for a feature almost none of them have turned on, so the annotation is gated on the
- * same flag as the job it exists for.
- */
 class PlacementFlagsOffGuardTest {
 
     private static final Path MAIN_SOURCES = Path.of("src", "main", "java");
@@ -90,7 +80,6 @@ class PlacementFlagsOffGuardTest {
         assertThat(condition.prefix()).isEqualTo("identity.placement.shadow");
         assertThat(condition.name()).containsExactly("enabled");
         assertThat(condition.havingValue()).isEqualTo("true");
-        // Without this, a deployment that set nothing would still get a scheduler it never had before.
         assertThat(condition.matchIfMissing()).isFalse();
     }
 
@@ -174,9 +163,6 @@ class PlacementFlagsOffGuardTest {
         homeserver.setPlacementSigningPrivateKey("this is not a key");
         off.getRouting().getHomeservers().add(homeserver);
 
-        // With every flag off nothing will ever sign, so a key this service cannot parse is inert and
-        // must not be a reason to refuse to start. A deployment that does publish still has every key
-        // decoded and checked against the roster by PlacementSignerStartupCheck before it serves.
         assertThatCode(() -> new PlacementRecordSigner(off)).doesNotThrowAnyException();
     }
 
@@ -188,8 +174,6 @@ class PlacementFlagsOffGuardTest {
         metrics.runCompleted(99, 1_757_000_000L);
         metrics.failed("error");
 
-        // Every method is gated on the flag, not just the ones that touch a counter, so nothing starts
-        // accumulating state that would leak the moment someone registered these gauges unconditionally.
         assertThat(registry.getMeters()).isEmpty();
     }
 

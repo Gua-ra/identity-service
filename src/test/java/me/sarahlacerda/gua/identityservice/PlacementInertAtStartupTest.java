@@ -19,16 +19,7 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.service.placement.PlacementSchedulingConfig;
 import me.sarahlacerda.gua.identityservice.service.placement.ResolverPlacementClient;
 
-/**
- * Placement is inert with the shipped defaults, proven by booting the application rather than by
- * reading the source. The sibling guard test checks defaults and annotations reflectively, which is
- * necessary but not sufficient: only a context started in the shape a deployment runs catches a
- * startup failure.
- *
- * <p>The four things a disabled feature must satisfy, one test each: the application boots with no
- * placement configuration at all, existing endpoints answer exactly what they answered before, no
- * background work is set up, and nothing about the feature's own configuration can stop startup.
- */
+/** Boots the application context: reflection checks alone cannot catch a startup failure. */
 @SpringBootTest
 @ActiveProfiles("test")
 class PlacementInertAtStartupTest {
@@ -58,15 +49,11 @@ class PlacementInertAtStartupTest {
 
         @Test
         void noBackgroundWorkIsScheduled() {
-                // The scheduling configuration is the only thing that turns @Scheduled on for this feature.
-                // If it is present with the flags off, the reconciler runs on a timer against real tables.
                 assertThat(context.getBeanNamesForType(PlacementSchedulingConfig.class)).isEmpty();
         }
 
         @Test
         void noPlacementMeterIsRegistered() {
-                // A component that registers meters while its feature is off is the shape of an earlier
-                // defect here: a gauge that queried account tables on every scrape with the flag disabled.
                 assertThat(meterRegistry.getMeters())
                                 .noneMatch(meter -> meter.getId().getName().startsWith("gua.identity.placement"));
         }

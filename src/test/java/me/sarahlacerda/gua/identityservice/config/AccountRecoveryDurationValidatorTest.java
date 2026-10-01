@@ -61,7 +61,6 @@ class AccountRecoveryDurationValidatorTest {
         assertThatThrownBy(() -> AccountRecoveryDurationValidator.validate(shortWait))
                 .isInstanceOf(IllegalStateException.class);
 
-        // The fallback is held to the same floor.
         IdentityServiceProperties.SecurityProperties shortFallback = security();
         shortFallback.setPinResetCooldown(Duration.ofHours(1));
         assertThatThrownBy(() -> AccountRecoveryDurationValidator.validate(shortFallback))

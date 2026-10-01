@@ -19,13 +19,6 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Home
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * The SQL fallback read path, against an embedded database standing in for a MAS.
- *
- * <p>The phone column is the point of this class. The deployed MAS configuration puts the account's
- * phone number in {@code upstream_oauth_links.human_account_name}, so a comparison job that selected it,
- * even accidentally through a wildcard, would pull phone numbers into this service's logs and metrics.
- */
 class MasSqlLinkReaderTest {
 
     private static final String JDBC_URL = "jdbc:h2:mem:mas-links;DB_CLOSE_DELAY=-1;MODE=PostgreSQL";
@@ -60,7 +53,6 @@ class MasSqlLinkReaderTest {
             statement.execute("INSERT INTO upstream_oauth_links VALUES "
                     + "('l1', '" + PROVIDER + "', 'u1', '@alice:example.test', '"
                     + PHONE_IN_THE_PHONE_COLUMN + "')");
-            // An unfinished login: no MAS user, so it is not evidence of placement.
             statement.execute("INSERT INTO upstream_oauth_links VALUES "
                     + "('l2', '" + PROVIDER + "', NULL, '@bob:example.test', NULL)");
         }
@@ -102,8 +94,6 @@ class MasSqlLinkReaderTest {
         MasSqlLinkReader aliasReader = new MasSqlLinkReader(aliased, new ObjectMapper(),
                 (url, username, password) -> DriverManager.getConnection(url));
 
-        // This reader used to fall back to the local registry id while the comparison used the alias,
-        // so the two disagreed and every account on such a homeserver was misclassified.
         assertThat(aliasReader.linksFor("@alice:example.test").get(0).federationId())
                 .isEqualTo(PlacementTestFixtures.FEDERATION_ID);
     }
@@ -112,15 +102,10 @@ class MasSqlLinkReaderTest {
     void theColumnHoldingAPhoneNumberIsNeverRead() {
         List<MasLink> links = reader.linksFor("@alice:example.test");
 
-        // Nothing that came back carries it, in any field.
         assertThat(links.toString()).doesNotContain(PHONE_IN_THE_PHONE_COLUMN);
         assertThat(links.get(0).masUsername()).isNotEqualTo(PHONE_IN_THE_PHONE_COLUMN);
     }
 
-    /**
-     * The structural half: the column name does not appear in the reader at all, and no statement in it
-     * uses a wildcard that would start returning the column if the table were reordered.
-     */
     @Test
     void theReaderSourceNeitherNamesThePhoneColumnNorSelectsAWildcard() throws Exception {
         Path source = Path.of("src", "main", "java", "me", "sarahlacerda", "gua", "identityservice",
@@ -128,7 +113,7 @@ class MasSqlLinkReaderTest {
         assertThat(source).isRegularFile();
         String code = Files.readString(source);
 
-        // The javadoc names it once to say it must never be read; no SQL line may.
+        // The class comment names the column once. No SQL line may.
         List<String> sqlLines = code.lines()
                 .map(String::trim)
                 .filter(line -> line.toUpperCase(java.util.Locale.ROOT).startsWith("SELECT")
@@ -156,8 +141,6 @@ class MasSqlLinkReaderTest {
                 .isEqualTo(Map.of(PlacementTestFixtures.FEDERATION_ID, "add"));
 
         updateClaimsImports("{\"localpart\":{\"action\":\"require\"}}");
-        // Absent means fail, which is the MAS default; reporting it as "unset" would hide the difference
-        // that the exit criteria turn on.
         assertThat(reader.localpartOnConflictByHomeserver())
                 .isEqualTo(Map.of(PlacementTestFixtures.FEDERATION_ID, "fail"));
     }

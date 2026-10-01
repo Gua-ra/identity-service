@@ -73,8 +73,6 @@ class SecurityControllerTest {
         oidcProperties.setIssuer("https://auth.example.com");
         SecurityController controller = new SecurityController(userSecurityService, authenticatedUserAccessor,
                 properties, directoryService, loginSessionService, loginProperties, oidcProperties, passkeyService,
-                // Real policy over the mocked services, so the factor report and the enrollment
-                // guard are the ones the application computes.
                 new AuthFactorPolicy(userSecurityService, passkeyService),
                 new AccountLocalpartResolver(directoryService), pinChangeService, accountRecoveryService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
@@ -83,11 +81,6 @@ class SecurityControllerTest {
                 .build();
     }
 
-    /**
-     * R2: a bearer session on its own never adds a durable factor. The endpoint stores nothing
-     * and names the flow that does the work, so an older client is told where to go instead of
-     * failing on a payload that was never going to be kept.
-     */
     @Test
     void theBearerFirstPinIsRefusedAndNamesTheEnrollmentFlow() throws Exception {
         mockMvc.perform(MockMvcRequestBuilders.post("/security/pin")
@@ -136,7 +129,6 @@ class SecurityControllerTest {
                 org.mockito.ArgumentMatchers.argThat(node -> node != null && "cred-1".equals(node.path("id").asText())),
                 org.mockito.ArgumentMatchers.anyString())).thenReturn("chal-2");
 
-        // No currentPin at all: with an assertion supplied the PIN is not a required field.
         String body = "{\"phone\":\"+12025550123\",\"passkeyStepUpId\":\"step-1\",\"passkeyCredential\":{\"id\":\"cred-1\"}}";
         mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/change/start")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -163,7 +155,6 @@ class SecurityControllerTest {
         verify(userSecurityService).completePinChange("@user:domain", "chal-1", "987654", "654321");
     }
 
-    /** Any body, including an empty one, gets the same response; the body is not read. */
     @Test
     void theBearerFirstPinIsRefusedWhateverTheBodySays() throws Exception {
         for (String body : java.util.List.of("{}", "{\"userId\":\"@user:domain\",\"currentPin\":\"123456\"}")) {
@@ -201,7 +192,6 @@ class SecurityControllerTest {
         org.mockito.ArgumentCaptor<LoginSession> captor = org.mockito.ArgumentCaptor.forClass(LoginSession.class);
         verify(loginSessionService).create(captor.capture());
         LoginSession created = captor.getValue();
-        // Nothing can be stored from this session until it has been through the step-up.
         org.junit.jupiter.api.Assertions.assertEquals(LoginSession.Phase.ENROLL_STEP_UP, created.getPhase());
         org.junit.jupiter.api.Assertions.assertEquals(LoginSession.EnrollTarget.PIN, created.getEnrollTarget());
         org.junit.jupiter.api.Assertions.assertNull(created.getEnrollStepUpFactor());
@@ -210,12 +200,6 @@ class SecurityControllerTest {
         org.junit.jupiter.api.Assertions.assertTrue(created.isEnroll());
     }
 
-    /**
-     * The sheet has to return to the build that opened it, and each build registers its own
-     * scheme, so the redirect comes from the caller's own client rather than from one value
-     * for the whole deployment. The client is read off the verified token, never from anything
-     * the caller sends.
-     */
     @Test
     void theEnrollmentRedirectComesFromTheClientBehindTheToken() throws Exception {
         OidcProperties.ClientRegistration qaBuild = new OidcProperties.ClientRegistration();
@@ -233,12 +217,6 @@ class SecurityControllerTest {
         org.junit.jupiter.api.Assertions.assertEquals("global.gua.dev:/oidc", createdSession().getRedirectUri());
     }
 
-    /**
-     * A homeserver-issued token names no client of ours; a registered client may have no redirect
-     * at all; and a client whose redirects are all web origins, the authentication service among
-     * them, is not an app that can be handed back to. All three fall back to the configured app
-     * scheme rather than to a value the web view is not listening for.
-     */
     @Test
     void theEnrollmentRedirectFallsBackToTheConfiguredValue() throws Exception {
         OidcProperties.ClientRegistration noRedirects = new OidcProperties.ClientRegistration();
@@ -284,12 +262,6 @@ class SecurityControllerTest {
         return captor.getValue();
     }
 
-    /**
-     * The case the whole allowlist exists for. An app's bearer is a homeserver token, so it
-     * names no OIDC client of ours and the client-registration path above can never fire for
-     * one: the build has to be able to say which scheme it answers, or the QA sheet has no way
-     * back to the build that opened it.
-     */
     @Test
     void theCallerMayNameARedirectTheDeploymentAllows() throws Exception {
         loginProperties.getEnroll().setRedirectUri("global.gua:/oidc");
@@ -310,12 +282,6 @@ class SecurityControllerTest {
         }
     }
 
-    /**
-     * A redirect the deployment has not allowlisted is refused, and the refusal is the whole
-     * answer: no session is created, so nothing carries the value, and the message does not
-     * repeat it back, so the endpoint cannot be used to reflect a string of the caller's
-     * choosing. Clients treat this as the signal to retry once with no redirect.
-     */
     @Test
     void aRedirectOutsideTheAllowlistIsRefusedAndNoSessionIsCreated() throws Exception {
         loginProperties.getEnroll().setRedirectUri("global.gua:/oidc");
@@ -339,11 +305,6 @@ class SecurityControllerTest {
                 .create(org.mockito.ArgumentMatchers.any(LoginSession.class));
     }
 
-    /**
-     * A near miss is still a miss. The match is exact on purpose: an allowlist that normalized
-     * or prefix-matched would be deciding on the caller's behalf what counts as the same app,
-     * which is the one judgement the list exists to take away from the caller.
-     */
     @Test
     void aRedirectThatOnlyLooksLikeAnAllowedOneIsRefused() throws Exception {
         loginProperties.getEnroll().setRedirectUris(java.util.List.of("global.gua.dev:/oidc"));
@@ -364,11 +325,6 @@ class SecurityControllerTest {
                 .create(org.mockito.ArgumentMatchers.any(LoginSession.class));
     }
 
-    /**
-     * Until a deployment configures the list, the allowlist is exactly the single value it
-     * already had, so shipping this changes no deployment's behaviour until its configuration
-     * changes. Dev has to add the QA schemes before a QA build can name one.
-     */
     @Test
     void theAllowlistIsTheSingleConfiguredRedirectUntilTheDeploymentNamesMore() throws Exception {
         loginProperties.getEnroll().setRedirectUri("global.gua:/oidc");
@@ -392,11 +348,6 @@ class SecurityControllerTest {
         org.junit.jupiter.api.Assertions.assertEquals("global.gua:/oidc", createdSession().getRedirectUri());
     }
 
-    /**
-     * Resolution order: a caller that names an allowed redirect is answering the question the
-     * client registration only guesses at, so it wins. The registration stays as the step for a
-     * token this service minted itself.
-     */
     @Test
     void anAllowedNameBeatsTheClientRegistration() throws Exception {
         OidcProperties.ClientRegistration storeBuild = new OidcProperties.ClientRegistration();
@@ -412,17 +363,9 @@ class SecurityControllerTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
 
         org.junit.jupiter.api.Assertions.assertEquals("global.gua.dev:/oidc", createdSession().getRedirectUri());
-        // The client was never consulted, so a token that names one cannot override what the
-        // build said about itself.
         org.mockito.Mockito.verify(authenticatedUserAccessor, org.mockito.Mockito.never()).currentClientId();
     }
 
-    /**
-     * An absent field, an absent body and a blank value are the same request: the client named
-     * nothing, so the deployment's own resolution runs. A blank value is what an app computes
-     * when its build configuration is missing a scheme, and dead-ending that would cost the
-     * enrollment rather than just the redirect.
-     */
     @Test
     void anAbsentOrBlankRedirectLeavesTheDeploymentsOwnResolutionAlone() throws Exception {
         loginProperties.getEnroll().setRedirectUri("global.gua:/oidc");
@@ -442,7 +385,6 @@ class SecurityControllerTest {
             mockMvc.perform(post)
                     .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
 
-            // The configured default, not the one entry the allowlist happens to hold.
             org.junit.jupiter.api.Assertions.assertEquals("global.gua:/oidc", createdSession().getRedirectUri(),
                     String.valueOf(body));
         }
@@ -463,13 +405,6 @@ class SecurityControllerTest {
                 .create(org.mockito.ArgumentMatchers.any(LoginSession.class));
     }
 
-    /**
-     * The one account the step-up has no proof for: it holds a passkey, holds no PIN, and this
-     * deployment cannot run a passkey ceremony. The assertion is impossible here, there is no
-     * PIN to give, and the SMS proof is refused to an account that holds a factor, so the
-     * session would publish PHONE_OTP as the thing to offer and then refuse it. Both entry
-     * points say so instead of handing out that session.
-     */
     @Test
     void enrollmentIsRefusedWhenNoProofCanRunOnThisDeployment() throws Exception {
         org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
@@ -488,7 +423,6 @@ class SecurityControllerTest {
                 .create(org.mockito.ArgumentMatchers.any(LoginSession.class));
     }
 
-    /** The same account on a deployment that can run the ceremony gets its session as usual. */
     @Test
     void aPasskeyHolderMayStillAddAPinWhereThePasskeyCanBeAsserted() throws Exception {
         org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
@@ -532,7 +466,6 @@ class SecurityControllerTest {
     @Test
     void startPasskeyEnrollmentPinsSessionToAuthenticatedUserAtTheStepUp() throws Exception {
         org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
-        // Empty directory result -> display name falls back to the MXID localpart.
         org.mockito.Mockito.when(directoryService.findByUserId("@alice:dev.local"))
                 .thenReturn(java.util.List.of());
         org.mockito.Mockito.when(loginSessionService.create(org.mockito.ArgumentMatchers.any(LoginSession.class)))
@@ -554,7 +487,6 @@ class SecurityControllerTest {
         org.junit.jupiter.api.Assertions.assertEquals("@alice:dev.local", created.getReauthUserId());
         org.junit.jupiter.api.Assertions.assertEquals("global.gua:/oidc", created.getRedirectUri());
         org.junit.jupiter.api.Assertions.assertEquals("csrf-1", created.getCsrfToken());
-        // No directory display name -> localpart fallback.
         org.junit.jupiter.api.Assertions.assertEquals("alice", created.getDisplayName());
         org.junit.jupiter.api.Assertions.assertEquals("alice", created.getPreferredUsername());
     }
@@ -578,7 +510,6 @@ class SecurityControllerTest {
         org.mockito.ArgumentCaptor<LoginSession> captor = org.mockito.ArgumentCaptor.forClass(LoginSession.class);
         verify(loginSessionService).create(captor.capture());
         org.junit.jupiter.api.Assertions.assertEquals("alice.s", captor.getValue().getPreferredUsername());
-        // No directory display name: the stored username stands in.
         org.junit.jupiter.api.Assertions.assertEquals("alice.s", captor.getValue().getDisplayName());
     }
 
@@ -621,16 +552,10 @@ class SecurityControllerTest {
 
         mockMvc.perform(MockMvcRequestBuilders.get("/security/pin/status"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
-                // Registered, which is server truth. There is no field for the client to say
-                // the credential cannot be used on this device, and there must not be: anyone
-                // holding a session could set it, so it would only ever be a way to be offered
-                // something weaker.
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .jsonPath("$.passkeyRegistered").value(true))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .jsonPath("$.preferredFactor").value("PASSKEY"))
-                // The precedence the client should offer comes from the same component the
-                // step-up enforces, so the two cannot describe different rules.
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .jsonPath("$.phoneChangeStepUpFactors[0]").value("PASSKEY"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
@@ -654,18 +579,10 @@ class SecurityControllerTest {
                         .jsonPath("$.passkeyRegistered").value(false))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .jsonPath("$.preferredFactor").value("PIN"))
-                // The accepted set does not shrink to what this account holds. A client that
-                // registers a passkey later does not need a different answer, and more to the
-                // point, narrowing it per account is how the set collapses onto the one factor
-                // that has become unusable.
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .jsonPath("$.phoneChangeStepUpFactors.length()").value(2));
     }
 
-    /**
-     * E3: the unauthenticated reset shared the recovery episode but not its rules. Both paths now
-     * answer 410 whatever is sent, without reading a body and without touching any account.
-     */
     @Test
     void theRetiredPinResetEndpointsAnswerGoneAndTouchNothing() throws Exception {
         for (String path : new String[] { "/security/pin/reset", "/security/pin/reset/complete" }) {
@@ -675,7 +592,6 @@ class SecurityControllerTest {
                     .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isGone())
                     .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code")
                             .value("endpoint_retired"));
-            // No body at all is the same answer, not a validation error.
             mockMvc.perform(MockMvcRequestBuilders.post(path))
                     .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isGone());
         }
@@ -700,7 +616,6 @@ class SecurityControllerTest {
         org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
         org.mockito.Mockito.when(accountRecoveryService.cancel("@user:domain", "127.0.0.1")).thenReturn(false);
 
-        // 204 either way: the banner only needs to know nothing is live any more.
         mockMvc.perform(MockMvcRequestBuilders.post("/security/recovery/cancel"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNoContent());
     }
@@ -722,11 +637,6 @@ class SecurityControllerTest {
                         .jsonPath("$.accountRecoveryExpiresAtEpochSeconds").value(1_760_604_800L));
     }
 
-    /**
-     * The two waits are configuration, not episode state, so they are reported whether or not a
-     * recovery is live. A client that states them itself is right only on a deployment left at
-     * the defaults, which the dev target is not.
-     */
     @Test
     void pinStatusReportsTheConfiguredRecoveryWaitsWithNoLiveEpisode() throws Exception {
         org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
@@ -772,7 +682,6 @@ class SecurityControllerTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .jsonPath("$.publicKey.challenge").value("abc"));
 
-        // The ceremony is pinned to the caller, never to a user id taken from the request.
         org.mockito.ArgumentCaptor<String> stepUpId = org.mockito.ArgumentCaptor.forClass(String.class);
         verify(passkeyService).startStepUpAssertion(stepUpId.capture(), org.mockito.ArgumentMatchers.eq("@user:domain"));
         org.junit.jupiter.api.Assertions.assertFalse(stepUpId.getValue().isBlank());
