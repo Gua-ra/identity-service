@@ -85,7 +85,7 @@ class PasskeyRemovalOwnershipTest {
         PasskeyCredential credential = credential(ACCOUNT, OLD_MXID);
         givenThePrincipalOf(NEW_MXID, ACCOUNT);
         when(repository.findByCredentialId(CREDENTIAL_ID)).thenReturn(Optional.of(credential));
-        when(repository.findByAccountPrincipal(ACCOUNT.value())).thenReturn(List.of(credential));
+        when(repository.findByAccountPrincipalForUpdate(ACCOUNT.value())).thenReturn(List.of(credential));
 
         assertThatThrownBy(() -> service().removeCredential(NEW_MXID, CREDENTIAL_ID, false))
                 .isInstanceOf(LoginFlowException.class)
@@ -104,7 +104,7 @@ class PasskeyRemovalOwnershipTest {
         PasskeyCredential credential = credential(ACCOUNT, OLD_MXID);
         givenThePrincipalOf(NEW_MXID, ACCOUNT);
         when(repository.findByCredentialId(CREDENTIAL_ID)).thenReturn(Optional.of(credential));
-        when(repository.findByAccountPrincipal(ACCOUNT.value()))
+        when(repository.findByAccountPrincipalForUpdate(ACCOUNT.value()))
                 .thenReturn(List.of(credential, credential(ACCOUNT, OLD_MXID)));
 
         assertThat(service().removeCredential(NEW_MXID, CREDENTIAL_ID, false)).isTrue();

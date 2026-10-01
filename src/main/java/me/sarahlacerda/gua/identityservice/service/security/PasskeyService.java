@@ -103,7 +103,9 @@ public class PasskeyService implements CredentialRepository {
             // Same answer for another account's credential and for a missing one.
             return false;
         }
-        if (!accountHoldsAnotherFactor && repository.findByAccountPrincipal(principal.get()).size() <= 1) {
+        // Locks the account's credentials before counting, so two concurrent removals cannot both pass.
+        if (!accountHoldsAnotherFactor
+                && repository.findByAccountPrincipalForUpdate(principal.get()).size() <= 1) {
             throw new LoginFlowException(HttpStatus.CONFLICT, "factor_required",
                     "Set up another way to confirm it is you before removing this one.");
         }
