@@ -47,7 +47,7 @@ public class AuthorityFcmBearer {
 
     @Autowired
     public AuthorityFcmBearer(IdentityServiceProperties properties, Clock clock) {
-        this(properties, new HttpExchange(HttpClient.newHttpClient()), clock);
+        this(properties, new HttpExchange(AuthorityPushTransport.httpClient().build()), clock);
     }
 
     AuthorityFcmBearer(IdentityServiceProperties properties, Exchange exchange, Clock clock) {
@@ -122,6 +122,7 @@ public class AuthorityFcmBearer {
         public String post(String uri, String formBody) {
             HttpRequest request = HttpRequest.newBuilder(URI.create(uri))
                     .header("content-type", "application/x-www-form-urlencoded")
+                    .timeout(AuthorityPushTransport.REQUEST_TIMEOUT)
                     .POST(HttpRequest.BodyPublishers.ofString(formBody, StandardCharsets.UTF_8))
                     .build();
             try {

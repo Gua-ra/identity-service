@@ -29,7 +29,7 @@ public class AuthorityFcmTransport implements AuthorityPushTransport {
 
     @Autowired
     public AuthorityFcmTransport(IdentityServiceProperties properties, AuthorityFcmBearer bearer) {
-        this(properties, bearer, HttpClient.newHttpClient());
+        this(properties, bearer, AuthorityPushTransport.httpClient().build());
     }
 
     AuthorityFcmTransport(IdentityServiceProperties properties, AuthorityFcmBearer bearer, HttpClient http) {
@@ -59,6 +59,7 @@ public class AuthorityFcmTransport implements AuthorityPushTransport {
             HttpRequest request = HttpRequest.newBuilder(URI.create(url))
                     .header("authorization", "Bearer " + bearer.current())
                     .header("content-type", "application/json")
+                    .timeout(REQUEST_TIMEOUT)
                     .POST(HttpRequest.BodyPublishers.ofString(payload(token, title, body), StandardCharsets.UTF_8))
                     .build();
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());

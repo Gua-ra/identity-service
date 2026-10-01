@@ -49,7 +49,7 @@ public class AuthorityApnsTransport implements AuthorityPushTransport {
 
     @Autowired
     public AuthorityApnsTransport(IdentityServiceProperties properties, Clock clock) {
-        this(properties, HttpClient.newBuilder().version(HttpClient.Version.HTTP_2).build(), clock);
+        this(properties, AuthorityPushTransport.httpClient().version(HttpClient.Version.HTTP_2).build(), clock);
     }
 
     AuthorityApnsTransport(IdentityServiceProperties properties, HttpClient http, Clock clock) {
@@ -82,6 +82,7 @@ public class AuthorityApnsTransport implements AuthorityPushTransport {
                     .header("apns-push-type", "alert")
                     .header("apns-priority", "10")
                     .header("content-type", "application/json")
+                    .timeout(REQUEST_TIMEOUT)
                     .POST(HttpRequest.BodyPublishers.ofString(payload(title, body), StandardCharsets.UTF_8))
                     .build();
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
