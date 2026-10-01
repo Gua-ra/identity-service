@@ -82,7 +82,9 @@ CREATE TABLE IF NOT EXISTS passkey_credentials (
     backup_eligible BOOLEAN NOT NULL DEFAULT false,
     backup_state BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
-    last_used_at TIMESTAMP WITH TIME ZONE
+    last_used_at TIMESTAMP WITH TIME ZONE,
+    -- V19
+    account_principal VARCHAR(64)
 );
 
 CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_id
@@ -90,6 +92,9 @@ CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_id
 
 CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_handle
     ON passkey_credentials (user_handle);
+
+CREATE INDEX IF NOT EXISTS idx_passkey_credentials_account_principal
+    ON passkey_credentials (account_principal);
 
 -- V11
 CREATE TABLE IF NOT EXISTS account_genesis (

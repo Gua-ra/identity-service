@@ -47,6 +47,8 @@ class AccountIdNotReadGuardTest {
             // read by anything that decides where an account lives or what MAS is told about it.
             "PlacementRecord.java", "PlacementRecordCodec.java", "PlacementRecordSigner.java",
             "ResolverPlacementClient.java", "PlacementShadowReconciler.java", "PlacementAccountScanner.java",
+            // A WebAuthn user handle is not a claim, a userinfo field, a directory column or a localpart.
+            "PasskeyPrincipals.java",
             // account authority: checks the accountId a submitted record carries and returns it to its own holder
             "AuthorityAccounts.java");
 

@@ -40,17 +40,12 @@ identity:
     account-recovery-dormancy: ${IDENTITY_SECURITY_ACCOUNT_RECOVERY_DORMANCY:}
     account-recovery-wait: ${IDENTITY_SECURITY_ACCOUNT_RECOVERY_WAIT:}
     account-recovery-allow-short-for-testing: ${IDENTITY_SECURITY_ACCOUNT_RECOVERY_ALLOW_SHORT_FOR_TESTING:false}
-  # Account genesis and the accountId (ADM-008 Phase 3). Every flag is off by default: a deployment
-  # that sets none of them behaves exactly as it did before the feature existed. Nothing here is read
-  # for routing or for login in this phase.
+  # Account genesis and the accountId. Genesis and bootstrap backfill are enabled by default.
   genesis:
     # Master switch. Off: POST /account/genesis answers 503, the "gua:" login-hint grammar is not
     # parsed, and no account is given a genesis row.
-    enabled: ${IDENTITY_GENESIS_ENABLED:false}
-    # Whether ids may be issued under recovery framework 0x01. Off outside dev (ADM-008 decision 4):
-    # 0x01 commits no delay bounds and its recovery key shares the device store with the key it would
-    # veto, so production issuance waits on ADM-002 D1 and Q6. Dev sets this true and treats the ids
-    # it mints as disposable.
+    enabled: ${IDENTITY_GENESIS_ENABLED:true}
+    # Lets clients register their own account ids (recovery framework 0x01). Keep off in production.
     production-issuance: ${IDENTITY_GENESIS_PRODUCTION_ISSUANCE:false}
     # How long a registered but unattached genesis stays attachable.
     pending-ttl: ${IDENTITY_GENESIS_PENDING_TTL:PT30M}
@@ -60,7 +55,7 @@ identity:
     bootstrap-backfill:
       # Mint a bootstrap accountId for every existing account that has none, at startup. Idempotent
       # and resumable, so it is safe to leave on.
-      enabled: ${IDENTITY_GENESIS_BOOTSTRAP_BACKFILL_ENABLED:false}
+      enabled: ${IDENTITY_GENESIS_BOOTSTRAP_BACKFILL_ENABLED:true}
       batch-size: ${IDENTITY_GENESIS_BOOTSTRAP_BACKFILL_BATCH_SIZE:500}
   # Account authority chain. Off by default. Startup refuses enabled=true without an out-of-band
   # notification channel.

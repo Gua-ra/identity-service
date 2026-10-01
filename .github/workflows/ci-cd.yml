@@ -1,11 +1,20 @@
 name: CI/CD
 
-# Deploy paths, in order of how often they are used:
-#   - label a PR `deploy:dev`  -> builds that branch and rolls it onto dev, so a change can
-#                                 be tried on the real stack before it is merged. Remove the
-#                                 label and re-add it to redeploy after new commits.
-#   - merge to main            -> deploys dev automatically, and stages prod for approval.
-#   - workflow_dispatch        -> same thing by hand, for either environment.
+# Builds, tests and publishes. It never deploys production: promote-prod.yml deploys an artifact that
+# already exists, behind the `production` environment's approval.
+#
+# Paths, in order of how often they are used:
+#   - label a PR `deploy:dev`  -> build that branch and roll it onto dev, so a change can be tried on
+#                                 the real stack before it is merged. Remove and re-add the label to
+#                                 redeploy after new commits.
+#   - merge to main            -> build, test, publish, deploy dev.
+#   - workflow_dispatch        -> `dev` builds and rolls dev; `none` builds, tests and publishes without
+#                                 deploying, which is how a branch produces a promotable artifact.
+#
+# Every image pushed here is signed with a build provenance attestation binding its digest to the commit
+# it was built from. That signature is what makes an artifact promotable: promotion verifies it and
+# refuses an image without one.
+
 on:
   push:
     branches: ["main"]
@@ -14,10 +23,10 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: "Target environment for manual deploy"
+        description: "Where to deploy after building. `none` builds, tests and publishes only."
         type: choice
-        options: [dev, prod]
-        default: dev
+        options: [none, dev]
+        default: none
 
 permissions:
   contents: read
@@ -34,8 +43,18 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # `id-token: write` mints the OIDC token Sigstore signs with, so the certificate carries GitHub's own
+    # claims: repository, workflow file, commit. `attestations: write` stores the bundle against the
+    # repository. A fork PR is capped to read no matter what is declared here, which is why a fork can
+    # never produce a promotable artifact: widening this block would not change that.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     outputs:
       ref: ${{ steps.ref.outputs.ref }}
+      digest: ${{ steps.push.outputs.digest }}
       deploy-to-dev: ${{ steps.gate.outputs.dev }}
     steps:
       - uses: actions/checkout@v4
@@ -83,6 +102,7 @@ jobs:
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=pr-${{ github.event.number }},enable=${{ github.event_name == 'pull_request' }}
       - if: github.event_name != 'pull_request' || steps.gate.outputs.dev == 'true'
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -92,6 +112,35 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Promotion refuses an image carrying no signature, so the signed subject must be the digest that is
+      # actually deployed: the push's index (manifest-list) digest, which is what production is set to and
+      # what kubelet reports back, not one of its per-architecture children. An unreadable digest would
+      # leave a published image unsigned, so the guard below fails closed.
+      - name: Require a usable digest from the push
+        if: github.event_name != 'pull_request' || steps.gate.outputs.dev == 'true'
+        id: digest
+        env:
+          PUSHED: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$PUSHED" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::build-push-action reported no usable digest ('${PUSHED}')."
+            exit 1
+          fi
+          echo "digest=$PUSHED" >> "$GITHUB_OUTPUT"
+
+      # Pinned to a commit, not a tag (v4.2.2). This step is what production trusts, so it must not follow
+      # a moving reference.
+      - if: github.event_name != 'pull_request' || steps.gate.outputs.dev == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          # Left off deliberately. The bundle lives with the repository, where the same people who
+          # can move a tag cannot reach it; pushing a copy into the registry would add a second,
+          # weaker place for a verifier to look.
+          push-to-registry: false
 
   # AUTOMATIC on merge to main. Also fires for a PR labelled `deploy:dev`, and by hand
   # via workflow_dispatch with environment=dev.
@@ -125,36 +174,6 @@ jobs:
               body: `Deployed to **dev** (ns \`gua\`): \`${{ needs.build.outputs.ref }}\`\n\nDev keeps running this build until something else is deployed over it. Merging to main returns dev to main's build.`
             })
 
-  # APPROVAL GATE: fires on every merge to main and on workflow_dispatch with
-  # environment=prod. A merge deploys dev automatically (deploy-dev above) and also
-  # stages this prod deployment, which pauses until a maintainer approves the
-  # `production` GitHub Environment (required reviewer).
-  #
-  # NOTE: this job targets ns gua-prod. It used to say `-n gua`, which meant an approved
-  # prod deploy silently re-rolled DEV and prod never received the build. That is why prod
-  # still runs the mutable `:dev` tag: it has never had a real deploy. The first successful
-  # run here pins it to an immutable sha.
-  #
-  # It also waits for a runner labelled `prod`, which this repo does not have yet (the only
-  # registered runner is labelled `dev`). Until one is registered the job queues rather than
-  # deploying, which is the safe failure: it can no longer quietly hit the wrong namespace.
-  deploy-prod:
-    needs: build
-    if: >-
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod')
-    # Scoped in-cluster runner (k8s/cicd/identity-service-deploy-runner-prod.yaml in
-    # gua-deploy), not the shared host runner. Its label is unique on purpose: `prod` was
-    # never carried by anything, so this job used to queue forever instead of failing,
-    # and `dev` is a root runner with cluster-admin that a deploy must never route to.
-    runs-on: [self-hosted, identity-service-incluster-prod]
-    environment: production
-    steps:
-      - name: Roll out ${{ needs.build.outputs.ref }} to prod
-        run: |
-          IMG="${{ needs.build.outputs.ref }}"
-          # Plain kubectl against the in-cluster ServiceAccount. The scoped runner has no
-          # sudo and no k3s binary, and it does not need them: its Role permits exactly a
-          # patch of this one Deployment and a read of the resulting rollout.
-          kubectl -n gua-prod set image deployment/identity-service identity-service="$IMG"
-          kubectl -n gua-prod rollout status deployment/identity-service --timeout=180s
+  # No deploy-prod job by design. Production is promoted from an artifact that already exists, by
+  # promote-prod.yml, which is also the only route a branch build has, because the `production`
+  # environment is main-only. Build here; promote there.

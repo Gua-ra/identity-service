@@ -45,6 +45,7 @@ import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryService;
 import me.sarahlacerda.gua.identityservice.service.security.EndOtherSessionsService;
+import me.sarahlacerda.gua.identityservice.service.security.PasskeyPrincipals;
 import me.sarahlacerda.gua.identityservice.service.security.PasskeyService;
 import me.sarahlacerda.gua.identityservice.service.security.PinPolicy;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
@@ -115,8 +116,8 @@ class AuthorityNotificationSurvivesRecoveryTest {
         userSecurityService = new UserSecurityService(userRepository, encoder, properties,
                 mock(DirectoryService.class), mock(PhoneNumberHasher.class), mock(OtpService.class), audit,
                 mock(StringRedisTemplate.class), new PinPolicy());
-        passkeyService = new PasskeyService(passkeyRepository, new LoginFlowProperties(),
-                mock(StringRedisTemplate.class), new ObjectMapper());
+        passkeyService = new PasskeyService(passkeyRepository, new PasskeyPrincipals(genesisRepository),
+                new LoginFlowProperties(), mock(StringRedisTemplate.class), new ObjectMapper());
         recovery = new AccountRecoveryService(userSecurityService, passkeyService,
                 mock(EndOtherSessionsService.class), properties, audit, clock);
 
@@ -148,7 +149,7 @@ class AuthorityNotificationSurvivesRecoveryTest {
         int removedPasskeys = driveARecovery("902184");
 
         assertThat(removedPasskeys).isEqualTo(2);
-        assertThat(passkeyRepository.findByUserId(USER)).isEmpty();
+        assertThat(passkeyRepository.findByAccountPrincipal(accountReference)).isEmpty();
         IdentityUser after = userRepository.findByUserId(USER).orElseThrow();
         assertThat(after.getRecoveryCompletedAt()).isNotNull();
         assertThat(after.getPinResetRequestedAt()).isNull();
@@ -285,6 +286,7 @@ class AuthorityNotificationSurvivesRecoveryTest {
 
     private PasskeyCredential passkey(String credentialId) {
         PasskeyCredential credential = PasskeyCredential.builder()
+                .accountPrincipal(accountReference)
                 .userId(USER)
                 .userHandle("handle")
                 .credentialId(credentialId)
