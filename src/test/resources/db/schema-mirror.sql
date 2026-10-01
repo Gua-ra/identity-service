@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS identity_users (
     last_pin_change_at TIMESTAMP WITH TIME ZONE,
     -- V10
     last_phone_change_at TIMESTAMP WITH TIME ZONE,
-    -- V13
+    -- V20
     recovery_completed_at TIMESTAMP WITH TIME ZONE
 );
 
@@ -113,7 +113,7 @@ CREATE INDEX IF NOT EXISTS idx_account_genesis_expires_at
 CREATE INDEX IF NOT EXISTS idx_account_genesis_attach_handle
     ON account_genesis (attach_handle_hash);
 
--- V13
+-- V20
 CREATE TABLE IF NOT EXISTS account_authority_record (
     account_id          VARCHAR(64) NOT NULL,
     seq                 BIGINT      NOT NULL,
@@ -143,7 +143,7 @@ CREATE TABLE IF NOT EXISTS account_authority_head (
     pending_rank         SMALLINT,
     pending_effective_at TIMESTAMP WITH TIME ZONE,
     cooldown_until       TIMESTAMP WITH TIME ZONE,
-    -- V17
+    -- V24
     cooldown_magic       VARCHAR(4),
     pending_extended     BOOLEAN     NOT NULL DEFAULT FALSE,
     cancelled_count      INTEGER     NOT NULL DEFAULT 0,
@@ -188,7 +188,7 @@ CREATE INDEX IF NOT EXISTS idx_account_authority_challenge_expires
 CREATE INDEX IF NOT EXISTS idx_account_authority_challenge_account
     ON account_authority_challenge (account_id);
 
--- V14
+-- V21
 CREATE TABLE IF NOT EXISTS security_notification_device (
     id                      UUID        PRIMARY KEY,
     user_id                 TEXT        NOT NULL,
@@ -211,11 +211,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_security_notification_device_install
 CREATE INDEX IF NOT EXISTS idx_security_notification_device_user
     ON security_notification_device (user_id);
 
--- V14 (continued)
+-- V21 (continued)
 ALTER TABLE account_authority_challenge
     ALTER COLUMN factor DROP NOT NULL;
 
--- V15
+-- V22
 CREATE TABLE IF NOT EXISTS account_authority_candidate (
     id             UUID        PRIMARY KEY,
     account_id     VARCHAR(64) NOT NULL,
@@ -235,7 +235,7 @@ CREATE INDEX IF NOT EXISTS idx_account_authority_candidate_account
 CREATE INDEX IF NOT EXISTS idx_account_authority_candidate_expires
     ON account_authority_candidate (expires_at);
 
--- V16
+-- V23
 CREATE TABLE IF NOT EXISTS account_authority_web_step_up (
     id                UUID        PRIMARY KEY,
     user_id           TEXT        NOT NULL,
@@ -254,7 +254,7 @@ CREATE INDEX IF NOT EXISTS idx_account_authority_web_step_up_lookup
 CREATE INDEX IF NOT EXISTS idx_account_authority_web_step_up_expires
     ON account_authority_web_step_up (expires_at);
 
--- V18
+-- V25
 CREATE TABLE IF NOT EXISTS account_authority_publication (
     account_id     VARCHAR(64) NOT NULL PRIMARY KEY,
     head_seq       BIGINT      NOT NULL,
