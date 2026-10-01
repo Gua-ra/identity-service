@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -193,7 +194,8 @@ public class AuthorityNotificationRegistry {
                 .toList();
     }
 
-    @Transactional
+    /** Called after the transition has committed, so it needs its own transaction to be written at all. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordOutcome(AuthorityNotificationRegistration row, AuthorityPushTransport.Outcome outcome,
             Instant now) {
         AuthorityNotificationRegistration stored = repository.findById(row.getId()).orElse(null);
