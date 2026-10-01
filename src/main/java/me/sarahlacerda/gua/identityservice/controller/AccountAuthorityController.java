@@ -160,13 +160,11 @@ public class AccountAuthorityController {
 
     @PostMapping("/oppose/record")
     @Operation(summary = "Object to the pending transition with a signed record",
-            description = "The Oppose record of ADM-009 decision 2, signed by a key the chain has active and "
-                    + "unquarantined right now. It takes no slot and starts no window: it cancels the record "
-                    + "it names, or it is refused. This is what decisions 5 and 7 mean by an active device "
-                    + "objecting, and it is the claim a bearer session cannot make, because a stolen session "
-                    + "would otherwise veto the owner's own revocation of the thief's device. No factor is "
-                    + "asked for and no hold is weighed: the holds gate starting a transition, never opposing "
-                    + "one.",
+            description = "An Oppose record signed by a key the chain has active and unquarantined right "
+                    + "now. It takes no slot and starts no window: it cancels the record it names, or it is "
+                    + "refused. A bearer session cannot make this claim, because a stolen session would "
+                    + "otherwise veto the owner's own revocation of the thief's device. No factor is asked "
+                    + "for and no hold is weighed: the holds gate starting a transition, never opposing one.",
             security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "204", description = "Cancelled, extended, or nothing was pending"),
@@ -279,7 +277,7 @@ public class AccountAuthorityController {
 
     @PostMapping("/recover")
     @Operation(summary = "Replace the device set and the recovery key in one record",
-            description = "Authorized by the committed recovery authority key, which runs ADM-002 D1's delay for "
+            description = "Authorized by the committed recovery authority key, which runs the recovery delay of "
                     + "framework 0x01 and cannot be cancelled by an active device, or through a completed "
                     + "account recovery, which is vetoable by the account immediately and is refused outright on "
                     + "a class 0x01 account. Both carry adoption's controls: the native app, the challenge "

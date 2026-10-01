@@ -29,7 +29,7 @@ class AuthorityNotificationGateTest {
 
         assertThatThrownBy(() -> AuthorityNotificationGate.validate(authority, false))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("gate 2")
+                .hasMessageContaining("no out-of-band notification channel")
                 .hasMessageContaining("a log line is not a channel");
     }
 
@@ -123,7 +123,7 @@ class AuthorityNotificationGateTest {
 
         assertThatThrownBy(() -> AuthorityNotificationGate.validate(authority, true))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("O9");
+                .hasMessageContaining("must each be at least PT24H");
     }
 
     @Test

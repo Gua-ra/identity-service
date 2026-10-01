@@ -57,10 +57,11 @@ public class AccountAuthorityNotificationController {
     @Operation(summary = "Register or refresh this install's security-notification destination",
             description = "An upsert on the installation id, which is client-generated and held in the keychain "
                     + "or keystore so it survives a sign-out. Nothing about this row is removed by a sign-out, a "
-                    + "token revocation, a PIN reset, a passkey removal or a completed account recovery, which is "
-                    + "the whole property gate 2 asks for. A device authority key may be bound to the row, and "
-                    + "only with a signature by that key over a spent challenge. An upsert refreshes a "
-                    + "registration; it may not move an existing row's push destination without that signature, "
+                    + "token revocation, a PIN reset, a passkey removal or a completed account recovery, so a "
+                    + "pending transition can still be announced after any of them. A device authority key may be "
+                    + "bound to the row, and only with a signature by that key over a spent challenge. An upsert "
+                    + "refreshes a registration; it may not move an existing row's push destination without that "
+                    + "signature, "
                     + "because a destination change is a removal and a re-registration wearing one call.",
             security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({

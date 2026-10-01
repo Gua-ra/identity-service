@@ -47,15 +47,15 @@ public class AuthorityNotificationGate {
         }
         if (!outOfBandNotifications) {
             throw new IllegalStateException("identity.authority.enabled is true but no out-of-band "
-                    + "notification channel is wired. ADM-009 gate 2: a pending authority transition must "
+                    + "notification channel is wired. A pending authority transition must "
                     + "be announced on a channel that is neither the account's phone number nor a session "
                     + "an account recovery revokes, and a log line is not a channel. Refusing to start.");
         }
         requireLoadableKeys(authority);
         if (authority.getChallengeTtl().compareTo(MAX_CHALLENGE_TTL) > 0) {
             throw new IllegalStateException("identity.authority.challenge-ttl (" + authority.getChallengeTtl()
-                    + ") must be at most " + MAX_CHALLENGE_TTL + ". ADM-009 decision 4 step 2 wants a step-up "
-                    + "no older than the challenge it authorizes. Refusing to start.");
+                    + ") must be at most " + MAX_CHALLENGE_TTL + ". A step-up may not be older than the "
+                    + "challenge it authorizes. Refusing to start.");
         }
         boolean tooShort = authority.getOppositionWindow().compareTo(WINDOW_FLOOR) < 0
                 || authority.getRecoveryWindow().compareTo(WINDOW_FLOOR) < 0;
@@ -71,7 +71,7 @@ public class AuthorityNotificationGate {
         throw new IllegalStateException("identity.authority.opposition-window ("
                 + authority.getOppositionWindow() + ") and identity.authority.recovery-window ("
                 + authority.getRecoveryWindow() + ") must each be at least " + WINDOW_FLOOR
-                + ". The window is the whole security of the transition (ADM-001 O9). Refusing to start. "
+                + ". The window is the whole security of the transition. Refusing to start. "
                 + "Shorter windows are for dev only and need "
                 + "identity.authority.allow-short-windows-for-testing=true.");
     }
@@ -94,7 +94,7 @@ public class AuthorityNotificationGate {
         } catch (RuntimeException ex) {
             throw new IllegalStateException(property + " does not load as a " + algorithm
                     + " key (" + ex.getMessage() + "). That transport has a base URL, so it counts as a "
-                    + "channel for ADM-009 gate 2, and a channel that cannot sign announces nothing. "
+                    + "notification channel, and a channel that cannot sign announces nothing. "
                     + "Refusing to start.", ex);
         }
     }
