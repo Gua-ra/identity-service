@@ -9,12 +9,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import me.sarahlacerda.gua.identityservice.account.genesis.AccountId;
 import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.domain.PasskeyCredential;
 import me.sarahlacerda.gua.identityservice.repository.PasskeyCredentialRepository;
+import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
@@ -24,9 +26,12 @@ import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -392,6 +397,79 @@ class PasskeyStablePrincipalTest {
                 new com.yubico.webauthn.data.ByteArray("cred-2".getBytes(StandardCharsets.UTF_8)),
                 new com.yubico.webauthn.data.ByteArray(ACCOUNT.rawBytes())))
                 .isEmpty();
+    }
+
+    // --- ownership never falls back to the Matrix id ----------------------------------------------------
+
+    private static LoginSession sessionFor(String userId) {
+        LoginSession session = new LoginSession();
+        session.setUserId(userId);
+        session.setPreferredUsername("alice");
+        return session;
+    }
+
+    /**
+     * An account with no attached genesis row has no principal, so registration is refused before anything is
+     * stored. Writing the credential under the MXID instead would recreate the defect for that account.
+     */
+    @Test
+    void registrationForAnAccountWithNoPrincipalIsRefusedAndStoresNothing() {
+        when(principals.forUserId(NEW_MXID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service().startRegistration("session-1", sessionFor(NEW_MXID)))
+                .isInstanceOf(LoginFlowException.class)
+                .satisfies(ex -> {
+                    LoginFlowException flow = (LoginFlowException) ex;
+                    assertThat(flow.getCode()).isEqualTo("passkey_account_not_ready");
+                    assertThat(flow.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                });
+
+        verifyNoInteractions(redisTemplate);
+        verify(repository, never()).save(any());
+    }
+
+    /**
+     * The same refusal when the ceremony is completed, placed before the ceremony: the stored value here is not
+     * a ceremony at all, so reaching the library would have produced a different code.
+     */
+    @Test
+    void finishingRegistrationForAnAccountWithNoPrincipalIsRefusedBeforeTheCeremonyAndSavesNothing()
+            throws Exception {
+        PasskeyService service = service();
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get("passkey:registration:session-1")).thenReturn("{\"stored\":\"ceremony\"}");
+        when(principals.forUserId(NEW_MXID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.finishRegistration("session-1", sessionFor(NEW_MXID),
+                new ObjectMapper().readTree("{\"response\":{}}")))
+                .isInstanceOf(LoginFlowException.class)
+                .satisfies(ex -> {
+                    LoginFlowException flow = (LoginFlowException) ex;
+                    assertThat(flow.getCode()).isEqualTo("passkey_account_not_ready");
+                    assertThat(flow.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                });
+
+        verify(repository, never()).save(any());
+    }
+
+    /** The step-up ceremony is pinned to the principal, so nothing it hands the browser names a Matrix identity. */
+    @Test
+    void theStepUpOptionsNameNoMatrixIdentity() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(principals.forUserId(NEW_MXID))
+                .thenReturn(Optional.of(new PasskeyPrincipals.Principal(PRINCIPAL, ACCOUNT.rawBytes())));
+        lenient().when(principals.fromText(PRINCIPAL))
+                .thenReturn(Optional.of(new PasskeyPrincipals.Principal(PRINCIPAL, ACCOUNT.rawBytes())));
+        when(repository.existsByAccountPrincipal(PRINCIPAL)).thenReturn(true);
+        when(repository.findByAccountPrincipal(PRINCIPAL)).thenReturn(List.of(credentialOwnedByThePrincipal()));
+
+        JsonNode options = service().startStepUpAssertion("step-1", NEW_MXID);
+
+        assertThat(options.path("allowCredentials")).hasSize(1);
+        assertThat(options.toString())
+                .doesNotContain(NEW_MXID)
+                .doesNotContain(OLD_MXID)
+                .doesNotContain("@alice");
     }
 
 }
