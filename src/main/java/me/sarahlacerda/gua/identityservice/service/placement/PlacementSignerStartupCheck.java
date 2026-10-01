@@ -17,30 +17,8 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Home
 import me.sarahlacerda.gua.identityservice.service.placement.ResolverPlacementClient.RosterEntryView;
 import me.sarahlacerda.gua.identityservice.service.placement.ResolverPlacementClient.RosterView;
 
-/**
- * Refuses to start a deployment that would publish placement records under the wrong identity.
- *
- * <p>A generation-1 record is trusted because it is signed by the roster membership key of the
- * homeserver it names, and the resolver verifies it against the key in that homeserver's ACTIVE roster
- * entry. So three things have to line up before this service signs anything: the roster entry has to
- * exist and be ACTIVE, the roster id this deployment is configured to write into records has to be that
- * entry's id, and the private key in the deployment Secret has to be the private half of that entry's
- * published key. Any of them being wrong produces records the resolver silently rejects, or worse,
- * records naming a homeserver this deployment is not.
- *
- * <p>Checked once at startup and failed fast, like the directory pepper pin: a misconfiguration that only
- * shows up as a rejection rate on a nightly job goes unnoticed.
- *
- * <p>Two namespaces meet here. The local registry id is what {@code directory_entries.homeserver_id}
- * holds; the roster id is what a record carries. They are joined on the Matrix domain, which is unique in
- * the roster. The legacy synthesised homeserver has no roster identity, so publishing requires an explicit
- * {@code identity.routing.homeservers} list; the alias map lets comparisons read legacy directory values
- * and never lets a record be signed for a guessed homeserver.
- *
- * <p>Inert unless {@code identity.placement.publish.enabled} is on. A deployment that only runs the
- * comparison never reaches this check, and one that has turned the feature off entirely never reads the
- * roster at all.
- */
+// Fails startup unless each publishing homeserver's ACTIVE roster entry matches the configured id and key.
+// Inert unless identity.placement.publish.enabled is on.
 @Component
 public class PlacementSignerStartupCheck {
 
@@ -83,8 +61,6 @@ public class PlacementSignerStartupCheck {
         for (HomeserverConfig homeserver : properties.getRouting().getHomeservers()) {
             String configuredKey = homeserver.getPlacementSigningPrivateKey();
             if (configuredKey == null || configuredKey.isBlank()) {
-                // Not a homeserver this deployment publishes for. Records are only ever signed for the
-                // homeservers whose membership key it actually holds.
                 continue;
             }
             verifyOne(homeserver, roster);
@@ -98,11 +74,7 @@ public class PlacementSignerStartupCheck {
         log.info("Placement signing identity verified against the roster for {} homeserver(s)", verified);
     }
 
-    /**
-     * The configured window must be one the codec encodes: validity is at most 400 days (ADM-008
-     * decision 7) and {@link PlacementRecordCodec} refuses anything longer. Checked at boot so a bad
-     * value fails startup instead of failing every nightly signature.
-     */
+    /** Checked at boot so a window the codec would refuse fails startup. */
     private void verifyValidityWindow() {
         Duration validity = properties.getPlacement().getRecordValidity();
         if (validity.isZero() || validity.isNegative()) {

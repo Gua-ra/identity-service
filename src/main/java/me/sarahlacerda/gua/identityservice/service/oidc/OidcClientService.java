@@ -21,9 +21,6 @@ import me.sarahlacerda.gua.identityservice.config.OidcProperties;
 import me.sarahlacerda.gua.identityservice.exception.OidcClientAuthenticationException;
 import me.sarahlacerda.gua.identityservice.exception.OidcInvalidRequestException;
 
-/**
- * Validates OIDC client authentication, redirect URIs, scopes, and PKCE per RFC 6749 + RFC 7636.
- */
 @Service
 @RequiredArgsConstructor
 public class OidcClientService {
@@ -84,9 +81,7 @@ public class OidcClientService {
         }
     }
 
-    /**
-     * Validates code_challenge_method and challenge format. Returns true when PKCE is in use for this request.
-     */
+    /** Returns true when PKCE is in use for this request. */
     public boolean validateChallenge(RegisteredClient client, String codeChallenge, String codeChallengeMethod) {
         if (codeChallenge == null || codeChallenge.isBlank()) {
             if (client.requirePkce()) {
@@ -118,10 +113,6 @@ public class OidcClientService {
         }
     }
 
-    /**
-     * Verifies that the supplied PKCE verifier matches the previously-supplied challenge using S256.
-     * Throws when PKCE was used at /authorize but the verifier is missing or wrong.
-     */
     public void verifyPkce(Optional<String> storedChallenge, String suppliedVerifier) {
         if (storedChallenge.isEmpty()) {
             if (suppliedVerifier != null && !suppliedVerifier.isBlank()) {

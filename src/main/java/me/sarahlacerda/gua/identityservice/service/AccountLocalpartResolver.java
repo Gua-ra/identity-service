@@ -14,29 +14,8 @@ import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.domain.MatrixIds;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 
-/**
- * Chooses the localpart an existing account presents as the {@code preferred_username}
- * claim, which MAS imports as the Matrix localpart on a first delegated login. The value
- * is read from the directory and never derived from the user id (ADM-001 spike S6).
- *
- * <p>The source is the username stored in the directory: the handle reserved at signup
- * under the directory's case-insensitive unique index, which no code path changes once
- * stored (a phone change carries it forward). It is read, never derived from the user
- * id, so re-keying {@code user_id} cannot change what an account presents to MAS.
- *
- * <p>Rows without a stored username (legacy native signups, rows healed from the
- * homeserver phone binding) fall back to the localpart of a well-formed Matrix user id,
- * via {@link MatrixIds}. That value is unique on its own homeserver; it is refused when
- * another account in this directory holds it as its stored username, and it is never
- * produced from a user id that is not a Matrix user id.
- *
- * <p>Every candidate must also match the username format
- * ({@link UsernamePolicy#hasValidFormat}), which is lowercase because MAS matches
- * localparts case-insensitively. Anything that fails is refused with
- * {@code account_identity_inconsistent} instead of being sent: with the MAS claims
- * import set to {@code on_conflict: add}, a localpart shared by two accounts links the
- * second account onto the first account's MAS user.
- */
+// The preferred_username MAS imports as the localpart: the stored directory username, else the MXID localpart.
+// Two accounts sharing a localpart would be merged in MAS, so a conflict is refused.
 @Component
 @RequiredArgsConstructor
 public class AccountLocalpartResolver {
@@ -47,13 +26,6 @@ public class AccountLocalpartResolver {
 
     private final DirectoryService directoryService;
 
-    /**
-     * @param userId the account's Matrix user id (the OIDC {@code sub})
-     * @param rows   the account's directory rows the caller already loaded; may be empty
-     * @return the localpart to emit as {@code preferred_username}
-     * @throws LoginFlowException 500 {@code account_identity_inconsistent} when no
-     *                            per-account localpart can be established
-     */
     public String forExistingAccount(String userId, List<DirectoryEntry> rows) {
         if (!StringUtils.hasText(userId)) {
             throw inconsistent(null, "missing user id");

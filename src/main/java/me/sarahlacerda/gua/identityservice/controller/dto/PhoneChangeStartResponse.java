@@ -4,11 +4,6 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
-/**
- * Result of starting a phone-number change. Holds the challenge id the client
- * redeems at /account/phone/change/complete together with the OTP delivered to
- * the new number.
- */
 @Getter
 @RequiredArgsConstructor
 @Schema(description = "Result of starting a phone-number change")

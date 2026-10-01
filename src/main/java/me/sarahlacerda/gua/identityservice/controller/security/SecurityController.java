@@ -85,11 +85,6 @@ public class SecurityController {
     })
     public ResponseEntity<PinStatusResponse> pinStatus() {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
-        // The factor report is one-way on purpose. The server tells the client which factors
-        // the account has registered and which ones a phone change accepts, so the client can
-        // offer the right thing first instead of guessing. The client never tells the server
-        // that a factor is unavailable: that claim costs an attacker nothing, so it could
-        // only ever be a way to ask for something weaker.
         AuthFactorPolicy.RegisteredFactors factors = authFactorPolicy.registeredFactors(userId);
         AccountRecoveryState recovery = accountRecoveryService.pendingFor(userId).orElse(null);
         return ResponseEntity.ok(new PinStatusResponse(
@@ -103,9 +98,6 @@ public class SecurityController {
                 recovery != null,
                 recovery == null ? null : recovery.completableAtEpochSeconds(),
                 recovery == null ? null : recovery.expiresAtEpochSeconds(),
-                // The two waits are configuration, not episode state, so they are reported whether
-                // or not one is live. A client that states them itself is right only on a
-                // deployment left at the defaults, which the dev target is not.
                 properties.getSecurity().getAccountRecoveryDormancy().toSeconds(),
                 properties.getSecurity().getAccountRecoveryWait().toSeconds()));
     }
@@ -117,8 +109,6 @@ public class SecurityController {
             @ApiResponse(responseCode = "403", description = "step_up_required: use POST /security/pin/enroll/start", content = @Content)
     })
     public ResponseEntity<Void> setInitialPin() {
-        // Takes no body and touches nothing, so an older client is told what to do instead of
-        // tripping a validation error on a payload that was never going to be stored.
         throw new StepUpRequiredException(
                 "Confirm it is you before adding a PIN: start at POST /security/pin/enroll/start.");
     }
@@ -134,8 +124,6 @@ public class SecurityController {
     public ResponseEntity<PinEnrollStartResponse> startPinEnrollment(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Optional. The app-scheme redirect this build answers.", required = false, content = @Content(schema = @Schema(implementation = FactorEnrollStartRequest.class))) @RequestBody(required = false) FactorEnrollStartRequest request) {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
-        // Same shape as the passkey guard below: an account that already has one is told so,
-        // rather than being walked into a setup step that would refuse under the row lock.
         if (authFactorPolicy.pinRegistered(userId)) {
             throw new LoginFlowException(HttpStatus.CONFLICT, "pin_already_set",
                     "This account already has a PIN.");
@@ -185,8 +173,6 @@ public class SecurityController {
             @ApiResponse(responseCode = "410", description = "This endpoint is retired", content = @Content)
     })
     public ResponseEntity<Void> retiredPinReset() {
-        // Takes no body and touches nothing, so an old client learns the path is gone instead of
-        // tripping a validation error first.
         throw new EndpointRetiredException(
                 "PIN reset moved into sign-in. Open Gua, enter your number, and choose the recovery option.");
     }
@@ -230,16 +216,7 @@ public class SecurityController {
             @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Optional. The app-scheme redirect this build answers.", required = false, content = @Content(schema = @Schema(implementation = FactorEnrollStartRequest.class))) @RequestBody(required = false) FactorEnrollStartRequest request) {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
 
-        // Enrolling a second passkey for an account that already has one cannot succeed.
-        // The ceremony excludes the credentials the account already holds, so the
-        // authenticator refuses, and the browser reports that refusal as a failure rather
-        // than as "you already have one". Every login route already declines to offer
-        // setup in this case, in LoginFlowController.advanceToPasskeySetup. This entry
-        // point skipped the same check, so opening it from settings walked straight into a
-        // ceremony that was guaranteed to fail and left nothing behind, which read from
-        // the outside like passkeys being broken.
-        // Same question, same answer as LoginFlowController.advanceToPasskeySetup, because both
-        // now ask AuthFactorPolicy rather than each assembling it from isEnabled + hasPasskey.
+        // The ceremony excludes credentials the account already holds, so a second enrollment cannot succeed.
         if (authFactorPolicy.passkeyRegistered(userId)) {
             throw new LoginFlowException(HttpStatus.CONFLICT, "passkey_already_registered",
                     "This account already has a passkey.");
@@ -249,61 +226,26 @@ public class SecurityController {
                 startFactorEnrollment(userId, LoginSession.EnrollTarget.PASSKEY, requestedRedirectUri(request))));
     }
 
-    /**
-     * The one thing an enrollment body may carry, and the only value either endpoint reads off
-     * the request. The body itself is optional, so a client that sends none, which is every
-     * client built before this existed, is indistinguishable from one that names nothing.
-     */
     private static String requestedRedirectUri(FactorEnrollStartRequest request) {
         return request == null ? null : request.getRedirectUri();
     }
 
-    /**
-     * Builds the enrollment session both entry points hand out, and returns the one-time URL
-     * that opens it.
-     *
-     * <p>
-     * What the two enrollment endpoints ask for is the bearer token, and what the session they
-     * create can do with that alone is nothing: it starts at {@code ENROLL_STEP_UP}, where the account has to
-     * be confirmed with a user-verifying passkey assertion, the account PIN, or, for an account
-     * that holds neither, its own number and a code sent to that number. Only then does the
-     * session reach the step that stores a factor. A session is the thing an attacker gets hold
-     * of, so a session on its own must not be able to leave a new way in behind it.
-     *
-     * <p>
-     * The step-up runs in a web view rather than in the app because that is the only place a
-     * passkey assertion can be performed on every platform this ships to, and asking for the
-     * strongest proof the account can give was the point.
-     */
     private String startFactorEnrollment(String userId, LoginSession.EnrollTarget target,
             String requestedRedirectUri) {
-        // Resolved first, before any account state is read: whether a redirect is one this
-        // deployment allows is a fact about the request alone, so a refused one stops here
-        // rather than being carried on an object that is about to be filled in.
         String redirectUri = enrollRedirectUri(requestedRedirectUri);
 
         requireAProofThisDeploymentCanRun(userId);
 
-        // Same localpart source as login (ADM-001 S6). An enrollment session never issues
-        // an authorization code, but it must not carry a value login would refuse.
         List<DirectoryEntry> entries = directoryService.findByUserId(userId);
         String preferredUsername = accountLocalparts.forExistingAccount(userId, entries);
 
         LoginSession session = new LoginSession();
         session.setUserId(userId);
-        // Mark this as an enrollment (not an OIDC login): there is no authorize request,
-        // so completion redirects back to the app scheme instead of issuing an authorization
-        // code (which would NPE on the absent client id).
         session.setEnroll(true);
         session.setEnrollTarget(target);
-        // Pin the session to the authenticated subject. This forces the LOGIN-ONLY
-        // contract in LoginFlowController so the enroll flow can never degrade into an
-        // open signup/login even though the user is dropped straight into enrollment.
         session.setReauthUserId(userId);
         session.setDisplayName(displayNameFor(entries, preferredUsername));
         session.setPreferredUsername(preferredUsername);
-        // An app scheme this deployment allows; only echoed back if enrollment reaches
-        // completion, and never reachable as an open login (reauthUserId is set above).
         session.setRedirectUri(redirectUri);
         session.setPhase(Phase.ENROLL_STEP_UP);
         session.setCsrfToken(loginSessionService.newToken());
@@ -312,49 +254,14 @@ public class SecurityController {
         String enrollToken = loginSessionService.createEnrollToken(sessionId,
                 loginProperties.getEnroll().getTokenTtl());
 
-        // Absolute URL on the web origin that serves the sign-in SPA (same origin the
-        // login cookie is first-party to), so the web view loads it directly.
         return UriComponentsBuilder.fromUriString(oidcProperties.getIssuer())
                 .path("/login/enroll/{token}")
                 .buildAndExpand(enrollToken)
                 .toUriString();
     }
 
-    /**
-     * Where the enrollment sheet sends the app back when the ceremony completes.
-     *
-     * <p>
-     * The app that opened the sheet is the app that has to receive the handoff, and each build
-     * registers its own scheme: the store build answers {@code global.gua}, a QA build
-     * {@code global.gua.dev}, an Android debug build {@code global.gua.debug}. One configured
-     * value for the whole deployment meant the sheet on a QA build handed off to a scheme that
-     * build does not answer, so it never dismissed itself, and on a phone that also has the
-     * store build installed the completion went to the wrong app.
-     *
-     * <p>
-     * Three steps, in this order:
-     *
-     * <ol>
-     * <li>the redirect the caller named, when the deployment's allowlist has it. The build is
-     * the only party that knows which build it is, because an app's bearer is a homeserver token
-     * validated through whoami and so names no OIDC client of ours to read the scheme off;</li>
-     * <li>the app scheme registered by the OIDC client the token was issued to, for a token this
-     * service minted itself;</li>
-     * <li>the configured default.</li>
-     * </ol>
-     *
-     * <p>
-     * Letting the caller name it is the part that needs the bound. This is a bearer endpoint
-     * that hands back a URL on our own origin, and one that honoured any redirect a caller sent
-     * would hand a session's completion wherever the caller asked. So a named value reaches a
-     * session through {@link #allowlisted(String)} and no other way: the operator says which
-     * schemes exist, the caller only says which of them is asking.
-     *
-     * <p>
-     * Only an app scheme is taken from a client registration. What is being chosen is the thing
-     * the web view opening this sheet is listening for, and a client whose redirects are all web
-     * origins, the authentication service among them, is not an app that can be handed back to.
-     */
+    // Resolution order: the caller's redirect if allowlisted, then the app scheme of the token's OIDC client,
+    // then the configured default.
     private String enrollRedirectUri(String requestedRedirectUri) {
         if (StringUtils.hasText(requestedRedirectUri)) {
             return allowlisted(requestedRedirectUri);
@@ -362,24 +269,7 @@ public class SecurityController {
         return clientRegisteredAppScheme().orElseGet(() -> loginProperties.getEnroll().getRedirectUri());
     }
 
-    /**
-     * Matches a caller-named redirect against the deployment's allowlist and hands back the
-     * configured entry, not the string that arrived, so what is stamped on a session is always a
-     * value an operator wrote down.
-     *
-     * <p>
-     * The match is exact. An allowlist that normalized, prefix-matched or ignored case would be
-     * deciding on the caller's behalf what counts as the same app, which is the one judgement
-     * this list exists to take away from the caller.
-     *
-     * <p>
-     * A value that is not on the list is refused, and the refusal carries no part of it: not in
-     * the message, not in a log line. It arrived from the caller, so echoing it back would make
-     * this a reflector, and an operator learns which scheme to add from the builds being shipped
-     * rather than from a request the server already refused. Clients treat the refusal as a
-     * signal to retry once with no redirect, which lands on the default, so a deployment that
-     * has not been told about a build yet costs QA a redirect, never the enrollment.
-     */
+    /** Exact match only. Returns the configured entry, and a refusal never echoes the caller's value. */
     private String allowlisted(String requestedRedirectUri) {
         String requested = requestedRedirectUri.trim();
         return loginProperties.getEnroll().allowedRedirectUris().stream()
@@ -389,14 +279,7 @@ public class SecurityController {
                         "That is not a redirect this deployment allows for enrollment."));
     }
 
-    /**
-     * The app scheme registered by the OIDC client the bearer token was issued to, read off the
-     * audience this service verified before accepting the token.
-     *
-     * <p>
-     * Empty when the token names no client of ours, which is every homeserver-issued token, and
-     * when the client it names registered no app scheme.
-     */
+    /** Empty for a homeserver-issued token, which names no client of ours. */
     private Optional<String> clientRegisteredAppScheme() {
         return authenticatedUserAccessor.currentClientId()
                 .flatMap(clientId -> oidcProperties.getClients().stream()
@@ -407,31 +290,13 @@ public class SecurityController {
                         .findFirst());
     }
 
-    /** A redirect an app answers, rather than a browser: anything that is not an http(s) URL. */
     private static boolean isAppScheme(String redirectUri) {
         String lower = redirectUri.toLowerCase(java.util.Locale.ROOT);
         return !lower.startsWith("http://") && !lower.startsWith("https://");
     }
 
-    /**
-     * Refuses to open an enrollment session whose step-up no proof could pass.
-     *
-     * <p>
-     * The step-up takes a passkey assertion, the account PIN, or, only from an account that
-     * holds neither, its own number and a code sent to it. One account falls outside all three:
-     * one that holds a passkey and no PIN on a deployment where passkeys are switched off. The
-     * assertion cannot run here, there is no PIN to give, and the SMS proof is not a way out,
-     * because it is confined to accounts that hold nothing at all (see
-     * {@link AuthFactorPolicy} on held versus registered, and why switching passkeys off must
-     * not downgrade such an account).
-     *
-     * <p>
-     * Left to run, that session would publish {@code passkeyRegistered=false} and
-     * {@code preferredFactor=PHONE_OTP}, which points the web at the phone step, and then be
-     * refused there with {@code step_up_factor_available}: its own published state pointing the
-     * client at the one path the server will not take. Saying so at the entry point is the
-     * honest answer. The way back for that account is the delayed recovery, which waits.
-     */
+    // An account with a passkey and no PIN cannot step up while passkeys are disabled, so it is refused at the
+    // entry point.
     private void requireAProofThisDeploymentCanRun(String userId) {
         boolean canProve = authFactorPolicy.passkeyRegistered(userId)
                 || authFactorPolicy.pinRegistered(userId)
@@ -442,11 +307,6 @@ public class SecurityController {
         }
     }
 
-    /**
-     * Resolves a human-friendly display name for the passkey credential from the
-     * user's directory rows, falling back to the account's localpart when the
-     * directory has no display name for the user.
-     */
     private static String displayNameFor(List<DirectoryEntry> entries, String localpart) {
         return entries.stream()
                 .map(DirectoryEntry::getDisplayName)

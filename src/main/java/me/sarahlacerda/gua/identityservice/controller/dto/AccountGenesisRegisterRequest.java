@@ -5,12 +5,7 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.Getter;
 import lombok.Setter;
 
-/**
- * Registration of an {@code AccountGenesis} the client generated on device (ADM-008 decision 3).
- *
- * <p>Both fields are base64url without padding. The proof is not part of the genesis: it shows that
- * whoever is registering these bytes holds the authority key committed inside them.
- */
+/** Both fields are base64url without padding. */
 @Getter
 @Setter
 @Schema(description = "An AccountGenesis and the client's proof that it holds the committed authority key")

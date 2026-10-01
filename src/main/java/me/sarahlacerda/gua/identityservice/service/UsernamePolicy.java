@@ -9,13 +9,6 @@ import org.springframework.util.StringUtils;
 
 import me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException;
 
-/**
- * Single source of truth for Gua username (Matrix localpart) rules: 3-30
- * characters of lowercase letters, digits, dot, underscore, or dash, excluding
- * a
- * reserved set. Shared by the legacy signup flow and the interactive OIDC login
- * flow so both validate handles identically.
- */
 @Component
 public class UsernamePolicy {
 
@@ -25,13 +18,6 @@ public class UsernamePolicy {
             "admin", "administrator", "root", "system", "gua", "guaa", "support", "help",
             "moderator", "matrix", "synapse", "server", "official", "staff");
 
-    /**
-     * Normalizes (trim + lowercase) and validates a requested username.
-     *
-     * @return the normalized localpart
-     * @throws InvalidUsernameException when the username is missing, malformed, or
-     *                                  reserved
-     */
     public String normalizeAndValidate(String rawUsername) {
         if (!StringUtils.hasText(rawUsername)) {
             throw new InvalidUsernameException("Username is required");
@@ -41,10 +27,7 @@ public class UsernamePolicy {
             throw new InvalidUsernameException(
                     "Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash");
         }
-        // MAS rejects all-numeric usernames (register.rego "username-all-numeric"):
-        // the localpart must contain at least one non-numeric character. Enforce the
-        // same rule here so we fail fast with a friendly message instead of letting
-        // the upstream MAS policy check reject the provisioning request.
+        // MAS rejects all-numeric usernames (register.rego username-all-numeric).
         if (ALL_NUMERIC_PATTERN.matcher(normalized).matches()) {
             throw new InvalidUsernameException("Username must contain at least one non-numeric character");
         }
@@ -54,12 +37,7 @@ public class UsernamePolicy {
         return normalized;
     }
 
-    /**
-     * Format-only check (3-30 lowercase letters, digits, dot, underscore, or dash),
-     * without the reserved-name and all-numeric rules that apply when choosing a new
-     * handle. Vets the localpart an existing account presents to MAS, which may
-     * predate those rules.
-     */
+    /** Format only, without the reserved-name and all-numeric rules: existing accounts may predate them. */
     public static boolean hasValidFormat(String localpart) {
         return localpart != null && USERNAME_PATTERN.matcher(localpart).matches();
     }

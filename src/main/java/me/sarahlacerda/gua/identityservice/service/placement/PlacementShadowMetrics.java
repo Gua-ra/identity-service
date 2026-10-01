@@ -14,45 +14,11 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 
-/**
- * The series the shadow comparison window (migration plan phase 4) is judged by. These are the exact
- * names a scrape exposes:
- *
- * <ul>
- *   <li>{@code gua_identity_placement_shadow_total{result}}, one counter per classification;</li>
- *   <li>{@code gua_identity_placement_shadow_accounts_scanned}, the size of the last run;</li>
- *   <li>{@code gua_identity_placement_shadow_last_success_timestamp}, which is how an alert notices the
- *       job stopped running rather than started disagreeing;</li>
- *   <li>{@code gua_identity_mas_localpart_on_conflict{homeserver,value}}, so {@code add} coming back
- *       after it was set to {@code fail} is visible;</li>
- *   <li>{@code gua_identity_placement_publish_total{result}}, including the conflict a record naming
- *       another homeserver produces;</li>
- *   <li>{@code gua_identity_placement_shadow_failures_total{reason}}, the accounts the run could not
- *       classify at all.</li>
- * </ul>
- *
- * <p>The publish and failures counters carry a <b>closed</b> label set, because a panel or an alert is
- * written against the literal values. {@code result} on the publish counter is one of the four {@code PublishOutcome} values,
- * {@code published}, {@code conflict}, {@code rejected} and {@code unavailable}, or one of the three
- * reasons the reconciler skips an account before ever calling the resolver, {@code no_signing_key},
- * {@code bad_account_id} and {@code origin_mismatch}. {@code reason} on the failures counter is
- * {@code unknown_homeserver} or {@code error}. Adding a value to either is a deliberate edit here.
- *
- * <p>A run completes and {@code last_success_timestamp} advances even when accounts fail to classify;
- * those accounts are counted on the failures counter under {@code reason}, which is the series an alert
- * watches.
- *
- * <p>Prometheus appends {@code _total} to counters and never to gauges, so the gauges carry no such
- * suffix and the counters do. {@code PlacementShadowMetricsTest} pins every name against a real scrape,
- * because an alert built on a name that does not exist reads as "no data", not as an error.
- *
- * <p>Every counter for the closed result vocabulary is registered eagerly, so a fresh pod serves zeros
- * from its first scrape. Nothing is registered while the feature is off.
- */
+// The result and reason labels are closed sets that dashboards and alerts match literally.
+// Counters are registered eagerly, and nothing is registered while the feature is off.
 @Component
 public class PlacementShadowMetrics {
 
-    /** The closed reason vocabulary of {@code gua_identity_placement_shadow_failures_total}. */
     static final List<String> FAILURE_REASONS = List.of("unknown_homeserver", "error");
 
     private final MeterRegistry registry;
@@ -89,36 +55,24 @@ public class PlacementShadowMetrics {
                 .register(registry);
     }
 
-    /** Counts one account's classification. */
     public void classified(PlacementShadowResult result) {
         if (enabled) {
             registry.counter("gua.identity.placement.shadow", "result", result.tag()).increment();
         }
     }
 
-    /** Counts one publish attempt, the conflict outcome included. */
     public void published(String result) {
         if (enabled) {
             registry.counter("gua.identity.placement.publish", "result", result).increment();
         }
     }
 
-    /**
-     * Counts one account the run could not classify at all.
-     *
-     * @param reason one of {@link #FAILURE_REASONS}
-     */
     public void failed(String reason) {
         if (enabled) {
             registry.counter("gua.identity.placement.shadow.failures", "reason", reason).increment();
         }
     }
 
-    /**
-     * Records a completed run. Gated on the feature like every other method here, so a deployment with
-     * the comparison off cannot start populating state that the gauges would expose the moment someone
-     * registered them unconditionally.
-     */
     public void runCompleted(long scanned, long epochSeconds) {
         if (!enabled) {
             return;
@@ -127,19 +81,15 @@ public class PlacementShadowMetrics {
         lastSuccessEpochSeconds.set(epochSeconds);
     }
 
-    /**
-     * Publishes each MAS's effective localpart import policy as a gauge that reads 1 for the value in
-     * force. A gauge per observed value, rather than a string, is the only shape Prometheus can alert on.
-     */
+    /** One gauge per observed value, reading 1 for the value in force. */
     public void localpartOnConflict(Map<String, String> byHomeserver) {
         if (!enabled || byHomeserver.isEmpty()) {
             return;
         }
         onConflict.set(Map.copyOf(byHomeserver));
         for (Map.Entry<String, String> entry : byHomeserver.entrySet()) {
-            // Copied out of the entry deliberately. A lambda capturing the Map.Entry itself would keep a
-            // strong reference to the caller's map alive for the life of the registry, once per observed
-            // pair, and the gauge only ever needs these two strings.
+            // Copy the strings out: capturing the Map.Entry would keep the caller's map alive for the life of
+            // the registry.
             String homeserver = entry.getKey();
             String value = entry.getValue();
             Tags tags = Tags.of("homeserver", homeserver, "value", value);

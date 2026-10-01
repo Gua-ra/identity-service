@@ -15,15 +15,8 @@ import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 
-/**
- * The single atomic directory mapping switch for a phone-number change.
- *
- * <p>
- * Isolated in its own bean because the swap must run inside one transaction: a
- * self-invocation from {@link PhoneChangeService} would bypass Spring's transactional
- * proxy and split the swap into several auto-commit transactions. Calling across this
- * bean boundary engages the proxy.
- */
+// A separate bean so the swap runs in one transaction: a self-invocation from PhoneChangeService would bypass
+// the proxy.
 @Service
 @RequiredArgsConstructor
 public class PhoneDirectorySwapService {
@@ -33,22 +26,12 @@ public class PhoneDirectorySwapService {
     private final PhoneNumberHasher phoneNumberHasher;
     private final PhoneNumberMasker phoneNumberMasker;
 
-    /**
-     * Atomically switches the caller's directory mapping to {@code newE164},
-     * carrying displayName/username/homeserverId/discoverable forward onto the new
-     * digest and stamping the change-cooldown clock. Rejects with
-     * {@link PhoneAlreadyLinkedException} (→ 409) when the target number is already
-     * owned by another account. All mutations commit together or not at all.
-     */
     @Transactional
     public void swap(String userId, String newE164) {
         String newDigest = phoneNumberHasher.digest(newE164);
 
-        // Reject up-front when the target number already belongs to ANOTHER account.
-        // upsertByDigest would otherwise find the foreign row and reassign its userId
-        // via an UPDATE: the phone_digest is unchanged, so the UNIQUE constraint never
-        // fires and the caller would silently hijack the victim's mapping. (Mirrors the
-        // ownership guard the signup/login paths apply.)
+        // Reject a number owned by another account first: upsertByDigest would otherwise reassign that row
+        // without tripping the UNIQUE constraint.
         directoryService.findByDigest(newDigest)
                 .filter(existing -> !userId.equals(existing.getUserId()))
                 .ifPresent(existing -> {
@@ -57,8 +40,8 @@ public class PhoneDirectorySwapService {
 
         List<DirectoryEntry> currentEntries = directoryService.findByUserId(userId);
 
-        // Carry-forward source: prefer a row that has the values populated
-        // (the @Builder used by upsert omits username/homeserverId/discoverable).
+        // The upsert builder omits username, homeserverId and discoverable, so they are carried forward
+        // explicitly.
         String displayName = firstNonBlank(currentEntries, DirectoryEntry::getDisplayName);
         String username = firstNonBlank(currentEntries, DirectoryEntry::getUsername);
         String homeserverId = firstNonBlank(currentEntries, DirectoryEntry::getHomeserverId);
@@ -67,7 +50,6 @@ public class PhoneDirectorySwapService {
                 .map(DirectoryEntry::isDiscoverable)
                 .orElse(true);
 
-        // Delete every old row except the (possibly already-present) new digest.
         currentEntries.stream()
                 .map(DirectoryEntry::getPhoneDigest)
                 .filter(digest -> !digest.equals(newDigest))
@@ -76,16 +58,13 @@ public class PhoneDirectorySwapService {
         try {
             directoryService.upsertByDigest(newDigest, phoneNumberMasker.mask(newE164), userId, displayName);
         } catch (DataIntegrityViolationException ex) {
-            // Concurrent insert of the same brand-new digest by another account: the
-            // UNIQUE constraint fires on INSERT. Surface as a 409.
+            // A concurrent insert of the same digest trips the UNIQUE constraint.
             throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
         }
 
-        // Carry routing + discovery opt-out forward (the @Builder dropped these).
         directoryService.assignRouting(newDigest, homeserverId, username);
         directoryService.setDiscoverable(newDigest, discoverable);
 
-        // Start the cooldown clock atomically with the swap.
         userSecurityService.stampPhoneChange(userId);
     }
 

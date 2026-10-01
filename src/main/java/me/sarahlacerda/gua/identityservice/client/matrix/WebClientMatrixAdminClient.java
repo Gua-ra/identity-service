@@ -44,9 +44,6 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
     }
 
     private static ExchangeFilterFunction maskingRequestLogger() {
-        // Provides a safe DEBUG trace of admin requests with Authorization redacted so
-        // wiretap-style
-        // logging is unnecessary (and so the bearer token never appears in logs).
         return ExchangeFilterFunction.ofRequestProcessor(request -> {
             if (log.isDebugEnabled()) {
                 log.debug("Matrix admin {} {} headers=[{}]",

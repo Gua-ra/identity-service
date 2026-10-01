@@ -12,36 +12,14 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-/**
- * Pins {@code IDENTITY_DIRECTORY_PEPPER} against silent rotation or environment drift.
- *
- * <p>
- * The directory pepper is the HMAC key for every phone digest in {@code PhoneNumberHasher}.
- * Changing it re-keys every digest: existing directory rows can no longer be found and
- * returning users are routed into signup as new accounts. A rotation is a data-corruption
- * event, not a credential refresh.
- *
- * <p>
- * An operator records the live pepper's <em>fingerprint</em> in
- * {@code identity.directory.pepper-fingerprint}. On startup this validator recomputes the
- * fingerprint of the configured pepper and {@linkplain IllegalStateException fails fast} if
- * it differs. The fingerprint is a one-way HMAC over a fixed, non-secret label keyed by the
- * pepper, so it never reveals the pepper and is safe to store in config.
- *
- * <p>
- * With no fingerprint pinned (local dev) the validator logs the computed fingerprint at WARN
- * so an operator can copy it into the deployment config. It never logs the pepper itself.
- */
+// Fails startup when the configured directory pepper does not match the pinned fingerprint.
+// Changing the pepper orphans every phone digest.
 @Component
 public class DirectoryPepperPinValidator {
 
     private static final Logger log = LoggerFactory.getLogger(DirectoryPepperPinValidator.class);
 
-    /**
-     * Fixed, non-secret label HMAC'd with the pepper to derive a stable,
-     * non-reversible fingerprint. Changing this string changes every fingerprint,
-     * so it must remain constant across releases.
-     */
+    /** Changing this label changes every fingerprint. */
     private static final String FINGERPRINT_LABEL = "gua.identity.directory.pepper.fingerprint.v1";
     private static final String HMAC_ALGORITHM = "HmacSHA256";
 

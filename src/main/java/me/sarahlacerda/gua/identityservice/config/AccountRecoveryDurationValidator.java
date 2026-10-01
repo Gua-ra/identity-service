@@ -8,27 +8,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-/**
- * Refuses to start with a delayed account recovery that is too short to protect anyone.
- *
- * <p>
- * The two durations are the whole of what recovery rests on: the dormancy period keeps a
- * recently used account out of reach, and the wait is the window in which the real account
- * holder sees the banner and cancels. A dormancy or a wait of minutes turns recovery into
- * "whoever holds the SIM owns the account by lunchtime". Both are read from the environment,
- * so one mistyped variable would do that silently in production; failing the start makes it
- * loud instead.
- *
- * <p>
- * {@code identity.security.account-recovery-allow-short-for-testing} lifts the floor so a
- * human can walk a recovery through on a dev deployment. Nothing else may set it.
- */
 @Component
 public class AccountRecoveryDurationValidator {
 
     private static final Logger log = LoggerFactory.getLogger(AccountRecoveryDurationValidator.class);
 
-    /** The shortest dormancy or wait a deployment may run without the testing switch. */
     static final Duration FLOOR = Duration.ofHours(24);
 
     private final IdentityServiceProperties properties;

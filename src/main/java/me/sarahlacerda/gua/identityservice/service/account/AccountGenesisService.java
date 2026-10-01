@@ -35,14 +35,7 @@ import me.sarahlacerda.gua.identityservice.exception.GenesisRegistrationExceptio
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.repository.AccountGenesisRepository;
 
-/**
- * Registration, attach and bootstrap for account genesis (migration plan phase 3, decided in ADM-008).
- *
- * <p>Nothing here is read for routing or for login. The accountId is derived, stored and audited; it
- * never becomes a claim, a localpart or a directory column, because the MAS localpart template is
- * arbitrary Jinja over the imported claims, so any new claim is one config line away from becoming the
- * localpart (ADM-008 decision 10).
- */
+/** The accountId is never read for routing or login and never becomes a claim, a localpart or a directory column. */
 @Service
 @RequiredArgsConstructor
 public class AccountGenesisService {
@@ -56,12 +49,10 @@ public class AccountGenesisService {
 
     private final SecureRandom random = new SecureRandom();
 
-    /** Master switch. While false the whole feature is inert and behaviour is exactly as before it existed. */
     public boolean isEnabled() {
         return genesisProperties().isEnabled();
     }
 
-    /** Whether a native signup must present an attach handle rather than fall back to a bootstrap id. */
     public boolean isRequiredForNative() {
         return genesisProperties().isRequireForNative();
     }
@@ -70,15 +61,6 @@ public class AccountGenesisService {
         return properties.getGenesis();
     }
 
-    // --- Registration ---------------------------------------------------------
-
-    /**
-     * Registers an {@code AccountGenesis} and returns its accountId with a single-use attach handle.
-     *
-     * <p>The proof is verified against the authority key committed inside the object itself, which is
-     * what makes the endpoint self-authenticating at a point in the flow where no session exists yet.
-     * Registering attaches nothing: a handle is a routing hint, not a capability.
-     */
     @Transactional
     public AccountGenesisRegisterResponse register(String genesisB64, String proofB64) {
         if (!isEnabled()) {
@@ -95,9 +77,8 @@ public class AccountGenesisService {
                     "The registration proof does not verify under the committed authority key.");
         }
 
-        // Framework 0x01 issuance stays off outside dev (ADM-008 decision 4): it commits one recovery key
-        // and no delay bounds, and that key shares the device store with the key it would veto, so
-        // production issuance waits on ADM-002.
+        // Framework 0x01 issuance stays off outside dev: its recovery key shares the device store with the key
+        // it would veto.
         if (genesis.recoveryFrameworkId() == AccountGenesis.RECOVERY_FRAMEWORK_COMMITTED_KEY
                 && !genesisProperties().isProductionIssuance()) {
             throw new GenesisRegistrationException(HttpStatus.FORBIDDEN, "genesis_issuance_not_permitted",
@@ -113,8 +94,6 @@ public class AccountGenesisService {
         if (existing.isPresent()) {
             AccountGenesisRecord row = existing.get();
             if (row.isAttached()) {
-                // The client must generate a fresh genesis; re-using one that already owns an account
-                // would be an attempt to re-point it.
                 throw new GenesisRegistrationException(HttpStatus.CONFLICT, "genesis_already_attached",
                         "This genesis is already attached to an account.");
             }
@@ -135,46 +114,19 @@ public class AccountGenesisService {
             log.info("Registered a pending account genesis");
         }
 
-        // Housekeeping on a write path rather than a scheduled job: nothing in this application enables
-        // scheduling, and turning it on for this one sweep would start a scheduler for everything else
-        // too. Expired registrations are already refused at attach time, so this only stops them piling
-        // up, and running it here means it happens exactly when new ones are being created.
+        // Swept on the write path because this application does not enable scheduling.
         sweepExpired();
 
         return new AccountGenesisRegisterResponse(accountId.value(), handle, expiresAt);
     }
 
-    // --- Attach ---------------------------------------------------------------
-
-    /**
-     * Issues the 32 CSPRNG bytes a client must sign to attach its genesis, base64url.
-     *
-     * <p>They are held against the server-side login session and are never accepted back from the client
-     * as a lookup key: the attach reads them from the session, not from the request.
-     */
     public String issueAttachChallenge() {
         byte[] challenge = new byte[GenesisProofs.ATTACH_CHALLENGE_LENGTH];
         random.nextBytes(challenge);
         return encodeBase64Url(challenge);
     }
 
-    /**
-     * Attaches a registered genesis to a newly created account, inside the caller's transaction.
-     *
-     * <p>Attach-proof verification must run inside the account-creation transaction (ADM-008 decision
-     * 6), so {@link Propagation#MANDATORY} refuses to run outside one. A failure here rolls the account
-     * back with it, instead of leaving an account attached to nothing or a genesis attached to an
-     * account that was never written.
-     *
-     * @param attachHandle the handle carried by the login session, never one read from the request body
-     * @param challengeB64 the challenge held against that session, never one supplied by the client
-     * @param proofB64     the client's signature over the domain, the challenge and the raw accountId
-     * @param userId       the MXID of the account being created
-     * @return the attached accountId
-     * @throws LoginFlowException 400 {@code genesis_attach_failed} for every failure mode; a handle that
-     *                            was presented and did not attach fails the signup, with no silent
-     *                            downgrade to a bootstrap id
-     */
+    /** MANDATORY: a failed attach must roll back the account creation it runs in. */
     @Transactional(propagation = Propagation.MANDATORY)
     public AccountId attach(String attachHandle, String challengeB64, String proofB64, String userId) {
         if (!StringUtils.hasText(attachHandle)) {
@@ -207,8 +159,7 @@ public class AccountGenesisService {
             throw attachFailed("the stored challenge is the wrong length");
         }
 
-        // The accountId is derived from the STORED genesis. None is read from the request, so a client
-        // cannot name one account while signing for another.
+        // The accountId is derived from the stored genesis, never read from the request.
         AccountGenesis genesis;
         try {
             genesis = AccountGenesisCodec.decode(decodeBase64Url(row.getGenesisB64(), "stored_genesis_unreadable"));
@@ -226,8 +177,6 @@ public class AccountGenesisService {
             throw attachFailed("the attach proof does not verify");
         }
 
-        // One atomic compare-and-set. Two sessions racing on one handle therefore resolve to a single
-        // attach: the loser updates no rows and its signup fails.
         int updated = repository.attach(accountId.value(), sha256Hex(attachHandle), userId, Instant.now(),
                 State.PENDING, State.ATTACHED);
         if (updated != 1) {
@@ -237,23 +186,13 @@ public class AccountGenesisService {
         return accountId;
     }
 
-    /**
-     * Mints a bootstrap accountId for an account that presented no handle. A bootstrap account holds no
-     * authority key and is marked so an audit can tell it from a rooted one (ADM-001 L5).
-     *
-     * <p>Idempotent: an account that already holds a genesis row keeps it, so this is safe on a retry
-     * and safe to call from the backfill.
-     *
-     * @return the accountId now held by the account
-     */
+    /** Idempotent: an account that already holds a genesis row keeps it. */
     @Transactional
     public AccountId bootstrap(String userId) {
         Optional<AccountGenesisRecord> existing = repository.findByUserId(userId);
         if (existing.isPresent()) {
             return AccountId.parse(existing.get().getAccountId());
         }
-        // Random entropy, never the MXID or the phone: a preimage containing either would put an
-        // identifier, and with it the homeserver, inside the id (ADM-001 L4, L15).
         BootstrapGenesis genesis = BootstrapGenesisCodec.mint();
         AccountId accountId = genesis.accountId();
         repository.save(AccountGenesisRecord.attachedBootstrap(
@@ -266,7 +205,6 @@ public class AccountGenesisService {
         return accountId;
     }
 
-    /** Deletes pending registrations nobody attached inside their window. */
     @Transactional
     public int sweepExpired() {
         return repository.deleteExpiredPending(State.PENDING, Instant.now());
@@ -300,7 +238,6 @@ public class AccountGenesisService {
         }
     }
 
-    /** SHA-256 hex of an attach handle. Only the hash is ever stored. */
     static String sha256Hex(String value) {
         try {
             return HexFormat.of().formatHex(

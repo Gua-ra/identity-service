@@ -15,13 +15,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import me.sarahlacerda.gua.identityservice.config.OidcProperties;
 
-/**
- * Mints and redeems OAuth 2.0 authorization codes. This service never
- * authenticates anyone: the caller must already hold a fully resolved
- * {@link OidcAuthorization}, which only the interactive login flow produces
- * after the phone, OTP and PIN/profile steps. The former non-interactive path
- * that accepted an OTP directly is removed (ADM-001 L1a).
- */
+/** Never authenticates anyone: the caller must already hold a resolved OidcAuthorization. */
 @Service
 @RequiredArgsConstructor
 public class OidcAuthorizationService {
@@ -33,12 +27,6 @@ public class OidcAuthorizationService {
     private final ObjectMapper objectMapper;
     private final OidcProperties properties;
 
-    /**
-     * Generates a one-time authorization code for an already-authenticated
-     * authorization and stores it in Redis until it is exchanged at the token
-     * endpoint. Used by the interactive browser login flow, which resolves the
-     * user across several steps (phone, OTP, PIN/profile) before calling this.
-     */
     public OidcAuthorizationCode issueCode(OidcAuthorization authorization, String redirectUri, String codeChallenge) {
         String code = generateCode();
         persist(code, authorization, redirectUri, codeChallenge);

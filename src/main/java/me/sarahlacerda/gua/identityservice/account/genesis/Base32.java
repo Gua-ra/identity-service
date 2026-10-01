@@ -1,19 +1,10 @@
 package me.sarahlacerda.gua.identityservice.account.genesis;
 
-/**
- * RFC 4648 base32, lowercase and unpadded, which is the spelling ADM-008 fixes for an accountId.
- *
- * <p>The decoder is strict in both directions an ambiguity could enter: it accepts only the lowercase
- * alphabet (no uppercase, no padding, no RFC 4648 section 6 "extended hex" alphabet), only a character
- * count that an unpadded encoding can actually produce, and only trailing bits that are zero. Those are
- * the three ways a decoder that "helpfully" accepts more would give one byte string several spellings,
- * which ADM-001 L4 forbids for anything a signature or a permanent identifier covers.
- */
+/** RFC 4648 base32, lowercase and unpadded. Decoding is strict so each byte string has exactly one spelling. */
 public final class Base32 {
 
     private static final String ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 
-    /** Reverse lookup, -1 for every character outside the alphabet. */
     private static final int[] VALUES = new int[128];
 
     static {
@@ -26,7 +17,6 @@ public final class Base32 {
     private Base32() {
     }
 
-    /** Encodes {@code data} as lowercase unpadded base32. */
     public static String encode(byte[] data) {
         StringBuilder out = new StringBuilder((data.length * 8 + 4) / 5);
         int buffer = 0;
@@ -40,19 +30,11 @@ public final class Base32 {
             }
         }
         if (bits > 0) {
-            // Left-over bits are left-aligned and zero-padded on the right.
             out.append(ALPHABET.charAt((buffer << (5 - bits)) & 0x1F));
         }
         return out.toString();
     }
 
-    /**
-     * Decodes lowercase unpadded base32.
-     *
-     * @throws InvalidGenesisException with reason {@code bad_base32} on any character outside the
-     *                                 alphabet, a character count no unpadded encoding produces, or
-     *                                 non-zero trailing bits
-     */
     public static byte[] decode(String encoded) {
         if (encoded == null) {
             throw new InvalidGenesisException("bad_base32", "base32 value is missing");
@@ -81,7 +63,6 @@ public final class Base32 {
                 bits -= 8;
             }
         }
-        // Whatever is left over is padding and must be zero, or one byte string has several spellings.
         if (bits > 0 && (buffer & ((1 << bits) - 1)) != 0) {
             throw new InvalidGenesisException("bad_base32", "base32 value has non-zero trailing bits");
         }

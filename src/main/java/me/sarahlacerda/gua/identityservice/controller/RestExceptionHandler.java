@@ -183,15 +183,7 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("phone_change_cooldown", message));
         }
 
-        /**
-         * The fresh-2FA hold: the account PIN is too new to be spent as the phone-change
-         * step-up factor. Answered as 400 with {@code twofa_cooldown_active} and the
-         * remaining seconds in the body, which is the shape both clients already parse;
-         * {@code Retry-After} carries the same number for anything that reads headers.
-         * Deliberately not the 425 the per-account phone-change cooldown uses: that is a
-         * different refusal, and conflating them would tell a client to wait out the wrong
-         * one.
-         */
+        /** Clients parse this 400 body. Retry-After mirrors retryAfterSeconds. */
         @ExceptionHandler(TwoFactorCooldownException.class)
         public ResponseEntity<ErrorResponse> handleTwoFactorCooldown(TwoFactorCooldownException ex) {
                 long remaining = Math.max(ex.getRemainingSeconds(), 0);
@@ -200,11 +192,6 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("twofa_cooldown_active", ex.getMessage(), remaining));
         }
 
-        /**
-         * A delayed account recovery requested for an account used inside the dormancy period.
-         * Same shape as {@code twofa_cooldown_active}: 400, the wait in {@code retryAfterSeconds}
-         * and mirrored in {@code Retry-After}.
-         */
         @ExceptionHandler(AccountRecoveryCooldownException.class)
         public ResponseEntity<ErrorResponse> handleAccountRecoveryCooldown(AccountRecoveryCooldownException ex) {
                 long remaining = Math.max(ex.getRemainingSeconds(), 1);
@@ -213,10 +200,6 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("recovery_cooldown_active", ex.getMessage(), remaining));
         }
 
-        /**
-         * Completing a recovery that is not ready under the row lock. The fresh state rides along so
-         * the client re-renders without another request.
-         */
         @ExceptionHandler(AccountRecoveryNotReadyException.class)
         public ResponseEntity<RecoveryErrorResponse> handleAccountRecoveryNotReady(AccountRecoveryNotReadyException ex) {
                 return ResponseEntity.status(HttpStatus.CONFLICT)
@@ -230,11 +213,7 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("endpoint_retired", ex.getMessage()));
         }
 
-        /**
-         * The number typed at a reauthentication step is not the one on the caller's account.
-         * One status, one code and one message for every way of being wrong, so the answer
-         * cannot be read as "this number belongs to somebody else".
-         */
+        /** One status, code and message for every mismatch, so the answer never reveals who owns the number. */
         @ExceptionHandler(ReauthPhoneMismatchException.class)
         public ResponseEntity<ErrorResponse> handleReauthPhoneMismatch(ReauthPhoneMismatchException ex) {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
@@ -277,10 +256,7 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse(ex.getCode(), ex.getMessage()));
         }
 
-        /**
-         * A malformed account object. The decoder's rule name is returned so a client implementing the
-         * codec can tell which rule refused it; the bytes themselves are never echoed back.
-         */
+        /** Returns the decoder's rule name. The bytes are never echoed. */
         @ExceptionHandler(InvalidGenesisException.class)
         public ResponseEntity<ErrorResponse> handleInvalidGenesis(InvalidGenesisException ex) {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -294,11 +270,6 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("invalid_client", ex.getMessage()));
         }
 
-        /**
-         * A request whose body is missing or is not readable as JSON. Without this the
-         * catch-all below turns a malformed request into a 500, which blames the server
-         * for the caller's mistake and tells the caller nothing.
-         */
         @ExceptionHandler(HttpMessageNotReadableException.class)
         public ResponseEntity<ErrorResponse> handleUnreadableBody(HttpMessageNotReadableException ex) {
                 log.debug("Unreadable request body", ex);
@@ -323,15 +294,10 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("server_error", "Unexpected error"));
         }
 
-        /** An error that carries the account recovery state it was decided on. */
         public record RecoveryErrorResponse(String code, String message, Instant timestamp,
                         AccountRecoveryState recovery) {
         }
 
-        /**
-         * {@code retryAfterSeconds} is omitted from the JSON unless a handler sets it, so
-         * every existing error body is byte-for-byte what it was.
-         */
         @JsonInclude(JsonInclude.Include.NON_NULL)
         public record ErrorResponse(String code, String message, Instant timestamp, Long retryAfterSeconds) {
                 public ErrorResponse(String code, String message) {

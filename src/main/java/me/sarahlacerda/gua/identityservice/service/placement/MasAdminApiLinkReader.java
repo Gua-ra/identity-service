@@ -22,21 +22,8 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.HomeserverConfig;
 import reactor.core.publisher.Mono;
 
-/**
- * The primary MAS read path: the MAS admin API, with a {@code client_credentials} token.
- *
- * <p><b>Not available on this deployment.</b> The links endpoint requires the {@code urn:mas:admin}
- * scope, and the MAS authorization policy grants that scope through {@code client_credentials} only to
- * client ids listed in its policy data {@code admin_clients}. This service's MAS client id is not
- * listed, so this reader stays off ({@code identity.placement.mas.admin-api.enabled}) until a
- * deployment change adds it. This is a policy-data change, not the Synapse admin-scope problem recorded
- * elsewhere, which {@code urn:mas:admin} does not share.
- *
- * <p>Because that scope has never been granted, the response envelope below is written from the MAS
- * admin handler and model definitions rather than from a live call, and it is tolerant of unknown
- * fields. Confirm it against a real MAS the first time the scope exists; the contract this class
- * presents to the reconciler does not change either way.
- */
+// Off by default: MAS grants urn:mas:admin only to client ids in its admin_clients policy data.
+// The response envelope has not been verified against a live MAS.
 @Component
 public class MasAdminApiLinkReader implements MasLinkReader {
 
@@ -175,8 +162,7 @@ public class MasAdminApiLinkReader implements MasLinkReader {
                 .bodyToMono(TokenResponse.class)
                 .timeout(Duration.ofSeconds(15))
                 .onErrorResume(ex -> {
-                    // The message never carries the response body: a token endpoint can echo the client
-                    // secret back in an error.
+                    // Never log the response body: a token endpoint can echo the client secret in an error.
                     log.warn("The MAS token request failed");
                     return Mono.empty();
                 })
@@ -201,10 +187,7 @@ public class MasAdminApiLinkReader implements MasLinkReader {
                 : response.data().attributes().username();
     }
 
-    /**
-     * The admin API cannot answer this: its provider model omits {@code claims_imports} altogether, so
-     * the on-conflict gauge needs the SQL path or the rendered configuration.
-     */
+    /** The admin API's provider model omits claims_imports. */
     @Override
     public Map<String, String> localpartOnConflictByHomeserver() {
         return Map.of();

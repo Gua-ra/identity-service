@@ -11,25 +11,8 @@ import org.springframework.stereotype.Component;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.domain.Homeserver;
 
-/**
- * Default per-deployment routing choice for a new account. It selects one of this
- * deployment's configured homeservers by a local rule; the result is recorded in this
- * service's directory and nothing outside this service can re-derive it. The target
- * architecture replaces it with committed, verifiable placement, under which the holding
- * homeserver also authenticates the account
- * (<a href="https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md">ADM-001</a>
- * L6 and L2); neither is implemented here. Three strategies
- * ({@code identity.routing.strategy}):
- *
- * <ul>
- *   <li><b>single</b> (default): always the registry's default homeserver. This
- *       is the behaviour of an existing single-homeserver deployment.</li>
- *   <li><b>region</b>: first enabled homeserver whose region matches the context
- *       region hint; otherwise falls back to weighted selection.</li>
- *   <li><b>weighted</b>: random pick across enabled homeservers proportional to
- *       their configured weight (simple load spreading).</li>
- * </ul>
- */
+// Strategies (identity.routing.strategy): single uses the default homeserver, region matches the region hint
+// and falls back to weighted, weighted picks by configured weight.
 @Component
 @RequiredArgsConstructor
 public class DefaultHomeserverRouter implements HomeserverRouter {

@@ -4,34 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Arrays;
 
-/**
- * The canonical codec for {@code AccountGenesis}, suite 0x01 (ADM-008 encoding tables).
- *
- * <pre>
- * off len field
- * 0   4   magic "GUAG"
- * 4   1   genesisVersion = 0x01
- * 5   1   suite = 0x01
- * 6   32  authorityPublicKey          raw RFC 8032 Ed25519
- * 38  1   recoveryFrameworkId = 0x01
- * 39  32  recoveryAuthorityPublicKey  raw Ed25519, must differ from the authority key
- * 71  16  entropy                     CSPRNG
- * 87      end
- * </pre>
- *
- * <p>Fixed layout, big-endian, no delimiters, no length prefixes: one canonical byte representation,
- * with signatures over those bytes (ADM-001 L4). The accountId is a permanent hash of these bytes, so
- * the bytes hashed must be the bytes received; the decoder keeps them verbatim and never re-encodes.
- * Account objects do not use ADM-007's {@code gua-lp.v1} framing; ADM-008 "Relationship to ADM-007"
- * gives the reasons. The two families cannot be confused: a {@code gua-lp.v1} object opens with a u32
- * length whose first byte is 0x00, an account object with ASCII {@code GUA}. Primitives ADM-007 already
- * defines are reused as is: timestamps are epoch milliseconds in 8 big-endian bytes and an object hash
- * is SHA-256 over the canonical bytes.
- *
- * <p>The decoder rejects an unknown version, suite or framework, a wrong length, an all-zero key, equal
- * authority and recovery keys, and a key that fails Ed25519 point decoding. The all-zero rule is separate
- * from point decoding because the all-zero encoding decodes to a valid low-order point.
- */
+/** Canonical fixed-width encoding. The accountId hashes the exact bytes received. */
 public final class AccountGenesisCodec {
 
     private static final byte[] MAGIC = AccountGenesis.MAGIC.getBytes(StandardCharsets.US_ASCII);
@@ -46,12 +19,6 @@ public final class AccountGenesisCodec {
     private AccountGenesisCodec() {
     }
 
-    /**
-     * Strictly decodes canonical bytes. The returned object keeps the bytes exactly as passed in, so the
-     * accountId is derived from what was received.
-     *
-     * @throws InvalidGenesisException on any strict-decoding rule (ADM-008 decision 1)
-     */
     public static AccountGenesis decode(byte[] bytes) {
         if (bytes == null || bytes.length != AccountGenesis.LENGTH) {
             throw new InvalidGenesisException("wrong_length",
@@ -93,10 +60,6 @@ public final class AccountGenesisCodec {
         return new AccountGenesis(version, suite, authorityKey, frameworkId, recoveryKey, entropy, bytes);
     }
 
-    /**
-     * Builds canonical bytes. Used by tests and by the golden-vector generator; the server never encodes
-     * a genesis it is about to hash, it hashes what it received.
-     */
     public static byte[] encode(byte[] authorityPublicKey, int recoveryFrameworkId,
             byte[] recoveryAuthorityPublicKey, byte[] entropy) {
         if (authorityPublicKey.length != Ed25519Keys.RAW_PUBLIC_KEY_LENGTH

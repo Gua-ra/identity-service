@@ -25,31 +25,8 @@ import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
 import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditLogger;
 
-/**
- * Two-step orchestration for changing an account's verified phone number.
- *
- * <p>
- * Security rules:
- * <ul>
- * <li>{@code /start} needs a {@code PHONE_CHANGE}-scoped, single-use reauth token <em>and</em> a
- * non-phone step-up factor. The reauth token alone proves only a current-phone OTP, which a
- * SIM-swap attacker could control. The accepted factors and their order are
- * {@link AuthFactorPolicy#stepUpFor(ReauthOperation)}: a user-verifying passkey assertion first,
- * the account PIN as the fallback, and {@code 403 step_up_required} for an account that produces
- * neither. There is no token-only fallback.</li>
- * <li>The new-number OTP is namespaced per challenge ({@link PhoneChangeOtpService}), so the
- * public {@code /otp/send} cannot overwrite or race it.</li>
- * <li>A passkey offered as the step-up must come from the user-verifying step-up ceremony
- * ({@code POST /security/passkey/stepup/options}). A possession-only assertion is refused: it
- * would stand in for a factor that counts failures and locks out while doing neither.</li>
- * <li>A PIN or passkey created inside the fresh-2FA hold is refused as the step-up factor, because
- * a login session can mint either and would otherwise re-point the number at once. This refusal
- * is additional to the per-account change cooldown, which still runs.</li>
- * <li>{@code /complete} enforces an IP-independent per-challenge wrong-OTP cap, performs one atomic
- * directory swap that carries displayName, discoverable, username and homeserverId forward, then
- * post-commit revokes all tokens, audits and notifies.</li>
- * </ul>
- */
+// /start needs a PHONE_CHANGE-scoped reauth token and a non-phone step-up factor; no token-only fallback.
+// A PIN or passkey created inside the fresh-factor hold is refused as the step-up.
 @Service
 @RequiredArgsConstructor
 public class PhoneChangeService {
@@ -75,11 +52,6 @@ public class PhoneChangeService {
     private final SecurityAuditLogger auditLogger;
     private final DeviceNotificationService deviceNotificationService;
 
-    /**
-     * Step 1: gate with op-scoped reauth + step-up, normalize and validate the new
-     * number, send a challenge-namespaced OTP to it, alert the OLD number, and store
-     * the challenge. Returns the challenge id + OTP expiry.
-     */
     public PhoneChangeStart startPhoneNumberChange(
             String userId,
             String reauthToken,
@@ -90,7 +62,6 @@ public class PhoneChangeService {
             String requesterIp,
             String language) {
 
-        // 1) Op-scoped, single-use reauth proof (confused-deputy fix). Spent here.
         try {
             reauthService.requireValidReauth(userId, reauthToken, ReauthOperation.PHONE_CHANGE);
         } catch (RuntimeException ex) {
@@ -98,18 +69,12 @@ public class PhoneChangeService {
             throw ex;
         }
 
-        // 2) Non-phone step-up: a user-verifying passkey assertion, else the account PIN.
-        //    SIM-swap defense, since the reauth OTP went to the current (possibly hijacked)
-        //    number. Accounts with neither factor are hard-blocked (step_up_required).
         enforceStepUp(userId, pin, passkeyStepUpId, passkeyCredential, requesterIp);
 
-        // 3) Cooldown between successive changes.
         userSecurityService.enforcePhoneChangeCooldown(userId);
 
-        // 4) Normalize the new number BEFORE any send/digest so it keys consistently.
         String newE164 = phoneNumberNormalizer.toE164(rawNewPhone);
 
-        // 5) Reject equals-current before spending an OTP (no-op / pointless change).
         directoryService.findByUserId(userId).stream()
                 .map(DirectoryEntry::getPhoneDigest)
                 .filter(digest -> digest.equals(phoneNumberHasher.digest(newE164)))
@@ -118,19 +83,15 @@ public class PhoneChangeService {
                     throw new PhoneAlreadyLinkedException("New number must differ from the current number");
                 });
 
-        // 6) Other-account conflict: uniform response (no enumeration oracle). We do NOT
-        //    reveal here that the number is taken; the UNIQUE constraint enforces it at commit.
+        // A number owned by another account is not revealed here. The UNIQUE constraint enforces it at commit.
 
         String challengeId = UUID.randomUUID().toString();
 
-        // 7) Send the challenge-namespaced OTP to the new number.
         phoneChangeOtpService.send(challengeId, newE164, requesterIp, language);
 
-        // 8) Persist the challenge (userId|newE164|attempts=0) for the configured TTL.
         Duration ttl = properties.getSecurity().getPhoneChangeChallengeTtl();
         redisTemplate.opsForValue().set(challengeKey(challengeId), userId + "|" + newE164 + "|0", ttl);
 
-        // 9) Audit + out-of-band alert to the OLD number (takeover visibility).
         String maskedNew = phoneNumberMasker.mask(newE164);
         String maskedOld = directoryService.findMaskedPhoneByUserId(userId).orElse(null);
         auditLogger.phoneChangeStarted(userId, maskedOld, maskedNew, requesterIp);
@@ -139,11 +100,6 @@ public class PhoneChangeService {
         return new PhoneChangeStart(challengeId, properties.getOtp().getTtl().toSeconds());
     }
 
-    /**
-     * Step 2: validate the challenge, verify the new-number OTP under an
-     * IP-independent per-challenge cap, swap the mapping atomically, then run the
-     * post-commit side effects.
-     */
     public void completePhoneNumberChange(String userId, String challengeId, String code, String requesterIp) {
         String key = challengeKey(challengeId);
         String stored = redisTemplate.opsForValue().get(key);
@@ -152,7 +108,6 @@ public class PhoneChangeService {
         }
         String[] parts = stored.split("\\|", 3);
         if (parts.length != 3 || !parts[0].equals(userId)) {
-            // Mismatched owner: destroy both the challenge and any pending OTP.
             redisTemplate.delete(key);
             phoneChangeOtpService.discard(challengeId);
             throw new InvalidPhoneChangeChallengeException("Phone change challenge does not belong to caller");
@@ -160,7 +115,6 @@ public class PhoneChangeService {
         String newE164 = parts[1];
         int attempts = parseAttempts(parts[2]);
 
-        // Verify the OTP under the per-challenge, IP-independent attempt cap.
         try {
             phoneChangeOtpService.verify(challengeId, code);
         } catch (RuntimeException ex) {
@@ -168,11 +122,9 @@ public class PhoneChangeService {
             auditLogger.phoneChangeOtpFailed(userId, newAttempts, requesterIp);
             int max = properties.getSecurity().getMaxPhoneChangeOtpAttempts();
             if (newAttempts >= max) {
-                // Cap reached: burn BOTH the OTP key and the challenge so a fresh /start is required.
                 redisTemplate.delete(key);
                 phoneChangeOtpService.discard(challengeId);
             } else {
-                // Under cap: persist the incremented counter; challenge NOT consumed.
                 Long ttlSeconds = redisTemplate.getExpire(key);
                 Duration ttl = (ttlSeconds != null && ttlSeconds > 0)
                         ? Duration.ofSeconds(ttlSeconds)
@@ -182,23 +134,17 @@ public class PhoneChangeService {
             throw ex;
         }
 
-        // OTP good.
         String oldMasked = directoryService.findMaskedPhoneByUserId(userId).orElse(null);
 
-        // Idempotent exclusive binding on the homeserver, then the atomic swap.
         matrixProvisioningService.ensureExclusivePhoneBinding(userId, newE164);
 
-        // Delegate to a separate bean so the @Transactional proxy engages: a same-bean
-        // self-call would bypass it and the swap would NOT be atomic.
         phoneDirectorySwapService.swap(userId, newE164);
 
-        // Challenge fully spent.
         redisTemplate.delete(key);
 
         String newMasked = phoneNumberMasker.mask(newE164);
 
-        // Post-commit side effects. Each is wrapped so a failure in one never skips
-        // revokeAllTokens (the real session-takeover control).
+        // Each side effect is wrapped so a failure never skips revokeAllTokens.
         bestEffort("revokeAllTokens", () -> tokenRevocationService.revokeAllTokens(userId));
         bestEffort("audit.phoneChangeCompleted", () -> auditLogger.phoneChangeCompleted(userId, newMasked));
         bestEffort("notify.phoneChanged", () -> deviceNotificationService.notifyPhoneChanged(userId, newMasked));
@@ -208,50 +154,25 @@ public class PhoneChangeService {
 
     private void enforceStepUp(String userId, String pin, String passkeyStepUpId, JsonNode passkeyCredential,
             String requesterIp) {
-        // Which factors this operation accepts, and in which order, is
-        // AuthFactorPolicy.stepUpFor(PHONE_CHANGE): [PASSKEY, PIN], hard block when neither
-        // can be produced. The branches below are that list, in that order. Whether THIS
-        // account holds a PIN comes from the same component, so login, this step-up and
-        // recovery all read one answer instead of three.
-        //
-        // The policy is consulted for those facts and is deliberately NOT wired as a
-        // condition on the branches themselves. A policy value that could switch the PIN
-        // branch off, or switch the refusal at the bottom off, would be a lever that turns a
-        // configuration edit into either account lockout or a bypass. Precedence is pinned by
-        // tests against stepUpFor(PHONE_CHANGE) instead.
+        // The branches follow AuthFactorPolicy.stepUpFor(PHONE_CHANGE) but are deliberately not driven by it:
+        // a policy value must not be able to switch a branch off.
         boolean hasPin = authFactorPolicy.pinRegistered(userId);
         boolean passkeyAttempted = StringUtils.hasText(passkeyStepUpId) && passkeyCredential != null;
 
-        // Strongest factor first. A user-verifying assertion settles the step-up on its own:
-        // it is the preferred factor, and demanding the PIN as well from someone who just
-        // proved a passkey would make the stronger factor worth less than the weaker one.
         if (passkeyAttempted) {
-            // A step-up assertion, not a login assertion: the ceremony demanded user
-            // verification and PasskeyService refuses a response that did not do it. The
-            // challenge is burned whether this succeeds or fails, so a refused attempt cannot
-            // be retried against the same challenge.
+            // The challenge is burned whether this succeeds or fails.
             PasskeyService.PasskeyAuthentication assertion =
                     passkeyService.finishStepUpAssertion(passkeyStepUpId, passkeyCredential);
-            // Ownership first. Nothing below may treat the assertion as accepted until the
-            // credential is known to belong to the account making the call.
             if (!userId.equals(assertion.userId())) {
                 auditLogger.reauthFailed(userId, ReauthOperation.PHONE_CHANGE.name(), requesterIp);
                 throw new InvalidPinException("Passkey does not belong to the calling account");
             }
-            // Accepted, and now held for its own age. A session can mint a passkey as cheaply as
-            // a PIN (enroll/start needs only the bearer token), and the assertion settles this
-            // step-up alone, so both factors are held on the same window with the same expiring
-            // refusal; holding one and not the other would price the same takeover at seven days
-            // or at nothing. The hold is checked against the credential that answered, not the
-            // account: an established passkey still settles the step-up at once, and a caller
-            // refused here keeps the PIN branch below.
+            // The hold is checked against the credential that answered, not the account.
             userSecurityService.enforceFreshFactorHold(assertion.credentialRegisteredAt());
             return;
         }
 
-        // Demoted below the passkey, never removed. An account with a PIN and no passkey, or
-        // one whose passkey cannot be produced on this device, still comes through here, and
-        // this branch is the only reason an unusable credential is not an unusable account.
+        // The PIN branch must stay: it is the way through for an account whose passkey cannot be produced.
         if (hasPin) {
             try {
                 userSecurityService.validatePinOrThrow(userId, pin);
@@ -259,19 +180,13 @@ public class PhoneChangeService {
                 auditLogger.reauthFailed(userId, ReauthOperation.PHONE_CHANGE.name(), requesterIp);
                 throw ex;
             }
-            // The PIN is the factor being accepted here, so the fresh-2FA hold applies to it.
-            // Inside this branch and after the check that accepts the PIN: an account that
-            // proved a passkey returned above and is never held for a fresh PIN it did not
-            // use; the hold was already applied to the registration age of the passkey it used.
+            // The hold applies only when the PIN is the factor accepted.
             userSecurityService.enforcePhoneChangePinHold(userId);
             return;
         }
 
-        // Neither a PIN nor a passkey could be asserted. Hard block (product decision,
-        // 2026-07-02): the reauth token alone only proves a current-phone OTP, which a
-        // SIM-swap attacker may control, so there is NO token-only fallback. Unconditional,
-        // because a refusal that any single edit can turn into a fallthrough is not a
-        // refusal. The client routes `step_up_required` to two-step verification setup.
+        // Hard block: no token-only fallback. The client routes step_up_required to two-step verification
+        // setup.
         auditLogger.reauthFailed(userId, ReauthOperation.PHONE_CHANGE.name(), requesterIp);
         throw new StepUpRequiredException(
                 "Two-step verification (account PIN or passkey) is required to change the phone number");
@@ -297,7 +212,6 @@ public class PhoneChangeService {
         return CHALLENGE_KEY_PREFIX + challengeId;
     }
 
-    /** Start result: the challenge id and how long the new-number OTP is valid. */
     public record PhoneChangeStart(String challengeId, long otpExpiresInSeconds) {
     }
 }

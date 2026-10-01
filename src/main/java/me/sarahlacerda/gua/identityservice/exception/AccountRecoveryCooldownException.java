@@ -1,12 +1,6 @@
 package me.sarahlacerda.gua.identityservice.exception;
 
-/**
- * Raised when a delayed account recovery is requested for an account that completed a sign-in
- * inside the dormancy period. Carries the seconds until it may be requested, measured to the
- * rounded availability time the login state publishes, so the wait never gives away the exact
- * time of the last sign-in. Mapped to 400 {@code recovery_cooldown_active}, the same shape as
- * {@code twofa_cooldown_active}.
- */
+/** The wait is measured to the rounded availability time, so it never reveals the exact time of the last sign-in. */
 public class AccountRecoveryCooldownException extends RuntimeException {
 
     private final long remainingSeconds;

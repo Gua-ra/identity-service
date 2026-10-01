@@ -51,11 +51,7 @@ import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
 @Tag(name = "OIDC Authorization", description = "OAuth 2.0 authorization code endpoints backing the Matrix Authentication Service")
 public class OidcAuthorizationController {
 
-    /**
-     * Reserved {@code login_hint} value the native apps send when the user taps
-     * "Sign in with a passkey". Matched case-insensitively after trimming and never
-     * treated as a phone number.
-     */
+    /** Reserved login_hint value for passkey sign-in. Never treated as a phone number. */
     public static final String PASSKEY_LOGIN_HINT = "passkey";
 
     private final OidcAuthorizationService authorizationService;
@@ -65,17 +61,13 @@ public class OidcAuthorizationController {
     private final LoginFlowProperties loginProperties;
     private final IdentityServiceProperties identityProperties;
 
-    /**
-     * Prefix of the structured login hint the first-party clients send (ADM-008 decision 6). Parsed only
-     * while {@code identity.genesis.enabled} is on; with the flag off a {@code gua:} hint falls through
-     * to {@link #normalizeLoginHint}, which yields no prefill, exactly as before the grammar existed.
-     */
+    /** Parsed only while identity.genesis.enabled is on. */
     private static final String GUA_HINT_PREFIX = "gua:";
 
-    /** The whole grammar. Any other key, or a repeated one, is malformed. */
+    /** Any other key, or a repeated one, is malformed. */
     private static final Set<String> GUA_HINT_KEYS = Set.of("phone", "intent", "genesis");
 
-    /** An attach handle is 32 CSPRNG bytes as unpadded base64url. */
+    /** 32 CSPRNG bytes as unpadded base64url. */
     private static final java.util.regex.Pattern ATTACH_HANDLE =
             java.util.regex.Pattern.compile("^[A-Za-z0-9_-]{16,128}$");
 
@@ -112,10 +104,7 @@ public class OidcAuthorizationController {
         clientService.validateScope(client, scopes);
         clientService.validateChallenge(client, codeChallenge, codeChallengeMethod);
 
-        // Park the validated request in a login session and hand off to the browser
-        // UI, which walks phone -> OTP -> PIN/profile before the authorization code is
-        // issued at /login/**. There is no other way to obtain a code: the former
-        // non-interactive branch (OTP as a query parameter) is gone, per ADM-001 L1a.
+        // The interactive login session is the only way to obtain a code.
         LoginSession session = new LoginSession();
         session.setClientId(clientId);
         session.setRedirectUri(redirectUri);
@@ -125,8 +114,6 @@ public class OidcAuthorizationController {
         session.setCodeChallenge(codeChallenge);
         session.setCodeChallengeMethod(codeChallengeMethod);
         session.setPhase(LoginSession.Phase.PHONE);
-        // The hint is the reserved passkey marker, a structured "gua:" hint, or a phone to pre-fill,
-        // never more than one: the intent marker must not leak into the phone field.
         if (isPasskeyLoginHint(loginHint)) {
             session.setIntent(LoginSession.Intent.PASSKEY);
             session.setPhoneHint(null);
@@ -136,12 +123,7 @@ public class OidcAuthorizationController {
             session.setIntent(LoginSession.Intent.PHONE);
             session.setPhoneHint(normalizeLoginHint(loginHint));
         }
-        // Which downstream client this login is for (web vs native), forwarded by MAS.
-        // Parked on the session so the registration guard can gate web signups only.
         session.setDownstreamClient(guaDownstream);
-        // Re-authentication: an already signed-in user re-verifying (prompt=login /
-        // id_token_hint). Pin the session to that subject so the flow is LOGIN-ONLY:
-        // the phone must already belong to this user and signup can never be reached.
         session.setReauthUserId(resolveReauthUserId(prompt, idTokenHint));
         session.setCsrfToken(loginSessionService.newToken());
         String sessionId = loginSessionService.create(session);
@@ -223,17 +205,7 @@ public class OidcAuthorizationController {
         return new ClientCredentials(clientIdParam, clientSecretParam);
     }
 
-    /**
-     * Resolves the already-authenticated subject for a re-authentication authorize
-     * request. A request is a re-auth when it carries {@code prompt=login} and/or an
-     * {@code id_token_hint}; we trust only the {@code sub} of a hint we ourselves
-     * signed. Returns {@code null} for a normal (unauthenticated) signup/login.
-     *
-     * <p>
-     * When {@code prompt=login} is present but the hint is missing or not verifiable,
-     * the request is rejected: a re-auth must positively identify its subject so it
-     * cannot silently degrade into an open signup/login.
-     */
+    /** prompt=login without a verifiable id_token_hint is rejected. */
     private String resolveReauthUserId(String prompt, String idTokenHint) {
         boolean promptLogin = prompt != null && containsPromptValue(prompt, "login");
         boolean hasHint = idTokenHint != null && !idTokenHint.isBlank();
@@ -271,30 +243,18 @@ public class OidcAuthorizationController {
         return scopes.isEmpty() ? Set.of() : scopes;
     }
 
-    /** True when the hint is exactly the reserved passkey intent marker (trimmed, any case). */
     private static boolean isPasskeyLoginHint(String loginHint) {
         return loginHint != null && PASSKEY_LOGIN_HINT.equalsIgnoreCase(loginHint.trim());
     }
 
-    /**
-     * True for a {@code gua:} prefixed hint while the feature is on. The grammar applies only to
-     * prefixed hints, and only then: the reserved value {@code passkey} keeps its meaning, and every
-     * other hint keeps today's behaviour.
-     */
     private boolean isGuaLoginHint(String loginHint) {
         return identityProperties.getGenesis().isEnabled()
                 && loginHint != null
                 && loginHint.trim().toLowerCase(Locale.ROOT).startsWith(GUA_HINT_PREFIX);
     }
 
-    /**
-     * Parses {@code gua:phone=<E.164>;genesis=<handle>} (or {@code gua:intent=passkey}) onto the session.
-     *
-     * <p>Strict by design, as ADM-008 decision 6 requires: an unparsable hint, an unknown or duplicated
-     * key and a malformed {@code genesis} value are refused rather than silently ignored, because
-     * quietly dropping a handle is the silent downgrade the decision forbids. The handle itself is only
-     * recorded here; it authorizes nothing until an attach proof is verified at the profile step.
-     */
+    // A malformed hint, an unknown or duplicated key, or a bad handle is refused, never ignored.
+    // The handle authorizes nothing until the attach proof verifies.
     private void applyGuaLoginHint(LoginSession session, String loginHint) {
         String body = loginHint.trim().substring(GUA_HINT_PREFIX.length());
         Map<String, String> pairs = new LinkedHashMap<>();
@@ -322,8 +282,6 @@ public class OidcAuthorizationController {
             if (normalized == null) {
                 throw malformedLoginHint();
             }
-            // A passkey sign-in opens the assertion straight away, so the phone field is not shown and
-            // the marker must not leak into it.
             session.setPhoneHint(session.getIntent() == LoginSession.Intent.PASSKEY ? null : normalized);
         }
 
@@ -341,12 +299,7 @@ public class OidcAuthorizationController {
                 "The login hint is malformed.");
     }
 
-    /**
-     * Normalizes an OIDC {@code login_hint} into a bare E.164 phone number. Matrix
-     * clients may prefix the hint (e.g. {@code "phone:+5511..."} or
-     * {@code "mxid:..."}); we keep only a phone-like value and ignore anything
-     * else.
-     */
+    /** Matrix clients may prefix the hint (phone:, mxid:). Only a phone-like value is kept. */
     private static String normalizeLoginHint(String loginHint) {
         if (loginHint == null || loginHint.isBlank()) {
             return null;
@@ -355,7 +308,6 @@ public class OidcAuthorizationController {
         int colon = value.indexOf(':');
         if (colon >= 0) {
             String prefix = value.substring(0, colon).toLowerCase(java.util.Locale.ROOT);
-            // Only unwrap a phone-style hint; an mxid hint is not a phone number.
             if (prefix.equals("phone") || prefix.equals("tel") || prefix.equals("msisdn")) {
                 value = value.substring(colon + 1).trim();
             }

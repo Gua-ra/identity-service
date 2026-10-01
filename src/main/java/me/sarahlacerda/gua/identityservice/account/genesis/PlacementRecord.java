@@ -3,31 +3,7 @@ package me.sarahlacerda.gua.identityservice.account.genesis;
 
 import java.time.Instant;
 
-/**
- * A generation-1 placement record: one accountId bound to one roster homeserver id, signed by that
- * homeserver's roster membership key (ADM-008 decision 7, ADM-001 L6 generation 1).
- *
- * <p>It carries no identifier, no phone number, no phone hash and no Matrix user id, in the type or in
- * the bytes {@link PlacementRecordCodec} produces: replicated state holds no raw identifier (ADM-001
- * L15, L4). That is what makes this per-account object publishable where the deleted
- * {@code phone -> homeserver} directory write was not. {@code PlacementRecordCodecTest} fails if the
- * record grows an identifying field.
- *
- * <p>The record is homeserver-asserted. Generation 1 is not the five-step committed placement
- * transaction (ADM-001 L6) and improves no compromise condition; it records where an account already
- * lives.
- *
- * @param version       format version, {@value #VERSION}
- * @param generation    placement generation, {@value #GENERATION_ONE}
- * @param accountId     the account this record places
- * @param origin        {@link AccountId#CLASS_BOOTSTRAP} or {@link AccountId#CLASS_GENESIS}; must equal
- *                      the class byte inside the accountId itself
- * @param homeserverId  the roster entry id of the holding homeserver, never the Matrix domain
- * @param issuedAt      when the signer issued it
- * @param notBefore     start of the validity window
- * @param notAfter      end of the validity window
- * @param canonicalBytes the exact bytes the signature covers, kept verbatim so nothing re-encodes them
- */
+/** Binds one accountId to one roster homeserver id. It carries no phone number, phone hash or Matrix user id. */
 public record PlacementRecord(
         int version,
         int generation,
@@ -39,12 +15,11 @@ public record PlacementRecord(
         Instant notAfter,
         byte[] canonicalBytes) {
 
-    /** ASCII magic, and the signature domain separator (ADM-008 decision 7). */
+    /** Also the signature domain separator. */
     public static final String MAGIC = "GUAP";
 
     public static final int VERSION = 0x01;
 
-    /** The only generation this phase issues or accepts. */
     public static final int GENERATION_ONE = 0x01;
 
     /** Bytes before the variable-length homeserver id: magic, version, generation, accountId, origin, n. */
@@ -53,17 +28,14 @@ public record PlacementRecord(
     /** Bytes after it: three 8-byte timestamps. */
     public static final int TRAILER_LENGTH = 24;
 
-    /** Total length of a record carrying an {@code n}-byte homeserver id. */
     public static final int LENGTH_WITHOUT_HOMESERVER_ID = FIXED_PREFIX_LENGTH + TRAILER_LENGTH;
 
     public static final int MAX_HOMESERVER_ID_LENGTH = 64;
 
-    /** True when this record is rooted in a registered genesis rather than a bootstrap id. */
     public boolean isGenesisRooted() {
         return origin == AccountId.CLASS_GENESIS;
     }
 
-    /** A defensive copy: callers must never be able to edit the bytes a signature covers. */
     @Override
     public byte[] canonicalBytes() {
         return canonicalBytes.clone();

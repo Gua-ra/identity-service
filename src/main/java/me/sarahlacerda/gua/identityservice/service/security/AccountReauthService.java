@@ -21,27 +21,8 @@ import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
 import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditLogger;
 
-/**
- * OTP reauthentication for the sensitive account operations (phone change, deactivation,
- * identity reset): the caller already holds a session and must additionally prove possession
- * of the number on the account, in the spirit of the Matrix {@code m.login.msisdn} UIA stage.
- *
- * <p>
- * The caller supplies the number; it is never looked up. It is normalized, digested with the
- * directory's peppered HMAC and compared with the digests of the account's own
- * {@code directory_entries} rows. Only a match sends the code, and the code goes to the number
- * just proved to be the account's. Nothing is persisted between start and verify: verify
- * re-derives everything from the number submitted again. The refusal is identical whether the
- * number is unknown, belongs to somebody else or is simply not this account's, so the endpoint
- * cannot be used to ask who owns a number. The homeserver's threepid bindings are not consulted:
- * they would put every raw MSISDN on the homeserver, and the directory already holds the
- * authoritative binding.
- *
- * <p>
- * {@link #startReauth(String, String, String, String)} sends the OTP;
- * {@link #verifyReauth(String, String, String, ReauthOperation, String)} exchanges the code for a
- * single-use, operation-scoped reauth token.
- */
+// The submitted number is checked against the account's directory digests; nothing is stored between calls.
+// The refusal is identical for every kind of mismatch, so the endpoint cannot reveal who owns a number.
 @Service
 @RequiredArgsConstructor
 public class AccountReauthService {
@@ -51,10 +32,6 @@ public class AccountReauthService {
     private static final String MISMATCH_RATE_KEY_PREFIX = "reauth:phone-mismatch:";
     private static final Duration MISMATCH_WINDOW = Duration.ofHours(1);
 
-    /**
-     * The one refusal. Says only that this is not the number on the account, in the same words
-     * whoever the number belongs to.
-     */
     private static final String MISMATCH_MESSAGE = "That is not the number on your account.";
 
     private final OtpService otpService;
@@ -67,22 +44,12 @@ public class AccountReauthService {
     private final SecurityAuditLogger auditLogger;
     private final IdentityServiceProperties properties;
 
-    /**
-     * Sends the reauthentication OTP, once the submitted number is shown to be the account's.
-     * The send itself stays inside the ordinary per-phone and per-address OTP limits.
-     */
     public void startReauth(String userId, String submittedPhone, String requesterIp, String language) {
         String phone = requireOwnPhone(userId, submittedPhone, "REAUTH_START", requesterIp);
         otpService.sendOtp(phone, requesterIp, language);
         log.info("Issued reauth OTP for {}", userId);
     }
 
-    /**
-     * Exchanges the code for a reauth token scoped to {@code operation}. The number is checked
-     * again here rather than remembered from the start call: nothing is persisted between the
-     * two, so a token can only ever be minted by someone who can produce the account's number
-     * and the code sent to it.
-     */
     public String verifyReauth(String userId, String submittedPhone, String code, ReauthOperation operation,
             String requesterIp) {
         verifyPhoneOtp(userId, submittedPhone, code, operation.name(), requesterIp);
@@ -91,11 +58,7 @@ public class AccountReauthService {
         return token;
     }
 
-    /**
-     * The same check and the same OTP redemption without minting a token, for a flow that needs
-     * the proof inside a session it already holds rather than a token to spend elsewhere: the
-     * first-factor enrollment step-up of an account that holds no factor to step up with.
-     */
+    /** Same check without minting a token, for the first-factor enrollment step-up. */
     public void verifyPhoneOtp(String userId, String submittedPhone, String code, String operation,
             String requesterIp) {
         String phone = requireOwnPhone(userId, submittedPhone, operation, requesterIp);
@@ -109,24 +72,7 @@ public class AccountReauthService {
         reauthTokenService.consume(reauthToken, userId, operation);
     }
 
-    /**
-     * Normalizes the submitted number and returns it in E.164 when it is one of this account's
-     * own, refusing with {@link ReauthPhoneMismatchException} when it is not.
-     *
-     * <p>
-     * An attempt is reserved from the hour's budget before the comparison and given back when
-     * the number turns out to be the account's own, so the budget is spent by mismatches alone
-     * and an account holder retyping their own number is never locked out of their own settings
-     * by having got it wrong five times.
-     *
-     * <p>
-     * A number that does not parse is refused earlier, by the normalizer, with
-     * {@code 400 invalid_phone_number}. That answer is a function of the submitted string
-     * alone: it is the same for every caller and for every account, so it says nothing about
-     * who owns what and cannot be used to probe ownership. It also costs no attempt, because it
-     * is settled before the account is consulted at all. Everything that does depend on the
-     * account gets the single 403 below.
-     */
+    /** An attempt is reserved before the comparison and released on a match, so only mismatches spend the budget. */
     private String requireOwnPhone(String userId, String submittedPhone, String operation, String requesterIp) {
         String phone = phoneNumberNormalizer.toE164(submittedPhone);
         reserveAttempt(userId);
@@ -138,18 +84,8 @@ public class AccountReauthService {
         return phone;
     }
 
-    /**
-     * Whether {@code phone} is the number bound to {@code userId}.
-     *
-     * <p>
-     * The digest of the submitted number against the digests of the account's own directory
-     * rows, which is the authoritative binding. On a miss it falls back to the homeserver's
-     * phone binding, exactly as the OTP step of the interactive login does, so a rotated or
-     * drifted directory pepper does not leave a legitimate account unable to reauthenticate:
-     * that binding is independent of the pepper. The fallback is best effort, because the admin
-     * API is not reliably available under MAS delegated authentication; a failure there is a
-     * miss, never an accepted number.
-     */
+    // On a digest miss it checks the homeserver's phone binding, so pepper drift does not lock an account out.
+    // A failed lookup is a miss.
     private boolean boundToAccount(String userId, String phone) {
         String digest = phoneNumberHasher.digest(phone);
         boolean matchesDirectory = directoryService.findByUserId(userId).stream()
@@ -168,26 +104,8 @@ public class AccountReauthService {
         }
     }
 
-    /**
-     * Takes one attempt out of the account's hour budget, refusing once the budget is spent.
-     *
-     * <p>
-     * INCR first and compare what it returns, which is the pattern
-     * {@link me.sarahlacerda.gua.identityservice.service.RateLimiter#checkRate} uses and for the
-     * same reason: a read followed by a later increment bounds a sequential attacker only, since
-     * a burst of parallel requests all read the same value, all pass the gate and all get their
-     * number compared. The reservation is taken before the comparison for that reason too, so
-     * what the cap bounds is the number of comparisons a burst can perform, and with them the
-     * homeserver lookups the fallback makes for a caller-chosen number.
-     *
-     * <p>
-     * A counter that cannot be updated refuses the attempt rather than waving it through: this is
-     * the only bound on guessing the account's own number.
-     *
-     * <p>
-     * The message is written here: the generic limiter's own message names its Redis key, which
-     * carries the user id, and error messages are returned to callers.
-     */
+    // INCR first and compare the result, so a parallel burst cannot pass the gate.
+    // A counter that cannot be updated refuses the attempt.
     private void reserveAttempt(String userId) {
         String key = mismatchKey(userId);
         Long counted;
@@ -203,33 +121,19 @@ public class AccountReauthService {
         }
     }
 
-    /**
-     * Opens the hour window on the counter, so the budget refills an hour after it opened.
-     *
-     * <p>
-     * Re-armed on every attempt still inside the budget rather than on the first one alone: a key
-     * that ended up without a window, because the {@code expire} after the first increment failed,
-     * would otherwise never get one and would refuse the account for good. Not re-armed once the
-     * budget is spent, because a flood of refused attempts would then push the window out for as
-     * long as the flood lasted and hold the account holder out with it.
-     */
+    // Re-armed on every attempt inside the budget, so a key that lost its expiry cannot block the account.
+    // Not re-armed once the budget is spent.
     private void armWindow(String key, long spent) {
         if (spent <= properties.getSecurity().getMaxReauthPhoneAttemptsPerHour()) {
             redisTemplate.expire(key, MISMATCH_WINDOW);
         }
     }
 
-    /**
-     * Gives the reservation back, once the number has turned out to be the account's own. What
-     * keeps the budget one of wrong numbers rather than one of attempts.
-     */
     private void releaseAttempt(String userId) {
         try {
             redisTemplate.opsForValue().decrement(mismatchKey(userId));
         } catch (DataAccessException ex) {
-            // Leaving the attempt spent is the smaller harm: the caller has just proved the
-            // number, and refusing them over the bookkeeping would be the lockout the budget is
-            // shaped to avoid.
+            // Leave the attempt spent: the caller has just proved the number.
             log.warn("Could not release the reauth attempt for {}: {}", userId, ex.getMessage());
         }
     }

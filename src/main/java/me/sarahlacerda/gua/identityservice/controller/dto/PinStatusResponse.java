@@ -4,15 +4,6 @@ import java.util.List;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
-/**
- * What the account has registered, and what the server will accept from it.
- *
- * <p>
- * Everything here is server truth about registration. Nothing here is a statement about
- * what the calling device can do, and there is no field for the client to say what it
- * cannot do: a client claim that a factor is unavailable is free for an attacker to make,
- * so it could only ever be a request for something weaker.
- */
 @Schema(description = "Status of the authenticated user's security PIN and the factors the account holds")
 public record PinStatusResponse(
         @Schema(description = "True when the user has configured a security PIN") boolean hasPin,

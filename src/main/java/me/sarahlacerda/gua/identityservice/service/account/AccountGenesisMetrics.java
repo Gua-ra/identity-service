@@ -16,27 +16,7 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Gene
 import me.sarahlacerda.gua.identityservice.domain.AccountGenesisRecord.Origin;
 import me.sarahlacerda.gua.identityservice.repository.AccountGenesisRepository;
 
-/**
- * The two gauges the account-genesis rollout (migration plan phase 3) is watched by:
- *
- * <ul>
- *   <li>{@code gua_identity_account_genesis{origin}}, how many accounts are rooted in a genesis
- *       and how many are bootstrap: the audit split ADM-001 L5 requires to be visible;</li>
- *   <li>{@code gua_identity_accounts_without_genesis}, which must reach zero and stay there before any
- *       later phase may propose reading a placement record for routing.</li>
- * </ul>
- *
- * <p>Those are the exact names a scrape exposes. Both are gauges, so neither carries the {@code _total}
- * suffix the Prometheus registry appends to counters; {@code AccountGenesisMetricsTest} pins the scraped
- * names. Counters would not do: both counts fall as the backfill runs, and the second exists to reach
- * zero.
- *
- * <p>Registered only while the feature is switched on, under either flag, so with everything off
- * {@link AccountScanner#countAccountsWithoutGenesis()}, a full pass over the account tables, never runs.
- * Each value is read from the database at most once per {@link #REFRESH} interval and cached in between,
- * so a busy scrape cannot turn a gauge into a load source. Registered eagerly at construction, so the
- * series exist on a fresh pod's first scrape.
- */
+/** Registered only while the feature is on. Each value is read from the database at most once per REFRESH. */
 @Component
 public class AccountGenesisMetrics {
 
@@ -50,14 +30,12 @@ public class AccountGenesisMetrics {
 
     public AccountGenesisMetrics(MeterRegistry metrics, AccountGenesisRepository repository,
             AccountScanner accountScanner, IdentityServiceProperties properties) {
-        // Wrapping a supplier reads nothing; only a scrape of a registered gauge does.
         this.genesisCount = new Cached(() -> repository.countByOrigin(Origin.GENESIS));
         this.bootstrapCount = new Cached(() -> repository.countByOrigin(Origin.BOOTSTRAP));
         this.withoutGenesisCount = new Cached(accountScanner::countAccountsWithoutGenesis);
 
         GenesisProperties genesis = properties.getGenesis();
         if (!genesis.isEnabled() && !genesis.getBootstrapBackfill().isEnabled()) {
-            // Inert, which is what every flag being off promises: no series, and no scan behind them.
             return;
         }
 
@@ -74,7 +52,6 @@ public class AccountGenesisMetrics {
                 .register(metrics);
     }
 
-    /** A value read at most once per {@link #REFRESH}, which never propagates a database failure. */
     private static final class Cached {
 
         private final Supplier<Long> source;
@@ -94,8 +71,7 @@ public class AccountGenesisMetrics {
                 snapshot.set(new Snapshot(Instant.now(), value));
                 return value;
             } catch (RuntimeException ex) {
-                // A scrape must never fail because the database is briefly unavailable; serve the last
-                // value and try again on the next one.
+                // A scrape must never fail because the database is briefly unavailable.
                 log.debug("Could not refresh an account genesis gauge: {}", ex.getMessage());
                 return current.value();
             }

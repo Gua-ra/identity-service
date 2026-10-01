@@ -22,14 +22,7 @@ import me.sarahlacerda.gua.identityservice.controller.dto.AccountGenesisRegister
 import me.sarahlacerda.gua.identityservice.controller.dto.AccountGenesisRegisterResponse;
 import me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService;
 
-/**
- * Registration of an {@code AccountGenesis} the client generated on device (ADM-008 decision 6, step 1).
- *
- * <p>Open by design and self-authenticating: it runs before any OIDC flow exists to authenticate
- * against, and the body carries a possession proof under the key committed inside the genesis itself.
- * Registering creates no account and attaches nothing. The handle it returns is a routing hint, not a
- * capability: a stolen handle attaches nothing, and a planted one fails at the attach proof.
- */
+/** Registering creates no account. The returned handle is a routing hint, not a capability. */
 @RestController
 @RequestMapping("/account/genesis")
 @Validated

@@ -22,29 +22,13 @@ import org.springframework.stereotype.Component;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.HomeserverConfig;
 
-/**
- * The fallback MAS read path: a read-only role on each MAS database.
- *
- * <p><b>Not available on this deployment.</b> No such role exists on any MAS database. Granting it
- * means creating a login role per MAS with {@code SELECT} on exactly three tables,
- * {@code upstream_oauth_links}, {@code users} and {@code upstream_oauth_providers}, and nothing else.
- * Until then this reader reports itself unconfigured
- * ({@code identity.placement.mas.sql.enabled}).
- *
- * <p><b>The column this must never read.</b> {@code upstream_oauth_links.human_account_name} holds the
- * account's phone number in the deployed MAS configuration. It is not in any statement below, it is not
- * selected by {@code SELECT *} anywhere here, and {@code MasSqlLinkReaderTest} fails if it ever appears
- * in this file. Neither the links query nor the provider query may grow it.
- */
+// Off by default: needs a read-only role on each MAS database.
+// Must never read upstream_oauth_links.human_account_name, which holds the phone number.
 @Component
 public class MasSqlLinkReader implements MasLinkReader {
 
     private static final Logger log = LoggerFactory.getLogger(MasSqlLinkReader.class);
 
-    /**
-     * Columns named one by one, never {@code SELECT *}: a wildcard here would start returning the phone
-     * column the moment someone reordered the table.
-     */
     private static final String LINKS_QUERY = """
             SELECT l.subject, l.user_id, u.username
               FROM upstream_oauth_links l
@@ -60,7 +44,6 @@ public class MasSqlLinkReader implements MasLinkReader {
              WHERE upstream_oauth_provider_id = ?
             """;
 
-    /** How a connection to one MAS database is opened. Overridable so tests need no live database. */
     @FunctionalInterface
     public interface ConnectionFactory {
         Connection open(String jdbcUrl, String username, String password) throws SQLException;
@@ -156,10 +139,7 @@ public class MasSqlLinkReader implements MasLinkReader {
         return effective;
     }
 
-    /**
-     * The effective value, with the MAS default applied. {@code fail} is the default when the key is
-     * absent, so reporting "absent" as "unset" would hide the difference that matters.
-     */
+    /** MAS defaults to fail when the key is absent. */
     private String onConflictOf(String claimsImportsJson) {
         if (claimsImportsJson == null || claimsImportsJson.isBlank()) {
             return "fail";
