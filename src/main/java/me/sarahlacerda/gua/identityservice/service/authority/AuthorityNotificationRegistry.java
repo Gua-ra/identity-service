@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.regex.Pattern;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -41,6 +42,9 @@ public class AuthorityNotificationRegistry {
 
     private static final int MAX_LABEL_BYTES = AuthorityRecord.LABEL_LENGTH;
 
+    private static final Pattern APNS_TOKEN = Pattern.compile("[0-9a-fA-F]+");
+    private static final Pattern FCM_TOKEN = Pattern.compile("[\\x21-\\x7E]+");
+
     private final AuthorityNotificationRegistrationRepository repository;
     private final AuthorityDeviceRepository deviceRepository;
     private final AuthorityAccounts accounts;
@@ -69,7 +73,7 @@ public class AuthorityNotificationRegistry {
         policy.requireNotificationsEnabled();
         String installationId = required(request.installationId(), "installation_id");
         Platform platform = platform(request.platform());
-        String token = required(request.token(), "token");
+        String token = token(platform, request.token());
         String appId = required(request.appId(), "app_id");
         String label = label(request.deviceLabel());
         String deviceKey = bind(userId, installationId, request, sessionHash, now);
@@ -231,6 +235,16 @@ public class AuthorityNotificationRegistry {
         } catch (IllegalArgumentException ex) {
             throw refused("authority_notification_invalid", "platform must be APNS or FCM.");
         }
+    }
+
+    /** An APNs token becomes part of the request path, so only the hex Apple issues is stored. */
+    private static String token(Platform platform, String value) {
+        String token = required(value, "token");
+        Pattern shape = platform == Platform.APNS ? APNS_TOKEN : FCM_TOKEN;
+        if (!shape.matcher(token).matches()) {
+            throw refused("authority_notification_invalid", "token is not a push token of that platform.");
+        }
+        return token;
     }
 
     private static String label(String value) {

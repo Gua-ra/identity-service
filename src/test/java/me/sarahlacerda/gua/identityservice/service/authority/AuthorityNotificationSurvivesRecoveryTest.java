@@ -68,6 +68,10 @@ class AuthorityNotificationSurvivesRecoveryTest {
     private static final String OWN_INSTALL = "install-phone";
     private static final String OTHER_INSTALL = "install-tablet";
     private static final Duration HOLD = Duration.ofDays(7);
+    private static final String TOKEN_ONE = "a1".repeat(32);
+    private static final String TOKEN_TWO = "b2".repeat(32);
+    private static final String ROTATED_TOKEN = "c3".repeat(32);
+    private static final String ATTACKER_TOKEN = "d4".repeat(32);
 
     @Autowired
     private IdentityUserRepository userRepository;
@@ -250,7 +254,7 @@ class AuthorityNotificationSurvivesRecoveryTest {
 
         AuthorityTransitionException refusal = catchThrowableOfType(
                 () -> registry.register(USER, new AuthorityNotificationRegistry.Registration(OWN_INSTALL, "APNS",
-                        "attacker-token", "global.gua", "iPhone", null, null, null), SESSION, clock.instant()),
+                        ATTACKER_TOKEN, "global.gua", "iPhone", null, null, null), SESSION, clock.instant()),
                 AuthorityTransitionException.class);
 
         assertThat(refusal).isNotNull();
@@ -265,18 +269,46 @@ class AuthorityNotificationSurvivesRecoveryTest {
         registerOwnInstall();
 
         registry.register(USER, new AuthorityNotificationRegistry.Registration(OWN_INSTALL, "APNS",
-                "apns-token-one", "global.gua", "iPhone", null, null, null), SESSION, clock.instant());
+                TOKEN_ONE, "global.gua", "iPhone", null, null, null), SESSION, clock.instant());
         assertThat(registrationRepository.findByUserId(USER)).hasSize(1);
 
         String challenge = mintNotifyChallenge();
         registry.register(USER, new AuthorityNotificationRegistry.Registration(OWN_INSTALL, "APNS",
-                "apns-token-rotated", "global.gua", "iPhone",
+                ROTATED_TOKEN, "global.gua", "iPhone",
                 Base64.getUrlEncoder().withoutPadding().encodeToString(device.rawPublicKey()), challenge,
                 signBinding(OWN_INSTALL, challenge)), SESSION, clock.instant());
 
         assertThat(registrationRepository.findByUserIdAndInstallationId(USER, OWN_INSTALL).orElseThrow()
                 .getTokenFingerprint())
-                .isEqualTo(AuthorityNotificationRegistry.fingerprint("apns-token-rotated"));
+                .isEqualTo(AuthorityNotificationRegistry.fingerprint(ROTATED_TOKEN));
+    }
+
+    @Test
+    void anApnsTokenThatIsNotHexIsRefused() {
+        for (String token : new String[] { "not a token", "../../3/device/" + TOKEN_ONE, "apns-token" }) {
+            AuthorityTransitionException refusal = catchThrowableOfType(
+                    () -> registry.register(USER, new AuthorityNotificationRegistry.Registration(OWN_INSTALL,
+                            "APNS", token, "global.gua", "iPhone", null, null, null), SESSION, clock.instant()),
+                    AuthorityTransitionException.class);
+
+            assertThat(refusal).as(token).isNotNull();
+            assertThat(refusal.getCode()).isEqualTo("authority_notification_invalid");
+        }
+        assertThat(registrationRepository.findByUserId(USER)).isEmpty();
+    }
+
+    @Test
+    void anFcmTokenWithWhitespaceIsRefusedAndARealOneIsStored() {
+        AuthorityTransitionException refusal = catchThrowableOfType(
+                () -> registry.register(USER, new AuthorityNotificationRegistry.Registration(OWN_INSTALL, "FCM",
+                        "fMEP0vJqS0 APA91b", "global.gua", "Pixel", null, null, null), SESSION, clock.instant()),
+                AuthorityTransitionException.class);
+        assertThat(refusal).isNotNull();
+        assertThat(refusal.getCode()).isEqualTo("authority_notification_invalid");
+
+        registry.register(USER, new AuthorityNotificationRegistry.Registration(OWN_INSTALL, "FCM",
+                "fMEP0vJqS0:APA91bH_x-Y", "global.gua", "Pixel", null, null, null), SESSION, clock.instant());
+        assertThat(registrationRepository.findByUserId(USER)).hasSize(1);
     }
 
     private void givenTwoPasskeys() {
@@ -307,18 +339,18 @@ class AuthorityNotificationSurvivesRecoveryTest {
 
     private void registerOwnInstall() {
         registry.register(USER, new AuthorityNotificationRegistry.Registration(OWN_INSTALL, "APNS",
-                "apns-token-one", "global.gua", "iPhone", null, null, null), SESSION, clock.instant());
+                TOKEN_ONE, "global.gua", "iPhone", null, null, null), SESSION, clock.instant());
     }
 
     private void registerOtherInstall() {
         registry.register(USER, new AuthorityNotificationRegistry.Registration(OTHER_INSTALL, "APNS",
-                "apns-token-two", "global.gua", "iPad", null, null, null), SESSION, clock.instant());
+                TOKEN_TWO, "global.gua", "iPad", null, null, null), SESSION, clock.instant());
     }
 
     private void registerOwnInstallBoundToTheDevice() {
         String challenge = mintNotifyChallenge();
         registry.register(USER, new AuthorityNotificationRegistry.Registration(OWN_INSTALL, "APNS",
-                "apns-token-one", "global.gua", "iPhone",
+                TOKEN_ONE, "global.gua", "iPhone",
                 Base64.getUrlEncoder().withoutPadding().encodeToString(device.rawPublicKey()), challenge,
                 signBinding(OWN_INSTALL, challenge)), SESSION, clock.instant());
     }

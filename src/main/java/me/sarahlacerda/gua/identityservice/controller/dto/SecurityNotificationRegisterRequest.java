@@ -26,8 +26,8 @@ public class SecurityNotificationRegisterRequest {
 
     @NotBlank
     @Size(max = 4096)
-    @Schema(description = "The APNs device token or FCM registration token. Stored, never logged, and never "
-            + "returned.", requiredMode = Schema.RequiredMode.REQUIRED)
+    @Schema(description = "The APNs device token in hex, or the FCM registration token. Stored, never logged, "
+            + "and never returned.", requiredMode = Schema.RequiredMode.REQUIRED)
     private String token;
 
     @NotBlank
