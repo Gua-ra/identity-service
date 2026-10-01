@@ -32,20 +32,8 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Apns
 import me.sarahlacerda.gua.identityservice.domain.AuthorityNotificationRegistration.Platform;
 
 /**
- * Apple's push service, over the JDK's own HTTP client.
- *
- * <p>The JDK client rather than this service's Reactor Netty {@code WebClient} for one reason that is not a
- * preference: APNs refuses HTTP/1.1 outright, and {@link HttpClient} negotiates HTTP/2 by configuration
- * rather than by hope. A transport whose protocol version is an open question is a channel that works in
- * staging and fails silently the first time a window matters.
- *
- * <p>The provider token is an ES256 JWT over the p8, cached for {@link ApnsProperties#getTokenLife()}
- * because Apple rejects one older than an hour and re-signing per send is pure waste. One key addresses
- * every topic of the team, so the app id picks the {@code apns-topic} header and never a second credential.
- *
- * <p>{@code apns-push-type: alert} deliberately, so the alert is shown while the app is signed out. That is
- * the case the channel exists for: a completed recovery has ended every session, and the owner has to see
- * the window anyway.
+ * Uses the JDK HttpClient because APNs requires HTTP/2. Sent as an alert so it is shown while the app is
+ * signed out.
  */
 @Component
 public class AuthorityApnsTransport implements AuthorityPushTransport {
@@ -61,7 +49,6 @@ public class AuthorityApnsTransport implements AuthorityPushTransport {
 
     @Autowired
     public AuthorityApnsTransport(IdentityServiceProperties properties, Clock clock) {
-        // Built once, and pinned to HTTP/2: APNs answers nothing else.
         this(properties, HttpClient.newBuilder().version(HttpClient.Version.HTTP_2).build(), clock);
     }
 
@@ -92,7 +79,6 @@ public class AuthorityApnsTransport implements AuthorityPushTransport {
                 .header("authorization", "bearer " + providerToken())
                 .header("apns-topic", topic)
                 .header("apns-push-type", "alert")
-                // The window is the security of the transition, so the alert is not deferrable.
                 .header("apns-priority", "10")
                 .header("content-type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(payload(title, body), StandardCharsets.UTF_8))
@@ -104,16 +90,11 @@ public class AuthorityApnsTransport implements AuthorityPushTransport {
             Thread.currentThread().interrupt();
             return Outcome.RETRYABLE;
         } catch (Exception ex) {
-            // The token is never in this line. The fingerprint column exists so a registration can be named.
             log.warn("An authority alert could not be delivered to APNs: {}", ex.getMessage());
             return Outcome.RETRYABLE;
         }
     }
 
-    /**
-     * 410, and 400 with {@code BadDeviceToken}, are the two ways Apple says the destination is gone. Every
-     * other failure is transient until it has happened often enough to retire the row.
-     */
     private static Outcome outcome(int status, String body) {
         if (status >= 200 && status < 300) {
             return Outcome.DELIVERED;
@@ -125,7 +106,7 @@ public class AuthorityApnsTransport implements AuthorityPushTransport {
         return Outcome.RETRYABLE;
     }
 
-    /** The alert, and nothing else: no room, no message, no phone number, no account identifier. */
+    /** Must not carry a phone number or an account identifier. */
     private static String payload(String title, String body) {
         return "{\"aps\":{\"alert\":{\"title\":" + json(title) + ",\"body\":" + json(body)
                 + "},\"sound\":\"default\",\"interruption-level\":\"time-sensitive\"},\""
@@ -153,7 +134,6 @@ public class AuthorityApnsTransport implements AuthorityPushTransport {
         return out.append('"').toString();
     }
 
-    /** The cached ES256 provider token, re-signed when it is close enough to Apple's one-hour cap. */
     synchronized String providerToken() {
         Instant now = clock.instant();
         if (cachedToken != null && cachedUntil != null && now.isBefore(cachedUntil)) {
@@ -176,7 +156,6 @@ public class AuthorityApnsTransport implements AuthorityPushTransport {
             cachedUntil = now.plus(apns.getTokenLife());
             return cachedToken;
         } catch (Exception ex) {
-            // Never the key material, and never the token. A misconfigured credential is an operator problem.
             throw new IllegalStateException("the APNs provider token could not be signed", ex);
         }
     }

@@ -24,15 +24,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.Mockito.mock;
 
-/**
- * The step-up a transition can take in the web sheet, driven against a real repository (ADM-009 decision 4
- * step 2).
- *
- * <p>What is worth pinning here is not that a row can be written. It is the four bindings and the single use:
- * a proof taken by one account, from one access token, for one transition, inside the challenge's own life,
- * spendable exactly once. Every one of those is what stops this being a way to arrange an authority proof
- * somewhere and spend it somewhere else.
- */
 @DataJpaTest(properties = {
         "spring.flyway.enabled=false",
         "spring.jpa.hibernate.ddl-auto=create-drop",
@@ -46,7 +37,6 @@ class AuthorityWebStepUpServiceTest {
     private static final String SESSION = "a".repeat(64);
     private static final String OTHER_SESSION = "b".repeat(64);
     private static final Instant NOW = Instant.parse("2026-09-23T12:00:00Z");
-    /** Long past any hold, so nothing here is refused for the age of the credential. */
     private static final Instant LONG_AGO = NOW.minus(Duration.ofDays(400));
 
     @Autowired
@@ -70,14 +60,11 @@ class AuthorityWebStepUpServiceTest {
     void aProofTakenInTheSheetIsSpentOnceAndThenGone() {
         Instant expiresAt = service.proved(USER, SESSION, Purpose.ADOPT, AuthFactor.PASSKEY, LONG_AGO);
 
-        // The challenge's own life, so a sheet left open in a background tab is not a step-up an hour later.
         assertThat(expiresAt).isEqualTo(NOW.plus(properties.getAuthority().getChallengeTtl()));
 
         Optional<AuthorityWebStepUpService.Proved> first = service.consume(USER, SESSION, Purpose.ADOPT);
         assertThat(first).isPresent();
         assertThat(first.get().factor()).isEqualTo(AuthFactor.PASSKEY);
-        // The age travels with the proof, so the fresh-factor hold weighs the credential that was presented
-        // rather than whatever the account happens to hold by the time the record arrives.
         assertThat(first.get().factorCreatedAt()).isEqualTo(LONG_AGO);
 
         assertThat(service.consume(USER, SESSION, Purpose.ADOPT)).isEmpty();
@@ -87,12 +74,9 @@ class AuthorityWebStepUpServiceTest {
     void aProofForOneTransitionIsNotAProofForAnother() {
         service.proved(USER, SESSION, Purpose.ADOPT, AuthFactor.PASSKEY, LONG_AGO);
 
-        // O9 asks for a possession proof of this transition. Confirming an adoption must not also hand over
-        // the device set.
         assertThat(service.consume(USER, SESSION, Purpose.GRANT)).isEmpty();
         assertThat(service.consume(USER, SESSION, Purpose.REVOKE)).isEmpty();
         assertThat(service.consume(USER, SESSION, Purpose.RECOVER)).isEmpty();
-        // And the refused lookups left it alone.
         assertThat(service.consume(USER, SESSION, Purpose.ADOPT)).isPresent();
     }
 
@@ -100,8 +84,6 @@ class AuthorityWebStepUpServiceTest {
     void aProofIsNotSpendableByAnotherSessionOrAnotherAccount() {
         service.proved(USER, SESSION, Purpose.ADOPT, AuthFactor.PIN, LONG_AGO);
 
-        // A stolen bearer token of the same account is a different session, and this is the binding that
-        // makes it one.
         assertThat(service.consume(USER, OTHER_SESSION, Purpose.ADOPT)).isEmpty();
         assertThat(service.consume(OTHER_USER, SESSION, Purpose.ADOPT)).isEmpty();
         assertThat(service.consume(USER, SESSION, Purpose.ADOPT)).isPresent();
@@ -121,8 +103,6 @@ class AuthorityWebStepUpServiceTest {
         service.proved(USER, SESSION, Purpose.ADOPT, AuthFactor.PIN, LONG_AGO);
         service.proved(USER, SESSION, Purpose.ADOPT, AuthFactor.PASSKEY, LONG_AGO);
 
-        // One transition, one proof. Two live ones would mean a caller could run the sheet twice and keep a
-        // spare, which is the shape of every single-use control that turned out not to be one.
         Optional<AuthorityWebStepUpService.Proved> spent = service.consume(USER, SESSION, Purpose.ADOPT);
         assertThat(spent).isPresent();
         assertThat(spent.get().factor()).isEqualTo(AuthFactor.PASSKEY);
@@ -131,9 +111,6 @@ class AuthorityWebStepUpServiceTest {
 
     @Test
     void nothingButThePasskeyAndThePinMayEverBeRecorded() {
-        // Decision 9 at its widest, stated where the row is written. There is no arm of the page that sends a
-        // code, so the only way to reach this is an edit that adds one, and it fails here as well as in the
-        // guard test.
         assertThatThrownBy(() -> service.proved(USER, SESSION, Purpose.ADOPT, AuthFactor.PHONE_OTP, LONG_AGO))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(repository.count()).isZero();
@@ -155,14 +132,9 @@ class AuthorityWebStepUpServiceTest {
 
     @Test
     void aWebClientOfOursCannotOpenOneOfTheseForItself() {
-        // Decision 6 is a rule, not a default. A sheet a web session opened for itself would be a browser
-        // arranging its own authority proof, which is the one thing that record forbids outright.
         assertThat(refusalFor(() -> service.requireMayOpen(Optional.of("gua-web"), Purpose.ADOPT)))
                 .isEqualTo("authority_native_session_required");
 
-        // A token this service did not mint names no client of ours, which is how both apps authenticate. It
-        // is not refused here, and what keeps a page out of these endpoints is that they are bearer-only:
-        // the sheet holds a login session cookie, not an access token.
         service.requireMayOpen(Optional.empty(), Purpose.ADOPT);
     }
 
@@ -185,8 +157,6 @@ class AuthorityWebStepUpServiceTest {
                 .isEqualTo("authority_disabled");
         assertThat(repository.count()).isZero();
 
-        // And a row written while it was on is inert while it is off, so switching the feature back off is a
-        // way back and not a state where half a transition is still spendable.
         properties.getAuthority().setEnabled(true);
         service.proved(USER, SESSION, Purpose.ADOPT, AuthFactor.PASSKEY, LONG_AGO);
         properties.getAuthority().setEnabled(false);

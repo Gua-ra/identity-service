@@ -11,18 +11,8 @@ import me.sarahlacerda.gua.identityservice.domain.AuthorityChallenge;
 import me.sarahlacerda.gua.identityservice.repository.AuthorityChallengeRepository;
 
 /**
- * The one write that must survive the refusal it belongs to: marking a challenge spent (ADM-009 decision 2).
- *
- * <p>"Single use, burned on acceptance <em>and</em> on refusal" is a claim about what is left in the table
- * after the request, and every refusal on the submission path throws a {@code RuntimeException} out of the
- * transaction the spend joined. So a burn written inside that transaction was rolled back with it, and one
- * passkey assertion or PIN entry paid for unlimited submission attempts inside the challenge's fifteen
- * minutes: the signature, the channel check, the position rules, the compare-and-set, the rank resolution,
- * the backoff, the cooldown and the signer rules could all be probed with the same challenge.
- *
- * <p>Its own bean rather than a method on {@link AuthorityChallengeService}, because {@code REQUIRES_NEW} is
- * applied by the proxy and a service calling itself does not go through one. {@code AuthorityWebStepUpService}
- * reaches the same guarantee the same way, and it is the pattern this file follows deliberately.
+ * Marks a challenge spent in its own transaction, so the burn survives a refusal that rolls back the
+ * caller. A separate bean because REQUIRES_NEW only applies through the proxy.
  */
 @Service
 public class AuthorityChallengeBurn {
@@ -33,12 +23,6 @@ public class AuthorityChallengeBurn {
         this.repository = repository;
     }
 
-    /**
-     * Marks the challenge with this hash spent, in a transaction of its own, and commits.
-     *
-     * <p>Looked up again by hash rather than taking the caller's entity, so the write belongs entirely to this
-     * transaction and nothing depends on the caller's persistence context.
-     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void burn(String challengeHash, Instant now) {
         AuthorityChallenge row = repository.findByChallengeHash(challengeHash).orElse(null);

@@ -21,21 +21,7 @@ import me.sarahlacerda.gua.identityservice.account.genesis.AccountId;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * The published golden vectors (docs/specs/authority-vectors.v1.json) are the contract the iOS and Android
- * ports verify the authority chain against, so every byte of them is recomputed here: canonical bytes, record
- * hashes, the preimage of the one rule every type obeys, the deterministic signatures, and every case a
- * conforming decoder must refuse together with the rule that refuses it.
- *
- * <p>Written in the shape of {@code GenesisVectorsTest}, which does the same job for the account objects, and
- * for the same reason: a cross-platform byte format that only one implementation has ever produced is a
- * format with one implementation. Three ports have to agree on 177, 161, 145, 209 and 144 bytes, on which
- * field sits at which offset, and on what a decoder refuses; a file each of them checks is how that agreement
- * is testable rather than asserted.
- *
- * <p>The keys are the RFC 8032 section 7.1 test constants, which is what makes the signatures reproducible.
- * They are published values and sign nothing real.
- */
+/** Recomputes the published record vectors, which the iOS and Android clients are tested against. */
 class AuthorityVectorsTest {
 
     private static final Path VECTORS = Path.of("docs/specs/authority-vectors.v1.json");
@@ -47,8 +33,6 @@ class AuthorityVectorsTest {
     void theVectorsCoverEveryRecordTypeTheChainHas() throws Exception {
         JsonNode root = vectors();
 
-        // The point of the file is that a client can check itself against all of it. A type with no vector is
-        // a type each port implements from the prose and nobody compares.
         for (AuthorityRecordType type : AuthorityRecordType.values()) {
             assertThat(magics(root)).as("a vector for %s", type).contains(type.magic());
         }
@@ -61,8 +45,6 @@ class AuthorityVectorsTest {
         AccountId derived = AccountId.derive((byte) account.get("rootClass").asInt(),
                 HEX.parseHex(account.get("entropyHex").asText()));
 
-        // The 34 bytes at offset 6 of every envelope are exactly what AccountId.rawBytes() returns, so a
-        // client that builds them some other way builds records this server refuses.
         assertThat(derived.value()).isEqualTo(account.get("accountId").asText());
         assertThat(HEX.formatHex(derived.rawBytes())).isEqualTo(account.get("rawBytesHex").asText());
     }
@@ -96,8 +78,6 @@ class AuthorityVectorsTest {
             AuthorityRecord record = AuthorityRecordCodec.decode(canonical);
             byte[] preimage = AuthorityProofs.recordPreimage(record.type(), challenge, canonical);
 
-            // The one preimage rule, checked as bytes rather than as prose: magic, then the challenge, then
-            // the canonical bytes, in that order and nothing between them.
             assertThat(HEX.formatHex(sha256(preimage))).as("%s preimage", vector.get("name").asText())
                     .isEqualTo(vector.get("preimageSha256Hex").asText());
             assertThat(preimage).startsWith(record.type().magic().getBytes(StandardCharsets.US_ASCII));
@@ -119,8 +99,6 @@ class AuthorityVectorsTest {
             AuthorityRecord record = AuthorityRecordCodec.decode(HEX.parseHex(vector.get("canonicalHex").asText()));
             byte[] signature = Base64.getDecoder().decode(vector.get("signatureB64").asText());
 
-            // The whole reason the challenge is inside the signature rather than checked beside it: a captured
-            // record is not resubmittable, not precomputable elsewhere, and not transferable.
             assertThat(AuthorityProofs.verifyRecord(record, otherChallenge, signature))
                     .as("%s must not verify under another challenge", vector.get("name").asText())
                     .isFalse();

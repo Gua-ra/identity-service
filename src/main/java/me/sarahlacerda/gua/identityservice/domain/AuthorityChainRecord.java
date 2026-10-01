@@ -16,16 +16,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/**
- * One accepted record of an account's authority chain (ADM-009 decision 2).
- *
- * <p>The primary key is the account and the position together, so two records can never share a
- * {@code seq}. That is one half of decision 3's compare-and-set; the other half is the head row lock.
- *
- * <p>The account is held as {@code account} rather than under the name of the identifier it carries, and
- * only one file in this service resolves that identifier at all. See {@code AuthorityAccounts} and
- * {@code AccountIdNotReadGuardTest} for why.
- */
 @Getter
 @Setter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -34,15 +24,10 @@ import lombok.Setter;
 @Table(name = "account_authority_record")
 public class AuthorityChainRecord {
 
-    /** Where a record sits in its opposition window, or how it left one. */
     public enum State {
-        /** Inside its window. It already holds its seq, so an immediate record cannot starve it. */
         PENDING,
-        /** In the chain. */
         ACTIVE,
-        /** Opposed, or cancelled by a higher-rank record. */
         CANCELLED,
-        /** Its window passed without the chain being settled, which only a clock change produces. */
         EXPIRED
     }
 
@@ -104,7 +89,6 @@ public class AuthorityChainRecord {
         return row;
     }
 
-    /** Composite identity: the account and the position. */
     public static class Key implements Serializable {
 
         private String account;

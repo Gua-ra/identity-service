@@ -517,14 +517,11 @@ class AuthFactorPolicyGuardTest {
         assertThat(allowlisted).doesNotContain("requested +");
         assertThat(allowlisted).doesNotContain("requestedRedirectUri +");
 
-        // One place stamps a session, and it is fed by the resolver and by nothing else. That place is now
-        // shared with the authority step-up handoff, which is why the assertion names handoffSession rather
-        // than the enrollment entry point: the rule is the same one, and sharing it is what keeps it single.
+        // One place stamps a session, and it is fed by the resolver and by nothing else.
         String builder = methodBody(source, "private LoginSession handoffSession(");
         assertThat(builder).contains("String redirectUri = enrollRedirectUri(requestedRedirectUri);");
         assertThat(builder).contains("session.setRedirectUri(redirectUri);");
         assertThat(source.split("setRedirectUri\\(", -1)).hasSize(2);
-        // And the enrollment entry point reaches a session only through it.
         assertThat(methodBody(source, "private String startFactorEnrollment("))
                 .contains("handoffSession(userId, requestedRedirectUri)");
 

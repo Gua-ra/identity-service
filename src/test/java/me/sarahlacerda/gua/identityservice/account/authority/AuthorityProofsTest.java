@@ -11,14 +11,6 @@ import me.sarahlacerda.gua.identityservice.account.genesis.TestEd25519;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/**
- * The one preimage rule of ADM-009 decision 2, and the three properties it exists for.
- *
- * <p>Revision 2 of the record fixed this preimage for the adoption record alone and deleted the general rule,
- * which left the grant, the revocation and the recovery as unbound blobs. These tests are the general rule
- * stated as behaviour, so a future edit that reintroduces a per-type preimage fails here rather than in a
- * review.
- */
 class AuthorityProofsTest {
 
     private final TestEd25519.Pair device = TestEd25519.generate();
@@ -62,8 +54,6 @@ class AuthorityProofsTest {
         byte[] signature = TestEd25519.sign(device.privateKey(),
                 AuthorityProofs.recordPreimage(record.type(), challenge(), bytes));
 
-        // A record signed with no server input is a precomputable, transferable artifact. With the challenge
-        // inside the signature, a captured body is useless once the challenge is burned.
         assertThat(AuthorityProofs.verifyRecord(record, challenge(), signature)).isFalse();
     }
 
@@ -124,8 +114,6 @@ class AuthorityProofsTest {
 
         byte[] anotherAction = new byte[32];
         random.nextBytes(anotherAction);
-        // A malicious page reaches the pending approval and not the signature, and the signature names the
-        // action rather than the account.
         assertThat(AuthorityProofs.verifyApproval(device.rawPublicKey(), AuthorityRecords.REFERENCE, approvalId,
                 anotherAction, challenge, signature)).isFalse();
     }

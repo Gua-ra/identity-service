@@ -17,13 +17,7 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.FcmProperties;
 import me.sarahlacerda.gua.identityservice.domain.AuthorityNotificationRegistration.Platform;
 
-/**
- * Firebase Cloud Messaging v1, spoken directly, with the bearer from {@link AuthorityFcmBearer}.
- *
- * <p>The message is sent as a notification rather than as data, for the same reason the APNs alert is an
- * alert: the case this channel exists for is an account whose sessions a recovery has just ended, so the app
- * may not be running and nothing may be there to handle a data message.
- */
+/** Sent as a notification, not a data message, so it is shown when the app is not running. */
 @Component
 public class AuthorityFcmTransport implements AuthorityPushTransport {
 
@@ -78,11 +72,7 @@ public class AuthorityFcmTransport implements AuthorityPushTransport {
         }
     }
 
-    /**
-     * FCM v1 reports a dead destination as 404 {@code UNREGISTERED}, and a token that never belonged as 400
-     * {@code INVALID_ARGUMENT}. Only the first retires a row: the second is as likely to be this service
-     * having built a bad request as the install being gone.
-     */
+    /** Only 404 UNREGISTERED retires a registration; 400 INVALID_ARGUMENT may be a bad request of ours. */
     private static Outcome outcome(int status, String body) {
         if (status >= 200 && status < 300) {
             return Outcome.DELIVERED;
@@ -97,10 +87,6 @@ public class AuthorityFcmTransport implements AuthorityPushTransport {
     private static String payload(String token, String title, String body) {
         return "{\"message\":{\"token\":" + json(token)
                 + ",\"notification\":{\"title\":" + json(title) + ",\"body\":" + json(body) + "}"
-                // The marker is what lets a client tell this apart from a Matrix push and show it itself.
-                // Without it the alert is invisible in the one case it matters most: FCM hands a message to
-                // a foregrounded app instead of the tray, and the app's own handler discards anything that
-                // is not a room notification.
                 + ",\"data\":{\"" + AuthorityPushTransport.ALERT_MARKER + "\":\"1\""
                 + ",\"title\":" + json(title) + ",\"body\":" + json(body) + "}"
                 + ",\"android\":{\"priority\":\"HIGH\"}}}";

@@ -21,11 +21,6 @@ import me.sarahlacerda.gua.identityservice.service.security.AuthFactor;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
-/**
- * The challenge is the freshness of every record in the chain, so these are its properties stated as behaviour:
- * 32 bytes, minted once, bound to the account, the session and the purpose, single use, and burned on refusal as
- * well as on acceptance.
- */
 class AuthorityChallengeServiceTest {
 
     private static final String ACCOUNT = "ga1aea6aqb5opmzmutench3ggzepkhgwmkajb3epqqrhckkf7bcbcwl2cy";
@@ -51,7 +46,6 @@ class AuthorityChallengeServiceTest {
 
         assertThat(java.util.Base64.getUrlDecoder().decode(minted.challenge())).hasSize(32);
         assertThat(minted.expiresAt()).isEqualTo(now.plus(Duration.ofMinutes(15)));
-        // Never the value itself. A dump of this table hands nobody a challenge to sign.
         assertThat(repository.rows).hasSize(1);
         assertThat(repository.rows.get(0).getChallengeHash()).isNotEqualTo(minted.challenge());
         assertThat(repository.rows.get(0).getChallengeHash()).hasSize(64);
@@ -67,7 +61,6 @@ class AuthorityChallengeServiceTest {
                 minted.challenge(), now);
 
         assertThat(spent.challenge()).hasSize(32);
-        // The factor travels with the challenge, so the hold is weighed on the credential actually presented.
         assertThat(spent.factor()).isEqualTo(AuthFactor.PASSKEY);
         assertThat(spent.factorCreatedAt()).isEqualTo(credentialAge);
     }
@@ -87,7 +80,6 @@ class AuthorityChallengeServiceTest {
 
         assertThat(refusalFrom(() -> challenges.spend(ACCOUNT, "1".repeat(64), Purpose.ADOPT, minted.challenge(),
                 now))).isEqualTo("authority_challenge_invalid");
-        // Burned on refusal, so a captured request body is useless even to the session that was entitled to it.
         assertThat(refusalFrom(() -> challenges.spend(ACCOUNT, SESSION, Purpose.ADOPT, minted.challenge(), now)))
                 .isEqualTo("authority_challenge_invalid");
     }
@@ -96,7 +88,6 @@ class AuthorityChallengeServiceTest {
     void aChallengeMintedForAnotherPurposeIsRefusedAndBurned() {
         AuthorityChallengeService.Minted minted = mint(Purpose.ADOPT);
 
-        // A step-up taken for one transition does not carry over to another.
         assertThat(refusalFrom(() -> challenges.spend(ACCOUNT, SESSION, Purpose.RECOVER, minted.challenge(), now)))
                 .isEqualTo("authority_challenge_invalid");
         assertThat(repository.rows.get(0).getSpentAt()).isEqualTo(now);
@@ -146,8 +137,6 @@ class AuthorityChallengeServiceTest {
 
         mint(Purpose.GRANT);
 
-        // Nothing in this application enables scheduling, and an expired challenge is already refused when it
-        // is spent, so this only stops them piling up.
         assertThat(repository.deletions).isEqualTo(1);
         assertThat(repository.rows).hasSize(1);
     }
@@ -163,10 +152,6 @@ class AuthorityChallengeServiceTest {
         return refusal.getCode();
     }
 
-    /**
-     * A repository that behaves, rather than a mock that agrees. The properties under test are about what is
-     * stored and what a second lookup finds, so a stub returning canned answers would prove nothing.
-     */
     private static final class InMemoryChallenges
             implements me.sarahlacerda.gua.identityservice.repository.AuthorityChallengeRepository {
 
@@ -212,7 +197,6 @@ class AuthorityChallengeServiceTest {
             return entity;
         }
 
-        // Nothing below is reached by this service, and a call to any of it would be a change worth noticing.
         @Override
         public <S extends AuthorityChallenge> List<S> saveAll(Iterable<S> entities) {
             throw new UnsupportedOperationException();

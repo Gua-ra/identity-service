@@ -131,12 +131,8 @@ public class LoginFlowController {
             Phase.PIN_SETUP, Phase.PASSKEY_SETUP, Phase.ENROLL_STEP_UP, Phase.AUTHORITY_STEP_UP);
 
     /**
-     * The two steps that were minted from the caller's own bearer token, and so the only two that may say
-     * whether the account holds a PIN.
-     *
-     * <p>Both are opened by a signed-in app for its own account, and {@code GET /security/pin/status} already
-     * tells that same caller {@code hasPin}, so the field says nothing they cannot already read. At every
-     * sign-in step it would be a new disclosure about a number somebody typed.
+     * Only bearer-minted steps may report whether the account holds a PIN. At a sign-in step it would
+     * disclose that to anyone who typed the number.
      */
     private static final Set<Phase> PIN_REPORT_PHASES = EnumSet.of(Phase.ENROLL_STEP_UP, Phase.AUTHORITY_STEP_UP);
 
@@ -751,14 +747,7 @@ public class LoginFlowController {
         return acceptEnrollStepUp(sessionId, session, AuthFactor.PHONE_OTP);
     }
 
-    // --- The authority step-up: confirming one authority transition, on a page that can run the ceremony ---
-    //
-    // Same shape as the enrollment step-up above, and deliberately not the same session. The proof here is not
-    // spent on storing a factor: it is recorded against the account, the access token that asked for the sheet
-    // and the one transition it names, and POST /account/authority/challenge spends it once.
-    //
-    // There are two arms and there is no third. No code is sent to the account's number at this step, in any
-    // combination, by ADM-009 decision 9, and a guard test fails the build if an arm that sends one appears.
+    // --- The authority step-up: confirming one authority transition ---
 
     @PostMapping("/authority/stepup/passkey/options")
     @Operation(summary = "Start the authority step-up with a passkey", description = "Begins a user-verifying WebAuthn assertion for a session at AUTHORITY_STEP_UP. The preferred proof, and the reason this page exists: the assertion cannot be produced natively on every platform, and an account that holds only a passkey must never be told to add a PIN to gain authority. The ceremony is pinned to the session's account and lives in the step-up namespace, so it can neither complete a sign-in nor be answered by another account's credential.")
@@ -785,8 +774,6 @@ public class LoginFlowController {
 
         PasskeyService.PasskeyAuthentication auth =
                 passkeyService.finishStepUpAssertion(sessionId, request.credential());
-        // The ceremony was pinned to this account, so a credential from another one cannot have answered it;
-        // checked anyway, because this is the proof an authority transition is about to stand on.
         if (!session.getUserId().equals(auth.userId())) {
             throw new LoginFlowException(HttpStatus.FORBIDDEN, "passkey_user_mismatch",
                     "This passkey belongs to a different account.");
@@ -929,17 +916,6 @@ public class LoginFlowController {
                 .body(state(session, session.getRedirectUri()));
     }
 
-    /**
-     * Terminal step for the authority step-up sheet (ADM-009 decision 4 step 2).
-     *
-     * <p>The same handoff as {@link #completeEnrollment}: no OIDC authorization is in flight, so no code is
-     * issued, the session is finalized, the cookie is cleared, and the web view is handed the app-scheme
-     * redirect it was opened against so the sheet closes and the app is back in control.
-     *
-     * <p>What differs is what has already happened by the time this runs: the proof was recorded against the
-     * account rather than spent on storing a factor, so the app's next call is for the authority challenge and
-     * this session is finished with.
-     */
     private ResponseEntity<LoginStateResponse> completeAuthorityStepUp(String sessionId, LoginSession session) {
         session.setPhase(Phase.COMPLETED);
         loginSessionService.delete(sessionId);
@@ -949,7 +925,6 @@ public class LoginFlowController {
                 .body(state(session, session.getRedirectUri()));
     }
 
-    /** The login cookie, expired. One builder, so the two handoffs cannot clear it differently. */
     private ResponseCookie clearedLoginCookie() {
         return ResponseCookie.from(properties.getCookieName(), "")
                 .httpOnly(true)
@@ -1067,10 +1042,8 @@ public class LoginFlowController {
             throw new LoginFlowException(HttpStatus.CONFLICT, "enroll_session_cannot_sign_in",
                     "This session is for adding a passkey, not for signing in.");
         }
-        // The authority step-up sheet is the same hazard with a different purpose: it carries no OIDC request
-        // either, and what it proves is meant for one transition rather than for a login. Its phase already
-        // keeps it out of the assertion steps; this is here so that widening a phase set later cannot quietly
-        // turn a confirmation into a sign-in.
+        // Kept although the phase already excludes this session, so widening a phase set cannot turn a
+        // confirmation into a sign-in.
         if (StringUtils.hasText(session.getAuthorityPurpose())) {
             throw new LoginFlowException(HttpStatus.CONFLICT, "enroll_session_cannot_sign_in",
                     "This session is for confirming a change to your devices, not for signing in.");
@@ -1129,14 +1102,6 @@ public class LoginFlowController {
         return ResponseEntity.ok(state(session, null));
     }
 
-    /**
-     * The gate on every authority step-up endpoint: a session minted for one authority transition, sitting at
-     * the step where it has yet to prove anything, with its account resolved and the feature switched on.
-     *
-     * <p>The flag is re-asked here and not only where the sheet was minted. A deployment can be switched off
-     * between the two, and a page that went on accepting proofs for a feature nobody is running would be
-     * recording rows the chain will never read.
-     */
     private void requireAuthorityStepUp(LoginSession session) {
         requirePhase(session, Phase.AUTHORITY_STEP_UP);
         if (!StringUtils.hasText(session.getAuthorityPurpose())) {
@@ -1150,15 +1115,7 @@ public class LoginFlowController {
         authorityWebStepUps.requireOpen(session.getAuthorityPurpose());
     }
 
-    /**
-     * Records what this page proved and hands the sheet back to the app.
-     *
-     * <p>Two things this does not do, and both are the point. It does not set
-     * {@code authenticatedFactor}, so the session cannot finish a sign-in. And it does not store a factor,
-     * offer a setup step or touch the account: the only trace it leaves is a step-up bound to this account,
-     * this access token and this one transition, which the authority challenge endpoint spends once and which
-     * expires with the challenge whether or not anybody spends it.
-     */
+    /** Must not set {@code authenticatedFactor}: this session may never complete a sign-in. */
     private ResponseEntity<LoginStateResponse> acceptAuthorityStepUp(String sessionId, LoginSession session,
             AuthFactor provedWith, java.time.Instant factorCreatedAt) {
         authorityWebStepUps.proved(session.getUserId(), session.getAuthoritySessionHash(),
@@ -1241,14 +1198,6 @@ public class LoginFlowController {
                 recovery);
     }
 
-    /**
-     * Which authority transition this session was opened to confirm, published at
-     * {@code AUTHORITY_STEP_UP} and nowhere else.
-     *
-     * <p>The page needs it to say what the person is about to authorize instead of a generic confirmation:
-     * rooting this account, adding a device, removing one, or replacing the set. Off every other step because
-     * no other step has one, and it is the session's own value rather than anything read from the account.
-     */
     private String publishableAuthorityPurpose(LoginSession session) {
         return session.getPhase() == Phase.AUTHORITY_STEP_UP ? session.getAuthorityPurpose() : null;
     }
@@ -1414,12 +1363,6 @@ public class LoginFlowController {
              * than a sign-in, so the UI can tell the two apart after a reload.
              */
             boolean enrollment,
-            /**
-             * Which authority transition this session was opened to confirm: {@code ADOPT}, {@code GRANT},
-             * {@code REVOKE} or {@code RECOVER}. Present at {@code AUTHORITY_STEP_UP} and nowhere else, so the
-             * page can name the transition it is asking about rather than confirm something in general. Null,
-             * and omitted from the JSON, at every other step.
-             */
             String authorityPurpose,
             /**
              * The delayed account recovery state for this account. Null whenever recovery is not

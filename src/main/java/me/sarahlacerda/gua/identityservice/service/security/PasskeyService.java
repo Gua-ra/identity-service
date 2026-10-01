@@ -88,29 +88,13 @@ public class PasskeyService implements CredentialRepository {
         return credentials.size();
     }
 
-    /**
-     * Removes one credential of the account, and reports whether it was there.
-     *
-     * <p>ADM-009 gate 5 calls this a prerequisite rather than a nice-to-have, and the reason is the fresh-factor
-     * hold. Until now the only way to remove a credential was {@link #removeAllForUser(String)}, so an owner
-     * locking a thief out of a stolen device had to wipe every credential and then register a new one, which put
-     * their own remaining factor inside the hold and cost them a week on anything the hold gates. Removing the
-     * one credential that is gone leaves the others established.
-     *
-     * <p>The last remaining factor is refused. An account that holds nothing has to set a factor up before a
-     * sign-in completes, so wiping the last one here would turn a tidy-up into a state the account holder did
-     * not ask for; the way to be rid of every credential is still the recovery that assumes they are lost.
-     *
-     * @return whether a credential of this account with that id existed
-     * @throws LoginFlowException 409 {@code factor_required} when it is the account's last factor
-     */
+    /** Refuses to remove the account's last remaining factor. */
     @Transactional
     public boolean removeCredential(String userId, String credentialId, boolean accountHoldsAnotherFactor) {
         Optional<PasskeyCredential> credential = repository.findByCredentialId(credentialId)
                 .filter(row -> row.getUserId().equals(userId));
         if (credential.isEmpty()) {
-            // Same answer for another account's credential and for one that does not exist, so this cannot be
-            // used to ask whose a credential is.
+            // Same answer for another account's credential and for a missing one.
             return false;
         }
         if (!accountHoldsAnotherFactor && repository.findByUserId(userId).size() <= 1) {

@@ -19,18 +19,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * One install of the account holder's app that can be warned about a pending authority transition
- * (ADM-009 gate 2).
- *
- * <p>Keyed on an installation id the client keeps in its keychain or keystore, not on a session and not on
- * a Matrix device id. That is the whole property: a Matrix pusher lives under a session, and completing an
- * account recovery ends every session of the user in the same transaction that mints the attacker's PIN, so
- * a channel that dies with the sessions is empty at exactly the moment a window needs it.
- *
- * <p>Nothing in the recovery path can reach this row. {@code AccountRecoveryService.complete} writes
- * {@code identity_users} and {@code passkey_credentials}, and the session sign-out runs in another service
- * against another database. The survival is therefore a structural fact rather than a policy somebody could
- * be talked out of, and it is what {@code AuthorityNotificationSurvivesRecoveryTest} asserts.
+ * Keyed on an installation id rather than a session, so the row survives the session revocation an
+ * account recovery performs.
  */
 @Getter
 @Setter
@@ -39,7 +29,6 @@ import lombok.Setter;
 @Table(name = "security_notification_device")
 public class AuthorityNotificationRegistration {
 
-    /** Which transport addresses this install. */
     public enum Platform {
         APNS, FCM
     }
@@ -102,13 +91,6 @@ public class AuthorityNotificationRegistration {
         return registration;
     }
 
-    /**
-     * Whether this install still counts as a channel.
-     *
-     * <p>A registration the transport has repeatedly reported unregistered, or one nothing has been heard
-     * from for longer than the configured life, is not a channel. Gate 2 is a claim that the holder will be
-     * told, so a destination that provably cannot be reached must not keep the claim alive.
-     */
     public boolean isLive(Instant now, java.time.Duration life, int failureLimit) {
         return consecutiveFailures < failureLimit && lastSeenAt.plus(life).isAfter(now);
     }

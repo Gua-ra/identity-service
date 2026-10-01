@@ -5,17 +5,7 @@ import jakarta.validation.constraints.NotBlank;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
-/**
- * One signed authority record, with the challenge it signed.
- *
- * <p>The challenge travels back because only its SHA-256 is stored: the server cannot rebuild the preimage
- * without it, and storing the value itself would mean a database dump handed an attacker something to sign.
- * That is a deliberate trade against the wire sketch, which left the field out. It costs the client nothing,
- * since it already holds the bytes it signed, and it keeps the challenge table worthless to anyone who reads
- * it.
- *
- * <p>There is no OTP field, on this or any other request in this feature.
- */
+/** The client returns the challenge because the server stores only its hash. */
 @Schema(description = "A signed authority record and the challenge inside its signature")
 public class AuthorityRecordSubmission {
 

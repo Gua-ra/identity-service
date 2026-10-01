@@ -11,18 +11,6 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Getter;
 import lombok.Setter;
 
-/**
- * What a removal presents (ADM-009 gate 2).
- *
- * <p>Which tier the caller reaches is decided by what they can produce and never by a field they set, so
- * there is no field here for the caller to name itself with. Every removal needs a factor past the
- * fresh-factor hold, plus a device signature where the row carries a key. There is no cheaper tier, no admin
- * path and no bulk delete.
- *
- * <p>{@code callerInstallationId} is deliberately absent. It used to make a removal free whenever it equalled
- * {@code installationId}, which is one caller's value authenticating another of the same caller's values, over
- * an id the account's own listing hands to any bearer.
- */
 @Getter
 @Setter
 @Schema(description = "A request to remove one security-notification registration")

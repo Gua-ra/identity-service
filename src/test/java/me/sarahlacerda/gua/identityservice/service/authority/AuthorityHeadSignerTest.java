@@ -21,11 +21,6 @@ import me.sarahlacerda.gua.identityservice.service.placement.RosterMembershipKey
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/**
- * The signer: it produces bytes that verify under the homeserver's own roster membership key, which is the
- * same key a generation-1 placement record is signed with and the same key the resolver looks up in that
- * homeserver's ACTIVE roster entry.
- */
 class AuthorityHeadSignerTest {
 
     private static final String FEDERATION_ID = "hs-alpha";
@@ -93,8 +88,6 @@ class AuthorityHeadSignerTest {
         AuthorityHeadSigner.SignedHead signed =
                 signer(publishing()).sign(reference, HEAD_HASH.toUpperCase(java.util.Locale.ROOT), 1L, now);
 
-        // The head row holds lowercase hex, but the state response and the clients compare case-insensitively,
-        // so an uppercase value must produce the same bytes rather than a different spelling of them.
         byte[] canonical = Base64.getUrlDecoder().decode(signed.recordB64());
         assertThat(AuthorityHeadRecordCodec.decode(canonical).headHash())
                 .isEqualTo(HexFormat.of().parseHex(HEAD_HASH));
@@ -143,8 +136,6 @@ class AuthorityHeadSignerTest {
 
         AuthorityHeadSigner signer = signer(properties);
 
-        // Naming a homeserver this deployment holds no key for is a deployment error, which the startup check
-        // refuses outright. The signer refuses rather than signing under whatever key it does hold.
         assertThat(signer.canSign()).isFalse();
         assertThatThrownBy(() -> signer.sign(reference, HEAD_HASH, 1L, now))
                 .isInstanceOf(IllegalStateException.class);

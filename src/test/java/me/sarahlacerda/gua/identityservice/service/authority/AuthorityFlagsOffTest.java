@@ -25,15 +25,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.Mockito.verifyNoInteractions;
 
-/**
- * The feature ships disabled, and "disabled" means nothing at all happens.
- *
- * <p>Not just that the endpoints answer 503. The flag is checked before the account is resolved, before a
- * challenge is minted and before any repository is touched, so a deployment that has not turned it on cannot
- * have an authority row, cannot have a challenge row, and cannot have taken a lock on anything. That is the
- * property "nothing existing changes behaviour" rests on: there is no path from an existing flow into this
- * feature, and with the flag off there is no path into it at all.
- */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 class AuthorityFlagsOffTest {
@@ -80,7 +71,6 @@ class AuthorityFlagsOffTest {
     @BeforeEach
     void setUp() {
         properties = new IdentityServiceProperties();
-        // The default, spelled out: every flag under identity.authority is off unless a deployment sets it.
         assertThat(properties.getAuthority().isEnabled()).isFalse();
         AuthorityPolicy policy = new AuthorityPolicy(properties, userSecurityService);
         service = new AccountAuthorityService(policy, accounts, challenges, stepUps, headRepository,
@@ -144,15 +134,11 @@ class AuthorityFlagsOffTest {
                 .isEqualTo("authority_disabled");
         assertThat(refusalFrom(() -> service.candidates("@a:gua"))).isEqualTo("authority_disabled");
 
-        // Refused before the account is resolved, so a deployment with the flag off cannot hold a candidate
-        // key any more than it can hold a chain row.
         verifyNoInteractions(accounts, candidateRepository);
     }
 
     @Test
     void readingTheChainIsRefusedSoNoAccountIdEverLeavesThisDeployment() {
-        // The read endpoint is the only one in the service that returns the account's permanent id, and with
-        // the flag off it does not.
         assertThat(refusalFrom(() -> service.state("@a:gua"))).isEqualTo("authority_disabled");
 
         verifyNoInteractions(accounts, headRepository, deviceRepository);

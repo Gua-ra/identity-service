@@ -5,13 +5,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
-/**
- * One registration, as its own account holder is allowed to see it.
- *
- * <p>The token is never here, in either direction. The fingerprint column exists precisely so a registration
- * can be named in a listing, a log line or a support conversation without the destination itself being handed
- * back out.
- */
+/** Never exposes the push token, only its fingerprint. */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @Schema(description = "A security-notification registration, without its destination")
 public record SecurityNotificationView(

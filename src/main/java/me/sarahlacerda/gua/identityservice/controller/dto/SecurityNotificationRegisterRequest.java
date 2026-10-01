@@ -9,14 +9,6 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Getter;
 import lombok.Setter;
 
-/**
- * What an install registers as a security-notification destination (ADM-009 gate 2).
- *
- * <p>The installation id is the field that matters. It is client-generated, held in the keychain or keystore
- * rather than in preferences, and stable across sign-out and re-login, which is what lets the row outlive the
- * sessions an account recovery ends. The nearest existing thing, the pusher profile tag, lives in user
- * defaults and dies with the app data, so it could not carry this.
- */
 @Getter
 @Setter
 @Schema(description = "One install's security-notification destination")

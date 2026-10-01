@@ -311,34 +311,17 @@ public class SecurityController {
             @RequestBody @Valid AuthorityStepUpStartRequest request,
             @Parameter(hidden = true) HttpServletRequest servletRequest) {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
-        // The flag, the native-session rule and the purpose, all before any account state is read: whether
-        // this caller may open a sheet at all is a fact about the request.
         authorityWebStepUps.requireMayOpen(authenticatedUserAccessor.currentClientId(), request.getPurpose());
         requireAFactorTheSheetCanRun(userId);
 
         LoginSession session = handoffSession(userId, request.getRedirectUri());
         session.setPhase(Phase.AUTHORITY_STEP_UP);
         session.setAuthorityPurpose(request.getPurpose().name());
-        // Bound to the token that asked, so the proof is not spendable by another session of this account.
         session.setAuthoritySessionHash(
                 AuthorityWebStepUpService.sessionHash(servletRequest.getHeader("Authorization")));
         return ResponseEntity.ok(new AuthorityStepUpStartResponse(openHandoff(session)));
     }
 
-    /**
-     * Refuses to open an authority step-up whose page would have nothing to ask for.
-     *
-     * <p>Two proofs reach that page and there is no third: a passkey assertion, and the account PIN. An
-     * account that holds neither cannot confirm an authority transition at all, which is ADM-009 decision 4's
-     * own answer rather than a gap here: adoption needs a step-up, so nobody can root that account either,
-     * and decision 9 forbids the code that would otherwise stand in. Saying so at the entry point is the
-     * honest answer, where opening the sheet would put a person in front of a page whose every button is
-     * already refused.
-     *
-     * <p>Deliberately not the enrollment precheck. That one counts an account holding no factor as provable,
-     * because enrollment may confirm it with its own number and a code sent to it. No authority step reads a
-     * code, so that branch does not exist here.
-     */
     private void requireAFactorTheSheetCanRun(String userId) {
         if (!authFactorPolicy.passkeyRegistered(userId) && !authFactorPolicy.pinRegistered(userId)) {
             throw new LoginFlowException(HttpStatus.CONFLICT, "authority_step_up_unavailable",
@@ -387,24 +370,13 @@ public class SecurityController {
         return openHandoff(session);
     }
 
-    /**
-     * The session both handoffs share: pinned to the authenticated subject, carrying no OIDC request, and
-     * addressed at one app scheme this deployment allows.
-     *
-     * <p>Extracted rather than copied because the two callers differ in three lines and agree on everything
-     * that matters: which subject, which redirects are allowed, and that neither may ever issue an
-     * authorization code. A second copy of this is a second place for the allowlist to be forgotten.
-     *
-     * <p>The caller sets the phase, because the phase is the whole of what the two are for.
-     */
     private LoginSession handoffSession(String userId, String requestedRedirectUri) {
         // Resolved first, before any account state is read: whether a redirect is one this
         // deployment allows is a fact about the request alone, so a refused one stops here
         // rather than being carried on an object that is about to be filled in.
         String redirectUri = enrollRedirectUri(requestedRedirectUri);
 
-        // Same localpart source as login (ADM-001 S6). Neither of these sessions issues
-        // an authorization code, but neither may carry a value login would refuse.
+        // Same localpart source as login: these sessions must not carry a value login would refuse.
         List<DirectoryEntry> entries = directoryService.findByUserId(userId);
         String preferredUsername = accountLocalparts.forExistingAccount(userId, entries);
 
@@ -423,7 +395,6 @@ public class SecurityController {
         return session;
     }
 
-    /** Stores the session and returns the one-time URL that opens it in a web view. */
     private String openHandoff(LoginSession session) {
         String sessionId = loginSessionService.create(session);
         String enrollToken = loginSessionService.createEnrollToken(sessionId,

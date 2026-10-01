@@ -29,14 +29,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/**
- * The approval a browser session starts, and the one thing it may not choose about it.
- *
- * <p>The device shows the reader what the action is, from the action id, and signs over the action digest. Two
- * caller-chosen values related the sentence and the signed bytes by nothing at all, so the digest is derived
- * here from the named action. Nothing can spend such a signature today, which is exactly why this is the
- * cheapest moment to hold the invariant.
- */
 class AuthorityApprovalServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-09-23T12:00:00Z");
@@ -83,8 +75,6 @@ class AuthorityApprovalServiceTest {
 
     @Test
     void anApprovalWithNoActionIsRefusedRatherThanCarryingADigestOfNothing() {
-        // The device's sentence comes from the action id. An approval with none has nothing to describe, and a
-        // digest beside it would be a signature over bytes with no stated meaning.
         for (String action : new String[] { null, "", "   " }) {
             AuthorityTransitionException refusal = catchThrowableOfType(
                     () -> approvals.start(account, action, NOW), AuthorityTransitionException.class);

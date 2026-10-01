@@ -45,21 +45,7 @@ import me.sarahlacerda.gua.identityservice.service.authority.AuthorityApprovalSe
 import me.sarahlacerda.gua.identityservice.service.authority.AuthorityChallengeService;
 import me.sarahlacerda.gua.identityservice.service.authority.AuthorityPolicy;
 
-/**
- * The account authority chain: adoption, the device lifecycle, and the approval a browser session cannot
- * grant itself (ADM-009).
- *
- * <p>Every endpoint is bearer-gated and every one of them answers 503 {@code authority_disabled} while
- * {@code identity.authority.enabled} is false, which is how the whole feature ships. Nothing here is reachable
- * from the login flow, from an enrollment session, or from any path that existed before it.
- *
- * <p>Four of them additionally require a native session, because the authority key lives in the platform
- * keychain or keystore and the browser holds no authority, ever (ADM-009 decision 6). The approval pair is the
- * one place a web session appears, and there it starts an object an authority device must sign.
- *
- * <p><b>There is no OTP anywhere in this controller</b>, in any combination, at any step (ADM-009 decision 9).
- * A guard test fails the build if it ever references the OTP services.
- */
+/** Must never reference the OTP services: a phone code is not an authority factor (AccountAuthorityGuardTest). */
 @RestController
 @RequestMapping("/account/authority")
 @Validated
@@ -411,13 +397,7 @@ public class AccountAuthorityController {
                 submitted.recordHash()));
     }
 
-    /**
-     * Binds a challenge to the exact access token that asked for it.
-     *
-     * <p>Hashed, so nothing holds the token, and taken from the header rather than from anything the caller
-     * sends beside it. A challenge minted for one session is therefore not spendable by another session of the
-     * same account, which is what "held against that account and that stepped-up session" means.
-     */
+    /** Binds a challenge to the access token that requested it, so another session cannot spend it. */
     private static String sessionHash(HttpServletRequest request) {
         String header = request.getHeader("Authorization");
         return AuthorityChallengeService.sessionHash(header == null ? "" : header);

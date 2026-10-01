@@ -21,21 +21,8 @@ import me.sarahlacerda.gua.identityservice.repository.AuthorityDeviceRepository;
 import me.sarahlacerda.gua.identityservice.service.authority.AuthorityAccounts.Resolved;
 
 /**
- * Authority-sensitive actions reached from a browser (ADM-009 decision 6).
- *
- * <p>A browser login grants account access. It never enters the device set, and no browser-held material may
- * sign an authority record. This is a rule, not a default: there is no flag that lets a web session sign one.
- *
- * <p>What a web session may do instead is create a pending approval carrying the account, the action digest
- * and a 32-byte server challenge. The browser displays a four-character code from an alphabet with no
- * look-alike characters; an active authority device fetches the approval, shows the same code and the action
- * in the reader's own words, and signs it. The browser never learns a key and never proxies one.
- *
- * <p>A malicious page can therefore start an approval the user never wanted, which is exactly what the code
- * and the device-side description defend: the approval names the action on a screen the page does not control.
- *
- * <p>Held in Redis rather than in a table, like every other short-lived single-use ceremony here. An approval
- * expires in ten minutes, is single use, and its challenge is burned on refusal as well as on acceptance.
+ * A browser session can only start an approval; an active authority device must sign it. Approvals live
+ * in Redis and are single use.
  */
 @Service
 public class AuthorityApprovalService {
@@ -43,10 +30,6 @@ public class AuthorityApprovalService {
     private static final String KEY_PREFIX = "authority:approval:";
     private static final String INDEX_PREFIX = "authority:approval:account:";
 
-    /**
-     * No look-alike characters, so a reader comparing two screens is never asked to tell {@code O} from
-     * {@code 0} or {@code I} from {@code 1}. The code is the whole of what binds the two screens together.
-     */
     private static final char[] CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ2346789".toCharArray();
 
     private static final int CODE_LENGTH = 4;
@@ -64,18 +47,8 @@ public class AuthorityApprovalService {
     }
 
     /**
-     * Starts an approval from the session that wants the action, browser or not.
-     *
-     * <p>At most three live per account, and a code unique among them, because the code is what a reader
-     * compares: two live approvals showing the same four characters would make the comparison meaningless.
-     *
-     * <p><b>The digest is derived here, from the action, and never taken from the caller.</b> The device
-     * describes the action to the reader from the action id and signs over the digest, so two independent
-     * caller-chosen values meant the sentence on the screen and the bytes in the signature were related by
-     * nothing at all. Today nothing can spend such a signature, because {@link #sign} verifies and stores
-     * nothing; the first consumer of one would inherit a signature over bytes a malicious page chose while
-     * the device showed a sentence that page also chose, which is a takeover at that point. The invariant is
-     * cheaper to hold now than to add later.
+     * The action digest is derived here and never taken from the caller, so the text shown and the bytes
+     * signed cannot differ.
      */
     public Started start(Resolved account, String actionId, Instant now) {
         policy.requireEnabled();
@@ -111,7 +84,6 @@ public class AuthorityApprovalService {
         return new Started(approvalId, code, encode(challenge), expiresAt);
     }
 
-    /** The live approvals for the account, at most three, for an authority device to show and sign. */
     public List<Approval> live(Resolved account, Instant now) {
         Set<String> ids = redisTemplate.opsForSet().members(INDEX_PREFIX + account.reference());
         List<Approval> approvals = new ArrayList<>();
@@ -125,12 +97,7 @@ public class AuthorityApprovalService {
         return approvals;
     }
 
-    /**
-     * Accepts one device's signature over exactly this approval, and burns it.
-     *
-     * <p>Burned before the signature is weighed, so a refusal consumes the approval too: an approval is
-     * single use, and a caller that may retry it is a caller that may grind the four-character code.
-     */
+    /** Burns the approval before checking the signature, so a refused attempt cannot be retried. */
     public void sign(Resolved account, String approvalId, String signatureB64, Instant now) {
         policy.requireEnabled();
         Approval approval = read(approvalId)
@@ -143,8 +110,6 @@ public class AuthorityApprovalService {
         boolean verified = false;
         for (AuthorityDevice device : deviceRepository.findByAccount(account.reference())) {
             if (!device.isUnquarantinedActive(now) || device.getState() == AuthorityDevice.State.REVOKED) {
-                // A quarantined device may not sign an authority-sensitive approval, and a revoked one is not
-                // this account's authority at all.
                 continue;
             }
             if (AuthorityProofs.verifyApproval(decodeKey(device.getDeviceKeyB64()), account.bytes(),
@@ -194,13 +159,6 @@ public class AuthorityApprovalService {
         throw new IllegalStateException("could not mint a distinct approval code");
     }
 
-    /**
-     * The canonical digest of an action: SHA-256 over the action id's UTF-8 bytes.
-     *
-     * <p>One derivation, on the server, so the sentence the device shows and the bytes it signs are the same
-     * action by construction rather than by two callers agreeing. A device that wants to check it recomputes
-     * it from the action id it was given.
-     */
     static byte[] digestOf(String actionId) {
         try {
             return java.security.MessageDigest.getInstance("SHA-256")
@@ -211,8 +169,7 @@ public class AuthorityApprovalService {
     }
 
     private static AuthorityTransitionException refused() {
-        // One refusal for an unknown id, an expired one, another account's, and a signature that does not
-        // verify, so a caller learns nothing from the difference.
+        // One refusal for every failure, so the caller cannot tell them apart.
         return new AuthorityTransitionException(HttpStatus.FORBIDDEN, "authority_approval_invalid",
                 "That request could not be approved.");
     }
@@ -239,16 +196,10 @@ public class AuthorityApprovalService {
         return Base64.getUrlDecoder().decode(deviceKeyB64);
     }
 
-    /**
-     * A live approval, as a device sees it.
-     *
-     * @param code the four characters the browser is also showing
-     */
     public record Approval(String account, String id, String code, String action, String actionDigest,
             String challenge, Instant expiresAt) {
     }
 
-    /** What the browser session is handed. */
     public record Started(String approvalId, String code, String challenge, Instant expiresAt) {
     }
 }

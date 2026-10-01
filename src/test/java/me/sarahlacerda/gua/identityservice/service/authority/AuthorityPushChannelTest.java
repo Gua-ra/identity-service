@@ -32,15 +32,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/**
- * What makes the channel a channel, and what makes it honestly not one.
- *
- * <p>The gate-2 question is answered by {@code isOutOfBand()}, and answering it wrongly is the failure that
- * matters most here: a deployment that believes it has a channel runs every window in ADM-009 without telling
- * anybody. So the two ways it can be false are pinned, the APNs provider token's caching is pinned because
- * Apple refuses one older than an hour, and the two status codes that mean "this destination is gone" are
- * pinned because a token nobody retires keeps counting as a channel forever.
- */
 class AuthorityPushChannelTest {
 
     private static final Instant T0 = Instant.parse("2026-09-23T10:00:00Z");
@@ -59,12 +50,8 @@ class AuthorityPushChannelTest {
         registry = mock(AuthorityNotificationRegistry.class);
     }
 
-    // --- Gate 2's own question -----------------------------------------------
-
     @Test
     void aDeploymentWithTheChannelSwitchedOffHasNoChannel() {
-        // The default. identity.authority.notifications.enabled is a decision separate from the chain's own
-        // switch, because turning it on means this service starts holding two push credentials.
         assertThat(properties.getAuthority().getNotifications().isEnabled()).isFalse();
 
         AuthorityPushNotifier notifier = new AuthorityPushNotifier(registry,
@@ -78,8 +65,6 @@ class AuthorityPushChannelTest {
     void theChannelSwitchedOnWithNoConfiguredTransportIsStillNotAChannel() {
         properties.getAuthority().getNotifications().setEnabled(true);
 
-        // A bean that could not send anything is not a channel however it is wired, so the startup gate keeps
-        // refusing a deployment that turned the chain on without a credential.
         AuthorityPushNotifier notifier = new AuthorityPushNotifier(registry,
                 List.of(new StubTransport(Platform.APNS, false)), policy, clock);
 
@@ -94,7 +79,6 @@ class AuthorityPushChannelTest {
         AuthorityPushNotifier notifier = new AuthorityPushNotifier(registry,
                 List.of(new StubTransport(Platform.APNS, true)), policy, clock);
 
-        // The half a startup check cannot answer: gate 2 is a promise to one account holder.
         assertThat(notifier.isOutOfBand()).isTrue();
         assertThat(notifier.reachesOutOfBand("@sarah:gua.global")).isFalse();
     }
@@ -112,7 +96,6 @@ class AuthorityPushChannelTest {
         assertThat(transport.sent).hasSize(1);
         StubTransport.Sent sent = transport.sent.getFirst();
         assertThat(sent.body()).contains("iPhone").contains("26 Sep 10:00 UTC");
-        // The three things a notification may carry, and no fourth: no account id, no phone number, no room.
         assertThat(sent.body()).doesNotContain("@sarah:gua.global").doesNotContain("gua.global");
     }
 
@@ -145,8 +128,6 @@ class AuthorityPushChannelTest {
         verify(registry, never()).recordOutcome(any(), any(), any());
     }
 
-    // --- APNs ----------------------------------------------------------------
-
     @Test
     void theApnsProviderTokenIsCachedAndResignedBeforeApplesHourIsUp() throws Exception {
         configureApns();
@@ -178,7 +159,6 @@ class AuthorityPushChannelTest {
         givenResponse(http, 400, "{\"reason\":\"BadDeviceToken\"}");
         assertThat(transport.send("token", "global.gua", "t", "b")).isEqualTo(Outcome.UNREGISTERED);
 
-        // Anything else is transient. A 503 from Apple must not retire an install that is perfectly alive.
         givenResponse(http, 503, "");
         assertThat(transport.send("token", "global.gua", "t", "b")).isEqualTo(Outcome.RETRYABLE);
 
@@ -216,7 +196,6 @@ class AuthorityPushChannelTest {
         when(http.send(any(HttpRequest.class), any())).thenReturn(response);
     }
 
-    /** Records what the notifier asked to be sent, which is the only thing worth asserting about a payload. */
     private static final class StubTransport implements AuthorityPushTransport {
 
         private final Platform platform;

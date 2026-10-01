@@ -7,18 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-/**
- * The placeholder notifier, which writes a log line and says so.
- *
- * <p>It exists so the seam has a wiring and the code compiles and runs with the feature off; it is not a
- * channel, and {@link #isOutOfBand()} returns false to say that out loud. A deployment that turns
- * {@code identity.authority.enabled} on with only this bean present fails to start
- * ({@link AuthorityNotificationGate}), which is ADM-009 gate 2 enforced rather than documented.
- *
- * <p>It stays wired when a real notifier is added, because {@link AuthorityNotifications} fans out to
- * every implementation: the operator log line is useful next to a real channel, and it is the only
- * implementation that must never be the reason gate 2 passes.
- */
+/** Log-only notifier. Never out of band, so it cannot satisfy the startup channel check. */
 @Component
 public class LoggedAuthorityNotifier implements AuthorityNotifier {
 

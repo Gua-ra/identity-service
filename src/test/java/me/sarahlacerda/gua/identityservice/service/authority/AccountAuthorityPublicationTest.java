@@ -60,21 +60,7 @@ import me.sarahlacerda.gua.identityservice.service.security.audit.LoggingSecurit
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
-/**
- * The publication path, walked through real transitions against a real engine and a real resolver socket
- * (ADM-009 decision 12).
- *
- * <p>Four claims, and none of them can be shown with a mock. That a head reaches the log <em>on the
- * transitions that move it</em> and not before, which is a statement about when the window closes; that a
- * record inside its window never reaches it, which is a statement about what the head row means while a slot
- * is reserved; that a republish is byte-identical, which is a statement about what crosses the socket; and
- * that with the flag off nothing crosses it at all.
- *
- * <p>Not transactional, unlike the sibling transition test. The delivery is registered to run after the
- * transition commits, so a test whose transaction is rolled back would show no delivery at all and prove
- * the opposite of what it set out to. Each service call therefore runs and commits its own transaction, and
- * every assertion re-reads its rows.
- */
+/** Not transactional: a head is delivered after the transition commits, so every service call commits its own. */
 @DataJpaTest(properties = {
         "spring.flyway.enabled=false",
         "spring.jpa.hibernate.ddl-auto=create-drop",
@@ -82,8 +68,6 @@ import static org.mockito.Mockito.mock;
         "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.H2Dialect"
 })
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
-// The container's own proxy, because the acknowledgement is written in a REQUIRES_NEW transaction from inside
-// the completing one's synchronization, and that is the whole reason it reaches the row at all.
 @Import(AuthorityHeadPublications.class)
 class AccountAuthorityPublicationTest {
 
@@ -178,7 +162,6 @@ class AccountAuthorityPublicationTest {
         genesisRepository.deleteAll();
     }
 
-    /** Rebuilt after a flag change, because the client reads its base URL once, as the container does. */
     private void rebuildService() {
         UserSecurityService userSecurityService = mock(UserSecurityService.class);
         AuthorityPolicy policy = new AuthorityPolicy(properties, userSecurityService);
@@ -193,16 +176,12 @@ class AccountAuthorityPublicationTest {
                 new LoggingSecurityAuditLogger(), clock);
     }
 
-    // --- Publishing on the transitions that move the head ---------------------
-
     @Test
     void nothingIsPublishedWhileTheRecordIsStillInsideItsWindow() {
         enablePublishing();
 
         adopt();
 
-        // The head row names the pending AdoptRoot at seq 1 while it holds its slot, and an opposition can
-        // still cancel it. The log is append-only, so that hash must not reach it.
         assertThat(head().getHeadSeq()).isEqualTo(1L);
         assertThat(head().hasPending()).isTrue();
         assertThat(resolver.getRequestCount()).isZero();
@@ -248,8 +227,6 @@ class AccountAuthorityPublicationTest {
         byte[] canonical = Base64.getUrlDecoder().decode(envelope.path("record").asText());
         byte[] signature = Base64.getDecoder().decode(envelope.path("signature").asText());
 
-        // The resolver verifies exactly this: the named homeserver's entry in a roster it has verified
-        // k-of-n, ACTIVE at acceptance time, and the signature under that entry's published key.
         assertThat(Ed25519Keys.verify(membershipKey.rawPublicKey(),
                 AuthorityHeadRecordCodec.signaturePreimage(canonical), signature)).isTrue();
         assertThat(envelope.path("record").asText())
@@ -262,8 +239,6 @@ class AccountAuthorityPublicationTest {
         rootTheAccount();
         resolver.takeRequest();
 
-        // A grant only adds and its holder is quarantined, so it takes effect immediately: the settled head
-        // moves inside the submitting request rather than at the end of a window.
         grantSecondDevice();
 
         assertThat(resolver.getRequestCount()).isEqualTo(2);
@@ -280,27 +255,20 @@ class AccountAuthorityPublicationTest {
         grantSecondDevice();
         resolver.takeRequest();
 
-        // Two heads are in the log by now, one per settled transition, and the count below is cumulative.
         assertThat(resolver.getRequestCount()).isEqualTo(2);
 
         String pendingHash = revokeSecondDevice().recordHash();
         assertThat(head().getHeadSeq()).isEqualTo(3L);
         assertThat(resolver.getRequestCount()).isEqualTo(2);
 
-        // Opposed by the first device, which is the account's only unquarantined key: a device granted a
-        // moment ago is still serving its quarantine and may not authorize anything yet.
         opposeAs(firstDevice, pendingHash);
 
-        // The cancellation gave the slot back and rolled the head to seq 2, which is already published. There
-        // is nothing to retract and nothing new to say.
         assertThat(head().getHeadSeq()).isEqualTo(2L);
         assertThat(recordRepository.findByAccountAndSeq(account(), 3L).orElseThrow().getState())
                 .isEqualTo(AuthorityChainRecord.State.CANCELLED);
         assertThat(resolver.getRequestCount()).isEqualTo(2);
         assertThat(publicationRepository.findByAccount(account()).orElseThrow().getHeadSeq()).isEqualTo(2L);
     }
-
-    // --- Idempotency ----------------------------------------------------------
 
     @Test
     void aSecondPassOverAnAlreadyPublishedHeadSendsNothing() {
@@ -312,9 +280,6 @@ class AccountAuthorityPublicationTest {
         readState();
         readState();
 
-        // The catch-up runs on every pass over the account, which is what makes a failed delivery recover
-        // without a scheduler. A head already in the log is where it lands, and it must cost nothing: the log's
-        // size is the roster version, so one leaf per read would move where new accounts are placed.
         assertThat(resolver.getRequestCount()).isEqualTo(1);
     }
 
@@ -329,8 +294,6 @@ class AccountAuthorityPublicationTest {
         String first = bodyOf(resolver.takeRequest());
         assertThat(publicationRepository.findByAccount(account()).orElseThrow().isConfirmed()).isFalse();
 
-        // Inside the retry floor nothing is resent, because this catch-up runs on the same reads the account
-        // holder's own client makes and an unreachable resolver must not put a socket timeout in front of them.
         readState();
         assertThat(resolver.getRequestCount()).isEqualTo(1);
 
@@ -340,9 +303,6 @@ class AccountAuthorityPublicationTest {
         assertThat(resolver.getRequestCount()).isEqualTo(2);
         String retry = bodyOf(resolver.takeRequest());
 
-        // Byte-identical, because the retry resends the stored bytes rather than signing a second head. That
-        // is the whole of the idempotency claim: the same bytes hash to the same payload, so the leaf the
-        // retry commits is the leaf the first attempt would have committed.
         assertThat(retry).isEqualTo(first);
 
         AuthorityHeadPublication row = publicationRepository.findByAccount(account()).orElseThrow();
@@ -360,8 +320,6 @@ class AccountAuthorityPublicationTest {
         rootTheAccount();
         resolver.takeRequest();
 
-        // The resolver already holds this head, which is not an error: the log is append-only and a head
-        // already committed needs no second leaf.
         assertThat(publicationRepository.findByAccount(account()).orElseThrow().isConfirmed()).isTrue();
         readState();
         assertThat(resolver.getRequestCount()).isEqualTo(1);
@@ -381,16 +339,12 @@ class AccountAuthorityPublicationTest {
         assertThat(reissued).isNotEqualTo(first);
 
         AuthorityHeadRecord published = publishedIn(reissued);
-        // The same head, a fresh window. An account with no transitions for years would otherwise go stale in
-        // the client, and a stale attestation reads as unverified rather than as verified.
         assertThat(published.headSeq()).isEqualTo(1L);
         assertThat(published.issuedAt()).isEqualTo(clock.instant());
 
         readState();
         assertThat(resolver.getRequestCount()).isEqualTo(2);
     }
-
-    // --- The flag -------------------------------------------------------------
 
     @Test
     void withPublishingOffNothingIsSignedAndNothingIsSent() {
@@ -400,8 +354,6 @@ class AccountAuthorityPublicationTest {
         grantSecondDevice();
         readState();
 
-        // The chain ran every transition. Nothing was signed, no row was written, and the resolver socket was
-        // never touched: the two flags are two decisions, and this is the state the first one leaves.
         assertThat(head().getHeadSeq()).isEqualTo(2L);
         assertThat(deviceRepository.findByAccount(account())).hasSize(2);
         assertThat(resolver.getRequestCount()).isZero();
@@ -417,8 +369,6 @@ class AccountAuthorityPublicationTest {
         enablePublishing();
         readState();
 
-        // Turning the flag on does not need a backfill job: the first pass over the account publishes the head
-        // it already has, on the same lazy path settlement runs on.
         assertThat(resolver.getRequestCount()).isEqualTo(1);
         assertThat(publishedIn(resolver.takeRequest()).headSeq()).isEqualTo(2L);
     }
@@ -431,14 +381,10 @@ class AccountAuthorityPublicationTest {
 
         rootTheAccount();
 
-        // A head that reaches the log late is a delay. A transition refused because federation state was
-        // unreachable would be an outage, and adoption would be the first thing to fall over.
         assertThat(head().getHeadSeq()).isEqualTo(1L);
         assertThat(deviceRepository.findByAccount(account())).hasSize(1);
         assertThat(publicationRepository.findByAccount(account()).orElseThrow().isConfirmed()).isFalse();
     }
-
-    // --- Helpers --------------------------------------------------------------
 
     private void enablePublishing() {
         properties.getAuthority().getPublication().setEnabled(true);
@@ -451,7 +397,7 @@ class AccountAuthorityPublicationTest {
         rebuildService();
     }
 
-    /** The body, read once: {@code RecordedRequest.getBody()} is a buffer and a second read finds it empty. */
+    /** {@code RecordedRequest.getBody()} is a buffer: a second read finds it empty. */
     private static String bodyOf(RecordedRequest request) {
         return request.getBody().readUtf8();
     }
@@ -466,14 +412,6 @@ class AccountAuthorityPublicationTest {
         return publishedIn(bodyOf(request));
     }
 
-    /**
-     * Runs one service call in its own transaction, the way the container's proxy would.
-     *
-     * <p>The service is built with {@code new} here rather than injected, so nothing applies its
-     * {@code @Transactional}, and this class deliberately does not run inside one of its own. One transaction
-     * per call is also what the publication is about: the delivery is registered to fire when that transaction
-     * commits, and a test sharing one long transaction with the code under test would never see it.
-     */
     private <T> T call(java.util.function.Supplier<T> action) {
         return transactions.execute(status -> action.get());
     }
@@ -527,10 +465,6 @@ class AccountAuthorityPublicationTest {
         });
     }
 
-    /**
-     * Minted in a transaction of its own, because this class runs outside one: the challenge store sweeps
-     * expired rows on the way in, and a bulk delete needs a transaction to sit in.
-     */
     private String mint(Purpose purpose) {
         return transactions.execute(status -> challenges.mint(account(), SESSION, purpose, AuthFactor.PASSKEY,
                 clock.instant().minus(Duration.ofDays(30)), clock.instant()).challenge());
@@ -559,7 +493,6 @@ class AccountAuthorityPublicationTest {
         return java.util.HexFormat.of().parseHex(hex);
     }
 
-    /** A clock a test can walk forward, so a 72-hour window does not need 72 hours. */
     private static final class MutableClock extends Clock {
 
         private Instant now;
@@ -588,10 +521,6 @@ class AccountAuthorityPublicationTest {
         }
     }
 
-    /**
-     * A channel that reaches the account holder, so gate 2 does not refuse every transition this class walks.
-     * What a notification says has its own tests.
-     */
     private static final class StubChannel implements AuthorityNotifier {
 
         @Override
@@ -618,7 +547,6 @@ class AccountAuthorityPublicationTest {
         }
     }
 
-    /** No doubling, so a test walking several transitions is not refused by a budget it is not about. */
     private static final class NoBackoff extends AuthorityBackoff {
 
         private NoBackoff(AuthorityPolicy policy) {
@@ -632,8 +560,6 @@ class AccountAuthorityPublicationTest {
 
         @Override
         public Instant recordCancellation(String account, String keyB64, Instant now) {
-            // The doubling has its own unit test; a test walking several transitions must not be refused by a
-            // budget it is not about.
             return now;
         }
     }

@@ -10,17 +10,8 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import me.sarahlacerda.gua.identityservice.domain.AuthorityChallenge.Purpose;
 
 /**
- * Asks for the server challenge one authority transition will sign (ADM-009 decision 2).
- *
- * <p>The step-up travels in this body, which is the house pattern: the phone change and the PIN change carry
- * their step-up in the request of the operation they authorize rather than exchanging it for a token first.
- * Here it is more than a convention. The challenge is minted in the same call as the step-up, so ADM-009
- * decision 4's "a step-up no older than the challenge" holds by construction: there is no step-up artifact
- * that outlives the challenge and nothing to compare two ages of.
- *
- * <p>There is no field for a phone code, and there is no field for saying a factor is unavailable on this
- * device. Both absences are the point: an SMS code proves possession of a number, which a SIM swap also
- * gives, and a claim that a factor cannot be produced costs an attacker nothing.
+ * Must not gain a phone-code field or a "factor unavailable" flag: either would let a caller downgrade
+ * the step-up.
  */
 @Schema(description = "Request a server challenge for one authority transition, after a scoped step-up")
 public class AuthorityChallengeRequest {

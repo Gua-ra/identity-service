@@ -54,25 +54,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.Mockito.mock;
 
-/**
- * The property ADM-009 gate 2 is actually about, driven rather than asserted about a mock: a security
- * notification registration survives a completed account recovery, and the passkeys do not.
- *
- * <p><b>Why the negative control is in the same test.</b> A test that only asserts the row is still there
- * passes just as well when the recovery did nothing at all, which is the failure mode worth catching: a
- * misconfigured fixture, a status that never reached READY, a swallowed refusal. So the same test asserts
- * that every passkey is gone and that the PIN the recovery chose is now the account's PIN. The row surviving
- * only means something beside a recovery that demonstrably happened.
- *
- * <p>The recovery is the shipped {@link AccountRecoveryService} over the real
- * {@link UserSecurityService} and the real {@link PasskeyService}, against real repositories. Two things are
- * mocked and neither is the subject: {@link EndOtherSessionsService}, because the session sign-out it records
- * is performed by another service against another database and is exactly the reason a pusher could not carry
- * this channel, and the directory and phone collaborators the user service takes, which this path never calls.
- *
- * <p>The removal tiers are then exercised against the state the recovery left behind, which is the only state
- * they are interesting in: the caller holds a PIN minted seconds ago and nothing else.
- */
 @DataJpaTest(properties = {
         "spring.flyway.enabled=false",
         "spring.jpa.hibernate.ddl-auto=create-drop",
@@ -85,7 +66,6 @@ class AuthorityNotificationSurvivesRecoveryTest {
     private static final String SESSION = "b".repeat(64);
     private static final String OWN_INSTALL = "install-phone";
     private static final String OTHER_INSTALL = "install-tablet";
-    /** The hold every authority transition and every tier-2 removal is weighed against. */
     private static final Duration HOLD = Duration.ofDays(7);
 
     @Autowired
@@ -125,11 +105,8 @@ class AuthorityNotificationSurvivesRecoveryTest {
         properties = new IdentityServiceProperties();
         properties.getAuthority().setEnabled(true);
         properties.getAuthority().getNotifications().setEnabled(true);
-        // The hold the fresh-factor rules are measured against, and the two recovery waits shortened to a
-        // second so the shipped path can be driven end to end. Not to zero: the episode's own life is derived
-        // from the wait, so a zero wait makes every episode dead on arrival and the recovery would refuse for
-        // a reason that has nothing to do with what is being tested.
         properties.getSecurity().setPinResetCooldown(HOLD);
+        // Not zero: an episode's life is derived from the wait, so a zero wait makes every episode dead on arrival.
         properties.getSecurity().setAccountRecoveryDormancy(Duration.ofSeconds(1));
         properties.getSecurity().setAccountRecoveryWait(Duration.ofSeconds(1));
 
@@ -147,8 +124,6 @@ class AuthorityNotificationSurvivesRecoveryTest {
         accounts = new AuthorityAccounts(genesisRepository);
         challenges = new AuthorityChallengeService(challengeRepository, policy,
                 new AuthorityChallengeBurn(challengeRepository));
-        // The web-sheet step-up is a real service over a mocked repository: this test never opens a sheet, so
-        // it has nothing to consume, and the native path is the one under test here.
         AuthorityStepUpService stepUps = new AuthorityStepUpService(passkeyService, userSecurityService, policy,
                 new AuthorityWebStepUpService(mock(AuthorityWebStepUpRepository.class), policy, clock), audit);
         registry = new AuthorityNotificationRegistry(registrationRepository, deviceRepository, accounts, challenges,
@@ -164,8 +139,6 @@ class AuthorityNotificationSurvivesRecoveryTest {
         givenTwoPasskeys();
     }
 
-    // --- The property, and the control that keeps it from being vacuous ------
-
     @Test
     void theRegistrationSurvivesACompletedRecoveryAndThePasskeysDoNot() {
         registerOwnInstall();
@@ -174,15 +147,12 @@ class AuthorityNotificationSurvivesRecoveryTest {
 
         int removedPasskeys = driveARecovery("902184");
 
-        // The control. A recovery that did nothing would leave these standing, and the survival below would
-        // then be a statement about an inert fixture rather than about this table.
         assertThat(removedPasskeys).isEqualTo(2);
         assertThat(passkeyRepository.findByUserId(USER)).isEmpty();
         IdentityUser after = userRepository.findByUserId(USER).orElseThrow();
         assertThat(after.getRecoveryCompletedAt()).isNotNull();
         assertThat(after.getPinResetRequestedAt()).isNull();
 
-        // The property.
         List<AuthorityNotificationRegistration> rows = registrationRepository.findByUserId(USER);
         assertThat(rows).hasSize(1);
         assertThat(rows.getFirst().getInstallationId()).isEqualTo(OWN_INSTALL);
@@ -196,8 +166,6 @@ class AuthorityNotificationSurvivesRecoveryTest {
         registerOwnInstall();
         driveARecovery("902184");
 
-        // The same question the chain asks before it starts a window, answered through the notifier rather
-        // than by reading the table: gate 2 is a claim about reaching the holder, not about a row existing.
         AuthorityPushNotifier notifier = new AuthorityPushNotifier(registry,
                 List.of(new ConfiguredTransport()), policy, clock);
         assertThat(notifier.isOutOfBand()).isTrue();
@@ -209,24 +177,17 @@ class AuthorityNotificationSurvivesRecoveryTest {
         registerOwnInstall();
         driveARecovery("902184");
 
-        // The other half of decision 9 rule 3, and the reason the surviving channel is worth having: the
-        // attacker cannot use the window either, because the stamp the recovery just wrote refuses them.
         AuthorityTransitionException refusal = catchThrowableOfType(
                 () -> policy.enforceRecoveryOutsideHold(USER), AuthorityTransitionException.class);
         assertThat(refusal).isNotNull();
         assertThat(refusal.getCode()).isEqualTo("authority_recovery_too_recent");
     }
 
-    // --- What a removal costs, against the post-recovery state ---------------
-
     @Test
     void aRemovalThatNamesTheCallersOwnInstallPaysWhatEveryRemovalPays() {
         registerOwnInstall();
         agePinPastTheHold();
 
-        // The hole this closes: the removal tier used to be decided by comparing two installation ids in one
-        // request body, and the account's own listing hands every installation id to any bearer. So a session
-        // holding no factor at all emptied the channel every window in ADM-009 rests on.
         AuthorityTransitionException refusal = catchThrowableOfType(
                 () -> registry.remove(USER, removal(OWN_INSTALL, null), SESSION, "127.0.0.1", clock.instant()),
                 AuthorityTransitionException.class);
@@ -234,7 +195,6 @@ class AuthorityNotificationSurvivesRecoveryTest {
         assertThat(refusal.getCode()).isEqualTo("authority_step_up_required");
         assertThat(registrationRepository.findByUserId(USER)).hasSize(1);
 
-        // With a factor past the fresh-factor hold it goes through, which is the owner's own route.
         registry.remove(USER, removal(OWN_INSTALL, "481937"), SESSION, "127.0.0.1", clock.instant());
         assertThat(registrationRepository.findByUserId(USER)).isEmpty();
     }
@@ -246,8 +206,6 @@ class AuthorityNotificationSurvivesRecoveryTest {
         String attackerPin = "902184";
         driveARecovery(attackerPin);
 
-        // The whole attack, in one call: the PIN was chosen seconds ago by whoever completed the recovery, and
-        // it is the only factor they hold. The hold is measured on the credential itself, so it is refused.
         AuthorityTransitionException refusal = catchThrowableOfType(
                 () -> registry.remove(USER, removal(OWN_INSTALL, attackerPin), SESSION, "127.0.0.1",
                         clock.instant()),
@@ -265,7 +223,6 @@ class AuthorityNotificationSurvivesRecoveryTest {
         registerOtherInstall();
         agePinPastTheHold();
 
-        // A factor past the hold, and nothing else: refused, because the row names a device key.
         AuthorityTransitionException refusal = catchThrowableOfType(
                 () -> registry.remove(USER, removal(OWN_INSTALL, "481937"), SESSION, "127.0.0.1",
                         clock.instant()),
@@ -274,7 +231,6 @@ class AuthorityNotificationSurvivesRecoveryTest {
         assertThat(refusal.getCode()).isEqualTo("authority_challenge_invalid");
         assertThat(registrationRepository.findByUserId(USER)).hasSize(2);
 
-        // The same call with the signature the row's own device key produces.
         agePinPastTheHold();
         String challenge = mintNotifyChallenge();
         String signature = signBinding(OWN_INSTALL, challenge);
@@ -285,17 +241,12 @@ class AuthorityNotificationSurvivesRecoveryTest {
         assertThat(registrationRepository.findByUserIdAndInstallationId(USER, OTHER_INSTALL)).isPresent();
     }
 
-    // --- The destination on an existing row ----------------------------------
-
     @Test
     void anUpsertCannotRepointAnExistingRowAtAnotherDestination() {
         registerOwnInstall();
         String fingerprintBefore = registrationRepository.findByUserIdAndInstallationId(USER, OWN_INSTALL)
                 .orElseThrow().getTokenFingerprint();
 
-        // The same installation id, a token of the attacker's choosing, no challenge and no signature. It
-        // removes nothing, so no removal rule sees it, and the row would go on reporting a healthy owner
-        // channel while every alert went elsewhere.
         AuthorityTransitionException refusal = catchThrowableOfType(
                 () -> registry.register(USER, new AuthorityNotificationRegistry.Registration(OWN_INSTALL, "APNS",
                         "attacker-token", "global.gua", "iPhone", null, null, null), SESSION, clock.instant()),
@@ -312,12 +263,10 @@ class AuthorityNotificationSurvivesRecoveryTest {
         givenAnActiveAuthorityDevice();
         registerOwnInstall();
 
-        // An ordinary re-registration of the same destination is a refresh and costs nothing.
         registry.register(USER, new AuthorityNotificationRegistry.Registration(OWN_INSTALL, "APNS",
                 "apns-token-one", "global.gua", "iPhone", null, null, null), SESSION, clock.instant());
         assertThat(registrationRepository.findByUserId(USER)).hasSize(1);
 
-        // A rotated token moves the row when a device of this account signs over this installation id.
         String challenge = mintNotifyChallenge();
         registry.register(USER, new AuthorityNotificationRegistry.Registration(OWN_INSTALL, "APNS",
                 "apns-token-rotated", "global.gua", "iPhone",
@@ -328,8 +277,6 @@ class AuthorityNotificationSurvivesRecoveryTest {
                 .getTokenFingerprint())
                 .isEqualTo(AuthorityNotificationRegistry.fingerprint("apns-token-rotated"));
     }
-
-    // --- Fixtures -----------------------------------------------------------
 
     private void givenTwoPasskeys() {
         passkeyRepository.saveAndFlush(passkey("cred-one"));
@@ -386,31 +333,17 @@ class AuthorityNotificationSurvivesRecoveryTest {
                 .encodeToString(TestEd25519.sign(device.privateKey(), preimage));
     }
 
-    /**
-     * Starts and completes a recovery through the shipped service, and returns how many passkeys it removed.
-     *
-     * <p>The dormancy and the wait are configured to zero rather than skipped, so start and complete both run
-     * their real status rules; a fixture that wrote {@code pin_reset_requested_at} by hand would be testing
-     * this test.
-     */
     private int driveARecovery(String attackerChosenPin) {
         userRepository.findByUserId(USER).ifPresent(user -> {
             user.setLastLoginAt(clock.instant().minus(Duration.ofDays(60)));
             userRepository.saveAndFlush(user);
         });
         recovery.start(USER, "+55 11 ****-**89", "127.0.0.1");
-        // Past the wait and still inside the episode's life, which is where a real caller completes one.
         clock.advance(Duration.ofSeconds(1));
         return recovery.complete(USER, attackerChosenPin);
     }
 
-    /**
-     * Puts the account's PIN outside the fresh-factor hold.
-     *
-     * <p>The hold is measured against the wall clock inside {@code UserSecurityService}, so the stamp is
-     * backdated rather than the test clock advanced. What is being set up is an owner whose factor is
-     * established, which is the only caller tier 2 is meant to admit.
-     */
+    /** Backdates the stamp: {@code UserSecurityService} measures the hold against the wall clock. */
     private void agePinPastTheHold() {
         IdentityUser user = userRepository.findByUserId(USER).orElseThrow();
         user.setPinSetAt(Instant.now().minus(HOLD).minus(Duration.ofDays(1)));
@@ -427,7 +360,6 @@ class AuthorityNotificationSurvivesRecoveryTest {
         return new AuthorityNotificationRegistry.Removal(installationId, null, null, pin, challenge, signature);
     }
 
-    /** A transport that reports itself configured, so the notifier can answer the gate-2 question. */
     private static final class ConfiguredTransport implements AuthorityPushTransport {
 
         @Override
@@ -446,7 +378,6 @@ class AuthorityNotificationSurvivesRecoveryTest {
         }
     }
 
-    /** Walked forward by seconds, because the recovery's two waits are the only durations the test needs. */
     private static final class StubClock extends Clock {
 
         private Instant now;

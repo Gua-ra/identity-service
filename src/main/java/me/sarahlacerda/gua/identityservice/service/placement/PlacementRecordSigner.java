@@ -28,14 +28,8 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Home
  * They record where an account already lives.
  *
  * <h2>Keys are parsed on first use, not at construction</h2>
- * <p>Held and decoded by {@link RosterMembershipKeys}, which is the one place that key is parsed because
- * the published authority head of ADM-009 decision 12 is signed with the same one. This bean is built in
- * every deployment, including the overwhelming majority that have placement publishing switched off, so
- * parsing a configured key eagerly would mean a deployment holding a malformed or truncated key in its
- * Secret failed to start even with the feature off, which is a behaviour change the flags are supposed to
- * prevent. A deployment that does publish still gets its keys checked before it serves anything:
- * {@link PlacementSignerStartupCheck} decodes every one of them at startup and refuses to start if any
- * fails, which is the fail-fast that matters.
+ * <p>Held and decoded by {@link RosterMembershipKeys}. A deployment that publishes has every key checked
+ * at startup by {@link PlacementSignerStartupCheck}.
  */
 @Component
 public class PlacementRecordSigner {

@@ -17,26 +17,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
-/**
- * The bytes of {@code gua-account-authority-head.v1}, which is what the {@code ACCOUNT_AUTHORITY} leaf of
- * ADM-009 decision 12 commits the SHA-256 of.
- *
- * <p>Three claims are checked here, and each one is load-bearing for something outside this class.
- *
- * <ul>
- *   <li><b>One canonical spelling.</b> Every field sits at a fixed offset, the one variable field carries a
- *       length prefix the buffer has to agree with exactly, and a decoder refuses anything else with a named
- *       reason. Without that, one head has several spellings, and a signature over the longer buffer would
- *       still verify while the payload hash the leaf committed covered different bytes.</li>
- *   <li><b>No identifier, and no room for one.</b> The log gets a hash of these bytes, and the bytes
- *       themselves travel beside it, so anything in this layout is effectively published. There is no phone,
- *       no phone hash, no Matrix user id, no device key and no label, and the length arithmetic below leaves
- *       no unaccounted byte a field like that could be added in without this test failing.</li>
- *   <li><b>An empty chain is not publishable.</b> The all-zero head hash and position zero are what the head
- *       row holds while a chain has no record, and an object saying so would be a non-membership claim with
- *       nothing anywhere in this system to check it against.</li>
- * </ul>
- */
 class AuthorityHeadRecordCodecTest {
 
     private static final HexFormat HEX = HexFormat.of();
@@ -52,8 +32,6 @@ class AuthorityHeadRecordCodecTest {
     private static byte[] canonical() {
         return AuthorityHeadRecordCodec.encode(REFERENCE, HEAD_HASH, 7L, HOMESERVER, ISSUED, ISSUED, NOT_AFTER);
     }
-
-    // --- The layout -----------------------------------------------------------
 
     @Test
     void everyFieldSitsWhereTheLayoutSaysItDoes() {
@@ -74,8 +52,6 @@ class AuthorityHeadRecordCodecTest {
 
     @Test
     void theEnvelopeCarriesTheSameAccountReferenceLengthAChainRecordDoes() {
-        // The 34 bytes are the whole of what a head says about which account it is, and they are exactly the
-        // bytes the chain envelope carries, so a client signs and publishes over one value and not two.
         assertThat(REFERENCE).hasSize(AuthorityRecord.ACCOUNT_REFERENCE_LENGTH);
         assertThat(AuthorityHeadRecordCodec.decode(canonical()).accountReference()).isEqualTo(REFERENCE);
     }
@@ -92,9 +68,6 @@ class AuthorityHeadRecordCodecTest {
 
     @Test
     void noSourceLineOfTheHeadObjectNamesAnIdentifierField() throws Exception {
-        // A guard on the layout itself rather than on the arithmetic: a new field named for a phone, a user
-        // id, a device or a label would be the one way this object stopped being publishable, so the two
-        // files that define it may not mention one at all.
         List<String> offenders = Stream.of(
                         Path.of("src/main/java/me/sarahlacerda/gua/identityservice/account/authority",
                                 "AuthorityHeadRecord.java"),
@@ -116,8 +89,6 @@ class AuthorityHeadRecordCodecTest {
 
         assertThat(offenders).isEmpty();
     }
-
-    // --- The round trip -------------------------------------------------------
 
     @Test
     void aRoundTripKeepsEveryFieldAndTheBytesAsReceived() {
@@ -143,9 +114,6 @@ class AuthorityHeadRecordCodecTest {
 
         String expected = HEX.formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
 
-        // This is the whole of what the ACCOUNT_AUTHORITY leaf commits. A verifier handed the envelope
-        // recomputes it from the bytes it was handed and reaches the leaf from there; nothing in the log
-        // holds any field of this object.
         assertThat(AuthorityHeadRecordCodec.decode(bytes).payloadHashHex()).isEqualTo(expected);
     }
 
@@ -163,12 +131,9 @@ class AuthorityHeadRecordCodecTest {
 
     @Test
     void theMagicIsNotOneAChainRecordUses() {
-        // The magic is the signature domain, so a head signature must not be readable as a chain record's.
         assertThat(Stream.of(AuthorityRecordType.values()).map(AuthorityRecordType::magic))
                 .doesNotContain(AuthorityHeadRecord.MAGIC);
     }
-
-    // --- What a decoder refuses ----------------------------------------------
 
     @Test
     void anAllZeroHeadHashIsRefusedRatherThanEncoded() {
@@ -222,8 +187,6 @@ class AuthorityHeadRecordCodecTest {
         longer[80] = (byte) (HOMESERVER.length() + 1);
         assertThat(reasonOf(longer)).isEqualTo("wrong_length");
 
-        // One trailing byte. Accepting it would give this head two spellings, and a signature over the
-        // longer buffer would verify while the leaf's payload hash covered the shorter one.
         byte[] trailing = Arrays.copyOf(canonical(), canonical().length + 1);
         assertThat(reasonOf(trailing)).isEqualTo("wrong_length");
 
@@ -255,7 +218,6 @@ class AuthorityHeadRecordCodecTest {
         bytes[81] = 0x0a;
         assertThat(reasonOf(bytes)).isEqualTo("bad_homeserver_id");
 
-        // Refused at signing time too, so an id this service could not read back never leaves it.
         assertThatThrownBy(() -> AuthorityHeadRecordCodec.encode(REFERENCE, HEAD_HASH, 1L, "hs alpha", ISSUED,
                 ISSUED, NOT_AFTER))
                 .isInstanceOf(InvalidAuthorityRecordException.class);
@@ -283,8 +245,6 @@ class AuthorityHeadRecordCodecTest {
 
     @Test
     void theWindowCapIsTheOneAPlacementRecordSignedByTheSameKeyObeys() {
-        // Both are a homeserver's standing assertion about one account under its roster membership key. A head
-        // outliving the placement record for the same account would be the longer-lived claim of the two.
         assertThat(AuthorityHeadRecordCodec.MAX_VALIDITY)
                 .isEqualTo(me.sarahlacerda.gua.identityservice.account.genesis.PlacementRecordCodec.MAX_VALIDITY);
     }

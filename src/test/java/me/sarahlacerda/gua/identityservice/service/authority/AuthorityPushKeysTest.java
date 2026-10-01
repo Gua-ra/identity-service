@@ -12,14 +12,6 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/**
- * Both shapes an operator can actually hand this service, because only one of them used to work.
- *
- * <p>The documented contract is base64 of PKCS#8 DER. What Apple and Google hand over is PEM: a {@code .p8}
- * file and the {@code private_key} field of a service-account JSON. Base64 either of those and the decoded
- * bytes begin with the armour line, which is not a key. That is how dev ended up with two transports that
- * counted as channels and could not sign, and the first ADOPT_ROOT went pending with nobody told.
- */
 class AuthorityPushKeysTest {
 
     @Test

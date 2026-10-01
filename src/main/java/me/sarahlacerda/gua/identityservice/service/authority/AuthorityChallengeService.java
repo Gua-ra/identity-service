@@ -23,23 +23,7 @@ import me.sarahlacerda.gua.identityservice.exception.AuthorityTransitionExceptio
 import me.sarahlacerda.gua.identityservice.repository.AuthorityChallengeRepository;
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactor;
 
-/**
- * The server challenge every authority record signs (ADM-009 decision 2).
- *
- * <p>32 CSPRNG bytes, minted once, held against the account and the acting stepped-up session, single use,
- * burned on acceptance <em>and</em> on refusal, expiring at or under 15 minutes.
- *
- * <p>Only the SHA-256 of the challenge is stored, the way {@code account_genesis} stores only the hash of an
- * attach handle. The value is returned once and never again, so a dump of this table hands nobody something
- * to sign. Lookup therefore starts from the bytes the caller returned, which is also what makes holding a
- * challenge mean something: a caller that did not receive these bytes cannot find the row.
- *
- * <p>Why this is worth the table at all, rather than a signature over the record alone: a record signed with
- * no server input is a precomputable, transferable artifact that proves possession of a key and nothing
- * about when or where its holder was. That is the freshness defect ADM-008:151 already records against the
- * genesis registration proof, and repeating it here would make a captured request body replayable after the
- * owner had opposed it.
- */
+/** Only the SHA-256 of a challenge is stored. Each is single use and bound to one account and session. */
 @Service
 public class AuthorityChallengeService {
 
@@ -57,13 +41,6 @@ public class AuthorityChallengeService {
         this.burn = burn;
     }
 
-    /**
-     * Mints a challenge for one transition, and returns it base64url. The only time the value exists outside
-     * the caller's request.
-     *
-     * @param factor          which step-up settled it, so the hold is weighed on the factor presented
-     * @param factorCreatedAt when that credential came into being; null when the purpose asks for no factor
-     */
     @Transactional
     public Minted mint(String account, String sessionHash, Purpose purpose, AuthFactor factor,
             Instant factorCreatedAt, Instant now) {
@@ -75,26 +52,14 @@ public class AuthorityChallengeService {
         repository.save(AuthorityChallenge.minted(account, sessionHash, purpose, sha256Hex(value), factor,
                 factorCreatedAt, expiresAt, now));
 
-        // Housekeeping on the write path rather than a scheduled job, exactly as the genesis sweep does and
-        // for the same reason: nothing in this application enables scheduling, and an expired challenge is
-        // already refused when it is spent, so this only stops them piling up.
         repository.deleteExpired(now);
 
         return new Minted(value, expiresAt);
     }
 
     /**
-     * Spends a challenge and returns its 32 bytes, so the caller can build the preimage the record is
-     * verified against.
-     *
-     * <p>Burned before the record is verified, on purpose. "Single use, burned on acceptance and on refusal"
-     * is not a description of two code paths, it is one: marking it spent here means no arrangement of later
-     * failures can leave it spendable, and a caller whose record was refused asks for a new challenge rather
-     * than retrying against the old one.
-     *
-     * <p>The burn itself is {@link AuthorityChallengeBurn}, in a transaction of its own, because every refusal
-     * after this point throws out of the transaction this spend would otherwise have joined. Written here, the
-     * burn was rolled back with the refusal and one step-up paid for every attempt inside the challenge's life.
+     * Burns the challenge before the record is verified, through {@link AuthorityChallengeBurn}, so a refusal
+     * cannot leave it spendable.
      */
     @Transactional
     public Spent spend(String account, String sessionHash, Purpose purpose, String challengeB64, Instant now) {
@@ -104,8 +69,7 @@ public class AuthorityChallengeService {
         AuthorityChallenge row = repository.findByChallengeHash(sha256Hex(challengeB64.trim()))
                 .orElseThrow(() -> refused("no such challenge"));
 
-        // Every mismatch is the same refusal, so a caller cannot learn from the error which of the four
-        // bindings it got wrong.
+        // One refusal for every mismatch, so the caller cannot learn which binding failed.
         if (!row.getAccount().equals(account)) {
             throw refusedAfterBurning(row, now, "the challenge belongs to another account");
         }
@@ -124,17 +88,9 @@ public class AuthorityChallengeService {
         return new Spent(decode(challengeB64.trim()), row.getFactor(), row.getFactorCreatedAt());
     }
 
-    /**
-     * A spent challenge: its bytes, and which step-up minted it.
-     *
-     * <p>The factor travels with the challenge so the transition weighs the hold on the credential actually
-     * presented, rather than on whatever the account happens to hold by the time the record arrives. Those
-     * can differ by minutes, and the difference is exactly the attack: mint a factor, spend it at once.
-     */
     public record Spent(byte[] challenge, AuthFactor factor, Instant factorCreatedAt) {
     }
 
-    /** Burns every unspent challenge of one purpose, which is what cancelling a transition owes. */
     @Transactional
     public void burnUnspent(String account, Purpose purpose, Instant now) {
         for (AuthorityChallenge row : repository.findByAccountAndPurposeAndSpentAtIsNull(account, purpose)) {
@@ -143,7 +99,6 @@ public class AuthorityChallengeService {
         }
     }
 
-    /** The factor a spent challenge was minted on, which the transition weighs the hold against. */
     @Transactional(readOnly = true)
     public java.util.Optional<AuthorityChallenge> find(String challengeB64) {
         if (!StringUtils.hasText(challengeB64)) {
@@ -158,13 +113,11 @@ public class AuthorityChallengeService {
     }
 
     private static AuthorityTransitionException refused(String reason) {
-        // The reason is logged, never returned: a caller learns only that the challenge did not hold.
         log.warn("Authority challenge refused: {}", reason);
         return new AuthorityTransitionException(HttpStatus.FORBIDDEN, "authority_challenge_invalid",
                 "That confirmation has expired. Please start again.");
     }
 
-    /** SHA-256 of the bearer token, which is what binds a challenge to one acting session. */
     public static String sessionHash(String bearerToken) {
         return sha256Hex(bearerToken == null ? "" : bearerToken);
     }
@@ -194,13 +147,6 @@ public class AuthorityChallengeService {
         }
     }
 
-    /**
-     * A freshly minted challenge.
-     *
-     * @param challenge base64url, returned once
-     * @param expiresAt when it stops being spendable, which is also the age limit on the step-up that
-     *                  minted it
-     */
     public record Minted(String challenge, Instant expiresAt) {
     }
 }

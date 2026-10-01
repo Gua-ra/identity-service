@@ -15,27 +15,8 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.PublicationProperties;
 
 /**
- * Refuses to start a deployment that would publish authority heads it cannot publish honestly.
- *
- * <p>The same shape as {@link me.sarahlacerda.gua.identityservice.service.placement.PlacementSignerStartupCheck}
- * and {@link AuthorityNotificationGate}: a prerequisite that is missing makes the deployment refuse to start
- * rather than degrade. A publication path that quietly does nothing is worse than one that is off, because
- * the gap decision 12 names looks closed from the outside while every head is being skipped.
- *
- * <p>Four things are checked, and each one is a way of publishing a head that would be a lie or a no-op: no
- * homeserver named, so the signed object would have no roster identity to be verified under; no membership key
- * for the homeserver named, so nothing could be signed at all; a window longer than the codec will encode, so
- * every head would throw at signing time; and a re-issue interval that is not shorter than the window, so an
- * attestation would reach its expiry before it was ever refreshed.
- *
- * <p>Deliberately not checked here: that the roster entry exists and is ACTIVE, and that the configured key is
- * the private half of the key it publishes. {@code PlacementSignerStartupCheck} already reads the roster to
- * make exactly those two checks about exactly this key, so a deployment publishing heads and placements
- * verifies its roster identity once rather than twice. A deployment that publishes heads and not placements
- * does not verify it, which is stated in that check's own terms and is why the resolver verifies every head
- * against the roster at acceptance time regardless.
- *
- * <p>Inert unless {@code identity.authority.publication.enabled} is on.
+ * Does not check that the roster entry is ACTIVE or that the key matches it. PlacementSignerStartupCheck
+ * does, and only when placement publishing is on.
  */
 @Component
 public class AuthorityPublicationStartupCheck {
@@ -81,9 +62,6 @@ public class AuthorityPublicationStartupCheck {
                     + "set, so there is nowhere to publish a head to"));
         }
         verifyWindow(publication);
-        // Decoded here, once, so a malformed key in the Secret fails the deployment that publishes rather
-        // than every transition it runs. The signer parses lazily precisely so that a deployment with
-        // publishing off is not affected by the same key.
         try {
             signer.verifySigningKey();
         } catch (RuntimeException ex) {

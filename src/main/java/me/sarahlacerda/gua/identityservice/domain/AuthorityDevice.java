@@ -18,13 +18,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/**
- * One device authority key the chain has activated (ADM-009 decision 5).
- *
- * <p>Per device, never one key copied to every device. Copying makes revocation meaningless, because the
- * revoked device still holds the key the account is defined by, and it turns any single device compromise
- * into a permanent account compromise with no way back short of recovery.
- */
 @Getter
 @Setter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -33,14 +26,8 @@ import lombok.Setter;
 public class AuthorityDevice {
 
     public enum State {
-        /** Counts as authority, may sign. */
         ACTIVE,
-        /**
-         * Granted, inside its own opposition window. May not sign a grant, a revocation or an approval,
-         * and does not count toward the active device a revocation must leave behind.
-         */
         QUARANTINED,
-        /** Removed by a revocation, by a recovery, or by an opposition to its own grant. */
         REVOKED
     }
 
@@ -90,12 +77,10 @@ public class AuthorityDevice {
         return device;
     }
 
-    /** Whether the quarantine of decision 5 is still running at {@code now}. */
     public boolean isQuarantined(Instant now) {
         return state == State.QUARANTINED && quarantineUntil != null && now.isBefore(quarantineUntil);
     }
 
-    /** Active and past its quarantine: the only thing that counts as this account's authority. */
     public boolean isUnquarantinedActive(Instant now) {
         if (state == State.REVOKED) {
             return false;

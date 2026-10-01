@@ -32,22 +32,6 @@ import me.sarahlacerda.gua.identityservice.service.authority.AuthorityChallengeS
 import me.sarahlacerda.gua.identityservice.service.authority.AuthorityNotificationRegistry;
 import me.sarahlacerda.gua.identityservice.service.authority.AuthorityNotifications;
 
-/**
- * The security-notification channel every window in ADM-009 depends on (gate 2).
- *
- * <p>Deliberately not a Matrix pusher, and deliberately not this service's existing device-notification seam.
- * A pusher lives under a session, and completing an account recovery ends every session of the user in the
- * same transaction that mints the attacker's PIN, so a pusher would die with the thing the attacker had just
- * destroyed. These registrations are keyed on an installation id the client keeps in the keychain or keystore,
- * and no recovery path can reach them.
- *
- * <p>Bearer-gated, and every endpoint answers 503 while {@code identity.authority.enabled} is false, and 503
- * again while {@code identity.authority.notifications.enabled} is false, so a deployment that has not turned
- * the channel on holds no push destinations at all.
- *
- * <p>There is no OTP here either (ADM-009 decision 9). The registration says nothing about a phone number,
- * and the notification names a label and a time.
- */
 @RestController
 @RequestMapping("/account/security-notifications")
 @Validated
@@ -151,18 +135,10 @@ public class AccountAuthorityNotificationController {
                         request.getPasskeyStepUpId(), request.getPasskeyCredential(), request.getPin(),
                         request.getChallenge(), request.getSignature()),
                 sessionHash(servletRequest), servletRequest.getRemoteAddr(), clock.instant());
-        // Announced here rather than inside the registry, because the notifier reads the registrations and a
-        // registry that called it back would be a cycle in the wiring rather than a decision.
         notifications.channelRemoved(userId, label);
         return ResponseEntity.noContent().build();
     }
 
-    /**
-     * Binds a challenge to the exact access token that asked for it, exactly as the chain endpoints do.
-     *
-     * <p>Hashed, so nothing holds the token, and read from the header rather than from anything the caller
-     * sends beside it.
-     */
     private static String sessionHash(HttpServletRequest request) {
         String header = request.getHeader("Authorization");
         return AuthorityChallengeService.sessionHash(header == null ? "" : header);

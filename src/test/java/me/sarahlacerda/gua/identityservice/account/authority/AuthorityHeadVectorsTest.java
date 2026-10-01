@@ -20,25 +20,7 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
-/**
- * The published golden vectors (docs/specs/authority-head-vectors.v1.json) are the contract the iOS and
- * Android verifiers will check a published head against, so every byte of them is recomputed here: the
- * canonical bytes, the signature preimage, the deterministic signature, the payload hash the
- * {@code ACCOUNT_AUTHORITY} leaf commits, and every case a conforming decoder must refuse together with the
- * rule that refuses it.
- *
- * <p>Written in the shape of {@link AuthorityVectorsTest}, which does the same job for the chain records, and
- * for the same reason: neither client has ever verified anything cryptographic against the resolver, so this
- * is the first signature either of them will check, and a byte format that only one implementation has ever
- * produced is a format with one implementation.
- *
- * <p>The two files are deliberately joined: the head's {@code headHash} is the record hash of the
- * {@code AdoptRoot} in the chain vectors, so a client that has implemented both can check that the head it
- * would verify is the head that chain reaches.
- *
- * <p>The key is the RFC 8032 section 7.1 TEST 3 constant, which is what makes the signature reproducible. It
- * is a published value and signs nothing real.
- */
+/** Recomputes the published head vectors, which the iOS and Android verifiers are tested against. */
 class AuthorityHeadVectorsTest {
 
     private static final Path VECTORS = Path.of("docs/specs/authority-head-vectors.v1.json");
@@ -82,9 +64,6 @@ class AuthorityHeadVectorsTest {
 
         byte[] decoded = Base64.getUrlDecoder().decode(recordB64);
 
-        // The resolver's placement verifier requires decode-then-re-encode to equal the input before it looks
-        // at anything else, so a head has one spelling on the wire as well as one in bytes. Unpadded, and the
-        // padded form is a different string.
         assertThat(Base64.getUrlEncoder().withoutPadding().encodeToString(decoded)).isEqualTo(recordB64);
         assertThat(recordB64).doesNotContain("=").doesNotContain("+").doesNotContain("/");
     }
@@ -128,8 +107,6 @@ class AuthorityHeadVectorsTest {
         assertThat(me.sarahlacerda.gua.identityservice.account.genesis.Ed25519Keys.verify(
                 HEX.parseHex(head.path("verifyingKeyHex").asText()), preimage, signature)).isTrue();
 
-        // A chain-record preimage over the same bytes must not verify: the magic is the signature domain and
-        // it is the only thing separating the two.
         byte[] wrongDomain = HEX.parseHex(head.path("canonicalHex").asText());
         assertThat(me.sarahlacerda.gua.identityservice.account.genesis.Ed25519Keys.verify(
                 HEX.parseHex(head.path("verifyingKeyHex").asText()), wrongDomain, signature)).isFalse();
@@ -174,8 +151,6 @@ class AuthorityHeadVectorsTest {
 
     @Test
     void theRejectionsCoverEveryRuleTheDecoderHas() throws Exception {
-        // A rule with no vector is a rule the ports are free to skip, which is how one implementation ends up
-        // being the specification.
         java.util.Set<String> reasons = new java.util.HashSet<>();
         for (JsonNode rejection : vectors().path("rejections")) {
             reasons.add(rejection.path("reason").asText());

@@ -16,17 +16,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/**
- * A key a new device has offered, waiting for an existing device to grant it (ADM-009 decision 5, revision 4).
- *
- * <p>The public half only. The new device generates its own key and never receives another device's, so what
- * crosses between the two phones is 32 public bytes and an eight-character fingerprint a human compares. A
- * holder of this row can sign nothing with it.
- *
- * <p>It expires quickly on purpose. A candidate is a step in a ceremony two people are performing right now,
- * and one left lying around is a key over which a grant could later be signed without anybody comparing
- * anything.
- */
 @Getter
 @Setter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

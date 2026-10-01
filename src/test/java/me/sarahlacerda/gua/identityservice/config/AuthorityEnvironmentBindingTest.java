@@ -17,27 +17,11 @@ import org.springframework.core.io.ClassPathResource;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The deployment contract: these exact environment variable names, and no others, turn the account
- * authority feature on.
- *
- * <p>This test exists because the names are written in a different repository. gua-deploy's
- * {@code k8s/scripts/deploy-env.sh} sets them on the dev deployment, and nothing in a compiler or in
- * this service's own tests would notice if a name there stopped matching a property here: a misspelt
- * variable binds nothing, the property keeps its default, and the service starts perfectly happily with
- * the feature off or, worse, on with an unmapped APNs topic. The first evidence would be an alert that
- * was never delivered, which is precisely the failure ADM-009 gate 2 exists to prevent.
- *
- * <p>The map of topics is the reason this is not paranoia. Every other value here is a placeholder in
- * {@code application.yml} that names its own variable, so it is at least greppable from one side. The
- * topics map has no placeholder, because a map cannot have one: it is bound by Spring's relaxed rules
- * straight off the environment, where {@code ..._TOPICS_GLOBAL_GUA_DEV_IOS_PROD} becomes the key
- * {@code global.gua.dev.ios.prod}. That rule is real but it is not obvious, and an operator's first
- * guess, an indexed pair of {@code _0_APP_ID} and {@code _0_TOPIC}, silently produces two junk keys and
- * an unmapped app id. So the rule is asserted rather than assumed.
+ * The variable names are set in another repository (gua-deploy). A misspelt one binds nothing and the property
+ * keeps its default, so the names are pinned here.
  */
 class AuthorityEnvironmentBindingTest {
 
-    /** Values every deployment already sets, here only so placeholders elsewhere resolve. */
     private static final Map<String, Object> BASE = Map.of(
             "IDENTITY_MATRIX_ADMIN_API_BASE_URL", "https://example.invalid",
             "IDENTITY_MATRIX_CLIENT_API_BASE_URL", "https://example.invalid",
@@ -46,9 +30,6 @@ class AuthorityEnvironmentBindingTest {
             "IDENTITY_DIRECTORY_PEPPER", "unused-in-this-test",
             "IDENTITY_BASE_URL", "https://example.invalid");
 
-    /**
-     * Exactly what gua-deploy's dev block sets, transcribed. A change on either side breaks this.
-     */
     private static final Map<String, Object> DEV_AUTHORITY = Map.ofEntries(
             Map.entry("IDENTITY_AUTHORITY_ENABLED", "true"),
             Map.entry("IDENTITY_AUTHORITY_ADOPTION_PERMITTED", "true"),
@@ -83,8 +64,7 @@ class AuthorityEnvironmentBindingTest {
         IdentityServiceProperties.ApnsProperties apns =
                 bind(DEV_AUTHORITY).getAuthority().getNotifications().getApns();
 
-        // The key is the app id AppSettings.pusherAppID sends from a release build of the QA app, and the
-        // value is the bundle id, which is the APNs topic the dev signing key is restricted to.
+        // A map has no placeholder in application.yml: relaxed binding derives the key from the variable name.
         assertThat(apns.getTopics()).containsExactly(Map.entry("global.gua.dev.ios.prod", "global.gua.dev"));
         assertThat(apns.getBaseUrl()).isEqualTo("https://api.push.apple.com");
         assertThat(apns.getKeyId()).isEqualTo("AAAAAAAAAA");
@@ -98,8 +78,6 @@ class AuthorityEnvironmentBindingTest {
         wrong.put("IDENTITY_AUTHORITY_APNS_TOPICS_0_APP_ID", "global.gua.dev.ios.prod");
         wrong.put("IDENTITY_AUTHORITY_APNS_TOPICS_0_TOPIC", "global.gua.dev");
 
-        // Not a failure anyone would see at startup, which is the whole point: the app id is simply not
-        // mapped, and AuthorityApnsTransport would then send to a topic that is the app id verbatim.
         assertThat(bind(wrong).getAuthority().getNotifications().getApns().getTopics())
                 .doesNotContainKey("global.gua.dev.ios.prod");
     }
@@ -117,7 +95,6 @@ class AuthorityEnvironmentBindingTest {
         assertThat(authority.getOppositionWindow()).hasHours(72);
     }
 
-    /** Binds the real application.yml with the given variables in front of it, as Kubernetes would. */
     private static IdentityServiceProperties bind(Map<String, Object> variables) throws IOException {
         Map<String, Object> environment = new LinkedHashMap<>(BASE);
         environment.putAll(variables);

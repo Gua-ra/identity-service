@@ -20,18 +20,7 @@ import lombok.Setter;
 
 import me.sarahlacerda.gua.identityservice.service.security.AuthFactor;
 
-/**
- * A server challenge minted for one transition (ADM-009 decision 2, "one preimage rule, for every type").
- *
- * <p>Only the SHA-256 of the challenge is stored, the way {@code account_genesis} stores only the hash of an
- * attach handle: a dump of this table hands nobody a challenge to sign. The row is held against the account
- * and the acting stepped-up session together, is single use, and is burned on acceptance <em>and</em> on
- * refusal, so a captured request body is useless.
- *
- * <p>{@code factor} and {@code factorCreatedAt} record which step-up minted it and when that credential came
- * into being, so the fresh-factor hold is weighed on the credential actually presented rather than on
- * whatever the account happens to hold now.
- */
+/** Stores only the SHA-256 of the challenge. Single use: burned on acceptance and on refusal. */
 @Getter
 @Setter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -39,19 +28,9 @@ import me.sarahlacerda.gua.identityservice.service.security.AuthFactor;
 @Table(name = "account_authority_challenge")
 public class AuthorityChallenge {
 
-    /** What the challenge may be spent on. A step-up for one purpose does not carry over to another. */
     public enum Purpose {
         ADOPT, GRANT, REVOKE, RECOVER, APPROVE,
-        /**
-         * A signed {@code Oppose} record. It asks for no factor: the authorization is a signature by a key
-         * the chain has active and unquarantined, and the hold gates starting a transition and never
-         * opposing one.
-         */
         OPPOSE,
-        /**
-         * Binding a security-notification registration to a device authority key, or removing one that
-         * carries such a binding. The challenge is there so the device's signature is not replayable.
-         */
         NOTIFY
     }
 
@@ -72,11 +51,7 @@ public class AuthorityChallenge {
     @Column(name = "challenge_hash", nullable = false, length = 64, unique = true)
     private String challengeHash;
 
-    /**
-     * Null for a purpose whose step-up is no factor at all: the browser-started approval, which a device
-     * signs afterwards, and the notification binding, which a device key signs. A sentinel value would be
-     * worse than null, because the fresh-factor hold reads this column.
-     */
+    /** Null when the purpose needs no factor. Do not use a sentinel: the fresh-factor hold reads this column. */
     @Column(name = "factor", length = 16)
     @Enumerated(EnumType.STRING)
     private AuthFactor factor;

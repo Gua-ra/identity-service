@@ -5,7 +5,6 @@ import jakarta.validation.constraints.NotBlank;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
-/** One active device's signature over exactly this approval. */
 @Schema(description = "An authority device's signature over one pending approval")
 public class AuthorityApprovalSignRequest {
 

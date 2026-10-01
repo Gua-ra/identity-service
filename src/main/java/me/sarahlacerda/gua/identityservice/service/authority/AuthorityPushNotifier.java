@@ -14,31 +14,7 @@ import org.springframework.util.StringUtils;
 
 import me.sarahlacerda.gua.identityservice.domain.AuthorityNotificationRegistration;
 
-/**
- * The channel ADM-009 gate 2 asks for: a registration this service owns, delivered straight to APNs or FCM.
- *
- * <p><b>Why {@link #isOutOfBand()} may answer true here.</b> The two channels gate 2 rejects fail for
- * specific reasons, and this one fails neither. It is not the account's phone number, so a SIM swap does not
- * hold it. It is not a session, so the sign-out an account recovery performs does not empty it: the row is
- * keyed on an installation id the client keeps in its keychain or keystore, and
- * {@code AccountRecoveryService.complete} writes {@code identity_users} and {@code passkey_credentials} only,
- * while the session revocation runs in another service against another database. Neither can reach this table
- * even by mistake, which is what {@code AuthorityNotificationSurvivesRecoveryTest} drives and asserts against
- * the shipped recovery path rather than a mock.
- *
- * <p>It answers true only when a transport is actually configured. A deployment that turns the chain on
- * without an APNs or FCM credential still fails to start, because a bean that could not send anything is not
- * a channel however it is wired.
- *
- * <p>{@link #reachesOutOfBand(String)} is the per-account half, and it is the one a transition consults: gate
- * 2 is a claim that <em>this</em> account holder will be told, and an account with no live registration has
- * no such claim behind it. The single-install case is the honest residual: there the only registration is the
- * install performing the transition, so on a stolen unlocked phone the alert reaches the thief. That is not
- * closed here and the README says so.
- *
- * <p>A send that fails is logged and swallowed by {@link AuthorityNotifications}, so a transport being down
- * never rolls back a record the chain has already accepted.
- */
+/** Counts as out of band only while a transport is configured. */
 @Component
 public class AuthorityPushNotifier implements AuthorityNotifier {
 
@@ -73,8 +49,7 @@ public class AuthorityPushNotifier implements AuthorityNotifier {
 
     @Override
     public void notifyTransitionPending(String userId, String transition, String deviceLabel, Instant effectiveAt) {
-        // The only three things a notification may carry: what was started, which device it names, and when it
-        // completes. No room, no message, no phone number, no account identifier.
+        // A notification may carry only the transition, the device label and the completion time.
         send(userId, "Check this was you", sentence(transition, deviceLabel)
                 + " It completes on " + WHEN.format(effectiveAt) + " unless you say no in the app.");
     }
@@ -97,7 +72,6 @@ public class AuthorityPushNotifier implements AuthorityNotifier {
                         + "the app now.");
     }
 
-    /** The transition in the reader's own words, which is what makes an alert worth reacting to. */
     private static String sentence(String transition, String deviceLabel) {
         String device = StringUtils.hasText(deviceLabel) ? "\"" + deviceLabel + "\"" : "a device";
         return switch (transition == null ? "" : transition) {
@@ -113,16 +87,10 @@ public class AuthorityPushNotifier implements AuthorityNotifier {
 
     private void send(String userId, String title, String body) {
         if (!StringUtils.hasText(userId)) {
-            // Loud, because there is no such thing as a notification with nobody to send it to. Silence here
-            // let three of the four notification kinds be dropped on every account for as long as they
-            // existed, with nothing in any log to say so. AuthorityNotifications catches and logs this, so a
-            // caller with no holder to name still cannot roll back a transition the chain accepted.
             throw new IllegalStateException("a security notification was raised with no account holder to send "
                     + "it to");
         }
         if (!isOutOfBand()) {
-            // Nothing is configured. Silent rather than an error: the startup gate is what refuses a
-            // deployment that turned the chain on with no channel at all.
             return;
         }
         Instant now = clock.instant();

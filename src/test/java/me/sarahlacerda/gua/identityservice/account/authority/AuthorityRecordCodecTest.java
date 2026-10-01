@@ -10,12 +10,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
-/**
- * The refusal rules of ADM-009 decision 2, each named by the token a client will see.
- *
- * <p>Every rule is tested as a behaviour rather than as the presence of a line, because the decoder is the only
- * thing standing between a malformed record and a chain that commits it forever.
- */
 class AuthorityRecordCodecTest {
 
     private final TestEd25519.Pair device = TestEd25519.generate();
@@ -49,8 +43,6 @@ class AuthorityRecordCodecTest {
         assertThat(record.label()).isEqualTo("iPhone");
         assertThat(record.accountReference()).isEqualTo(AuthorityRecords.REFERENCE);
         assertThat(record.prevHashHex()).isEqualTo(AuthorityRecord.emptyHeadHash());
-        // Signed by the key it installs, which is what verifyingKey reports for a type carrying no
-        // authorizingKey field.
         assertThat(record.verifyingKey()).isEqualTo(device.rawPublicKey());
     }
 
@@ -93,7 +85,6 @@ class AuthorityRecordCodecTest {
                 new byte[32]);
 
         assertThat(reasonFor(AuthorityRecords.withSeq(bytes, 0))).isEqualTo("bad_seq");
-        // An unsigned field read as a negative long is the same defect and is refused by the same rule.
         assertThat(reasonFor(AuthorityRecords.withSeq(bytes, -1))).isEqualTo("bad_seq");
     }
 
@@ -102,8 +93,7 @@ class AuthorityRecordCodecTest {
         byte[] bytes = AuthorityRecords.adoptRoot(device.rawPublicKey(), recovery.rawPublicKey(), "a", 1,
                 new byte[32]);
 
-        // The all-zero encoding decodes to a valid low-order point, so point decoding alone would let it
-        // through. That is why the two rules are separate.
+        // The all-zero encoding decodes to a valid low-order point, so point decoding alone does not refuse it.
         assertThat(reasonFor(AuthorityRecords.withBytes(bytes, 80, new byte[32]))).isEqualTo("zero_device_key");
         assertThat(reasonFor(AuthorityRecords.withBytes(bytes, 113, new byte[32]))).isEqualTo("zero_recovery_key");
     }
@@ -207,8 +197,6 @@ class AuthorityRecordCodecTest {
         byte[] byAccountRecoveryWithAKey = AuthorityRecords.recovery(device.rawPublicKey(), recovery.rawPublicKey(),
                 AuthorityRecord.AUTHORIZATION_ACCOUNT_RECOVERY, authorizing.rawPublicKey(), 2, new byte[32]);
 
-        // One direction alone would leave a record that says it was authorized by a key and names none, or one
-        // that says it was not and names one anyway.
         assertThat(reasonFor(byRecoveryKeyWithNoKey)).isEqualTo("authorizing_key_required");
         assertThat(reasonFor(byAccountRecoveryWithAKey)).isEqualTo("authorizing_key_not_permitted");
     }
@@ -249,8 +237,6 @@ class AuthorityRecordCodecTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    // --- Oppose (GUAO) ------------------------------------------------------
-
     @Test
     void anOpposeRoundTripsAndNamesTheRecordItObjectsTo() {
         byte[] opposed = AuthorityRecord.sha256("the pending record".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -262,7 +248,6 @@ class AuthorityRecordCodecTest {
         assertThat(record.type()).isEqualTo(AuthorityRecordType.OPPOSE);
         assertThat(record.opposedRecordHash()).isEqualTo(opposed);
         assertThat(record.verifyingKey()).isEqualTo(authorizing.rawPublicKey());
-        // It carries no device key: it objects to a record rather than doing anything to the device set.
         assertThat(record.deviceKey()).isNull();
     }
 
@@ -270,8 +255,6 @@ class AuthorityRecordCodecTest {
     void anOpposeThatNamesNothingIsRefused() {
         byte[] bytes = AuthorityRecords.oppose(new byte[32], authorizing.rawPublicKey(), 2, new byte[32]);
 
-        // The value a caller who filled in nothing produces. A record objecting to nothing in particular
-        // would cancel whatever happened to be pending.
         assertThat(reasonFor(bytes)).isEqualTo("zero_opposed_record");
     }
 
@@ -288,8 +271,6 @@ class AuthorityRecordCodecTest {
 
     @Test
     void everyTypeHasItsOwnMagicAndLength() {
-        // The magic is the signature domain, so two types sharing one would let a record be replayed as the
-        // other. Checked as a set rather than one by one, because that is the property.
         assertThat(java.util.Arrays.stream(AuthorityRecordType.values()).map(AuthorityRecordType::magic).toList())
                 .doesNotHaveDuplicates()
                 .containsExactlyInAnyOrder("GUAA", "GUAD", "GUAX", "GUAR", "GUAO");

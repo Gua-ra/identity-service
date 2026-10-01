@@ -211,7 +211,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_security_notification_device_install
 CREATE INDEX IF NOT EXISTS idx_security_notification_device_user
     ON security_notification_device (user_id);
 
--- V14 (continued): a challenge minted for a purpose with no factor has none to record.
+-- V14 (continued)
 ALTER TABLE account_authority_challenge
     ALTER COLUMN factor DROP NOT NULL;
 

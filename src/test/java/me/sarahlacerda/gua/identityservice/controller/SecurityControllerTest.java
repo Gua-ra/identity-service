@@ -274,15 +274,6 @@ class SecurityControllerTest {
         }
     }
 
-    // --- The authority step-up sheet (ADM-009 decision 4 step 2) ---
-
-    /**
-     * The entry point the Android client needs: an account that cannot run a WebAuthn assertion natively asks
-     * for a page that can, scoped to one transition, and gets a one-time URL on the sign-in origin.
-     *
-     * <p>What the session carries is the whole of the binding: the purpose it was opened for and the hash of
-     * the access token that asked. Neither is anything the page or the client can change afterwards.
-     */
     @Test
     void anAuthorityStepUpSheetIsMintedForOneTransitionAndOneToken() throws Exception {
         loginProperties.getEnroll().setRedirectUri("global.gua:/oidc");
@@ -301,28 +292,17 @@ class SecurityControllerTest {
         org.junit.jupiter.api.Assertions.assertEquals(LoginSession.Phase.AUTHORITY_STEP_UP, session.getPhase());
         org.junit.jupiter.api.Assertions.assertEquals("ADOPT", session.getAuthorityPurpose());
         org.junit.jupiter.api.Assertions.assertEquals("global.gua:/oidc", session.getRedirectUri());
-        // The token's hash, never the token, and the same digest the challenge endpoint computes.
         org.junit.jupiter.api.Assertions.assertEquals(
                 me.sarahlacerda.gua.identityservice.service.authority.AuthorityWebStepUpService
                         .sessionHash("Bearer token-abc"),
                 session.getAuthoritySessionHash());
-        // It is not an enrollment: nothing about this session may store a factor.
         org.junit.jupiter.api.Assertions.assertFalse(session.isEnroll());
         org.junit.jupiter.api.Assertions.assertNull(session.getEnrollTarget());
-        // The flag, the native-session rule and the purpose were all asked before anything was created.
         verify(authorityWebStepUps).requireMayOpen(org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.eq(
                         me.sarahlacerda.gua.identityservice.domain.AuthorityChallenge.Purpose.ADOPT));
     }
 
-    /**
-     * An account holding neither a passkey this deployment can assert nor a PIN is told so at the entry point,
-     * rather than being walked into a page whose every button is already refused.
-     *
-     * <p>That account cannot confirm an authority transition at all, and no code sent to its number changes
-     * that: ADM-009 decision 9 forbids the one proof it could otherwise offer. Its way to authority is to add
-     * a factor first, which is what the refusal says.
-     */
     @Test
     void anAccountWithNothingToProveWithIsRefusedBeforeASheetExists() throws Exception {
         org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
@@ -340,10 +320,8 @@ class SecurityControllerTest {
                 .create(org.mockito.ArgumentMatchers.any(LoginSession.class));
     }
 
-    /** A body with no transition names nothing to confirm, and is refused as a malformed request. */
     @Test
     void aSheetIsNeverOpenedWithoutATransitionToConfirm() throws Exception {
-        // No stubbing at all: the body is refused before the caller is even resolved.
         mockMvc.perform(MockMvcRequestBuilders.post("/security/authority/step-up/start")
                 .header("Authorization", "Bearer token-abc")
                 .contentType(MediaType.APPLICATION_JSON)

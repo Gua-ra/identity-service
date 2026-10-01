@@ -279,10 +279,6 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse(ex.getCode(), ex.getMessage()));
         }
 
-        /**
-         * An authority transition that was refused for a reason other than malformed bytes. Carries the stable
-         * code and, on a backoff or a cooldown, how long to wait.
-         */
         @ExceptionHandler(AuthorityTransitionException.class)
         public ResponseEntity<ErrorResponse> handleAuthorityTransition(AuthorityTransitionException ex) {
                 ResponseEntity.BodyBuilder builder = ResponseEntity.status(ex.getStatus());
@@ -294,11 +290,6 @@ public class RestExceptionHandler {
                                 : new ErrorResponse(ex.getCode(), ex.getMessage(), ex.getRetryAfterSeconds()));
         }
 
-        /**
-         * A malformed authority record. The decoder's rule name is returned, exactly as for a malformed
-         * genesis, so a client implementing the codec can tell which rule refused it; the bytes are never
-         * echoed back.
-         */
         @ExceptionHandler(InvalidAuthorityRecordException.class)
         public ResponseEntity<ErrorResponse> handleInvalidAuthorityRecord(InvalidAuthorityRecordException ex) {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)

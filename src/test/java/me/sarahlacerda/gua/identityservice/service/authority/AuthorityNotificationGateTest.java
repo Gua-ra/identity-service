@@ -11,15 +11,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
-/**
- * ADM-009 gate 2, and the two window rules beside it, as a startup refusal rather than as a sentence in a
- * document.
- *
- * <p>Every window in ADM-009 rests on the account holder hearing that it is running. With only the channels this
- * service has today, a SIM-swap attacker holds the phone and the recovery that preceded them emptied the
- * sessions, so the window is unwitnessed and the delay protects nobody. That is why the gate blocks production
- * rather than being an aspiration.
- */
 class AuthorityNotificationGateTest {
 
     @Test
@@ -28,8 +19,6 @@ class AuthorityNotificationGateTest {
         authority.setOppositionWindow(Duration.ofMinutes(1));
         authority.setChallengeTtl(Duration.ofDays(1));
 
-        // Inert. Nothing is read, so a half-configured deployment with the flag off behaves exactly as it did
-        // before the feature existed.
         AuthorityNotificationGate.validate(authority, false);
     }
 
@@ -46,9 +35,6 @@ class AuthorityNotificationGateTest {
 
     @Test
     void aTransportWhoseKeyDoesNotLoadRefusesToStart() throws Exception {
-        // The failure this rule exists for. A key stored as base64 of its PEM file rather than of its DER
-        // left both transports counting as channels: the deployment started, the first ADOPT_ROOT went
-        // pending, and the send failed with the window already running. Configured has to mean signable.
         AuthorityProperties authority = enabledWithApnsKey("bm90LWEta2V5");
 
         assertThatThrownBy(() -> AuthorityNotificationGate.validate(authority, true))
@@ -59,9 +45,6 @@ class AuthorityNotificationGateTest {
 
     @Test
     void aStartThatLoadsAKeySaysSo() throws Exception {
-        // The one fact an operator cannot read off the manifest. "IDENTITY_AUTHORITY_APNS_PRIVATE_KEY
-        // is set" and "that value is a key this service can sign with" are different, and only the
-        // second one is a channel. A startup that proves the second silently leaves them guessing.
         ch.qos.logback.classic.Logger logger =
                 (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(AuthorityNotificationGate.class);
         java.util.List<String> lines = new java.util.ArrayList<>();
@@ -128,8 +111,6 @@ class AuthorityNotificationGateTest {
         AuthorityNotifications notifications =
                 new AuthorityNotifications(java.util.List.of(new ThrowingForTest(), new OutOfBandForTest()));
 
-        // A transport being down must not roll back a transition that was already accepted, and it must not
-        // stop the holder being told on the other channels.
         notifications.pending("@a:gua", "ADOPT_ROOT", "iPhone", java.time.Instant.now());
         notifications.cancelled("@a:gua", "ADOPT_ROOT", "iPhone");
         notifications.completed("@a:gua", "ADOPT_ROOT", "iPhone");
@@ -178,8 +159,6 @@ class AuthorityNotificationGateTest {
         AuthorityProperties authority = enabledWithAChannel();
         authority.setChallengeTtl(Duration.ofHours(1));
 
-        // A longer TTL would make the step-up older than the record it authorizes, which is the freshness
-        // defect the whole preimage rule exists to close.
         assertThatThrownBy(() -> AuthorityNotificationGate.validate(authority, true))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("challenge-ttl");
@@ -196,7 +175,6 @@ class AuthorityNotificationGateTest {
         return authority;
     }
 
-    /** Stands in for the channel gate 2 requires, so the other rules can be tested past it. */
     private static final class OutOfBandForTest implements AuthorityNotifier {
 
         @Override

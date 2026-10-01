@@ -15,42 +15,19 @@ import org.springframework.web.reactive.function.client.WebClient;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import reactor.core.publisher.Mono;
 
-/**
- * The one resolver surface the authority publication talks to (ADM-009 decision 12).
- *
- * <p>The same envelope shape and the same outcomes as the placement path: {@code {record, signature}}, the
- * canonical bytes base64url unpadded and the detached signature base64, to a single endpoint that verifies
- * the object before it reads any stored state. That is what lets the endpoint be public and unauthenticated
- * on the far side, exactly as {@code POST /placement/records} is: a head that does not verify under an ACTIVE
- * roster member's key is refused before anything is looked up, so there is no credential for a caller to
- * hold and no state for an unauthenticated caller to probe.
- *
- * <p>The resolver half of this is not in this repository and is not implemented yet. This client therefore
- * reports {@code REJECTED} against a resolver that does not serve the path, which is the correct reading:
- * nothing was published. It is also why publishing defaults off. Rolling it out is two flags, in this order:
- * the resolver accepts heads, then this deployment sends them.
- */
+/** The resolver side is not implemented yet. A resolver that does not serve the path yields REJECTED. */
 @Component
 public class ResolverAuthorityHeadClient {
 
     private static final Logger log = LoggerFactory.getLogger(ResolverAuthorityHeadClient.class);
 
-    /** The reserved path for the leaf of decision 12. */
     static final String HEADS_PATH = "/account/authority/heads";
 
-    /** What happened to one publish attempt. */
     public enum PublishOutcome {
-        /** The resolver stored the head and committed its leaf. */
         PUBLISHED,
-        /**
-         * The resolver holds a head for this account at the same or a later position. Not an error: the log
-         * is append-only and a head already committed needs no second leaf, which is what makes resending
-         * the stored bytes safe.
-         */
+        /** Not an error: the resolver already holds this head or a later one. */
         ALREADY_PUBLISHED,
-        /** The resolver refused it: bad signature, inactive signer, bad window, unreadable bytes. */
         REJECTED,
-        /** The resolver could not be reached, or answered an unexpected status. */
         UNAVAILABLE
     }
 
@@ -74,14 +51,6 @@ public class ResolverAuthorityHeadClient {
         return configured;
     }
 
-    /**
-     * Publishes one signed head.
-     *
-     * <p>The bytes are passed through exactly as they were stored. A retry is therefore byte-identical to the
-     * attempt it retries, so it commits the same payload hash and the resolver can answer
-     * {@code ALREADY_PUBLISHED} instead of appending a second leaf. That is the whole of what makes a
-     * republish idempotent, and it is why nothing here re-signs.
-     */
     public PublishOutcome publish(String recordB64, String signatureB64) {
         if (!configured || recordB64 == null || signatureB64 == null) {
             return PublishOutcome.UNAVAILABLE;

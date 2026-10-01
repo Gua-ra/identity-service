@@ -6,7 +6,6 @@ import java.util.Arrays;
 
 import me.sarahlacerda.gua.identityservice.account.genesis.AccountId;
 
-/** Builds canonical authority records for tests, so each test names only the field it is about. */
 public final class AuthorityRecords {
 
     public static final byte[] REFERENCE =

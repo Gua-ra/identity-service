@@ -14,13 +14,7 @@ import org.springframework.data.repository.query.Param;
 import me.sarahlacerda.gua.identityservice.domain.AuthorityChallenge;
 import me.sarahlacerda.gua.identityservice.domain.AuthorityChallenge.Purpose;
 
-/**
- * Server challenges, looked up only by the hash of the bytes the caller returned.
- *
- * <p>Deliberately absent: any finder that returns a challenge by account or by purpose alone. A challenge
- * is proof that the holder was handed those exact bytes; a lookup that did not start from them would let a
- * caller spend a challenge it never received.
- */
+/** Lookups must start from the challenge hash, never from the account or the purpose alone. */
 public interface AuthorityChallengeRepository extends JpaRepository<AuthorityChallenge, UUID> {
 
     Optional<AuthorityChallenge> findByChallengeHash(String challengeHash);

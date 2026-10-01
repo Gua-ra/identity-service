@@ -5,13 +5,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
-/**
- * Removes one passkey credential, with the step-up that authorizes it.
- *
- * <p>There is no field for saying a passkey is unavailable on this device, only the absence of an assertion,
- * and the PIN branch is never removed. That claim costs an attacker nothing, which is why no request in this
- * service accepts it.
- */
 @Schema(description = "Remove one passkey credential after a step-up")
 public class PasskeyRemoveRequest {
 

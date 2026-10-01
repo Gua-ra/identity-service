@@ -24,15 +24,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/**
- * What each transport actually puts on the wire, because a client now depends on it.
- *
- * <p>Both push services hand a message to a foregrounded app instead of to the notification tray, and both
- * clients route what arrives through a handler that expects a Matrix push. Without a marker beside the
- * alert, an authority warning reaches an owner who is looking at their phone and is discarded there. The
- * marker is the contract that lets the client tell one from the other, so it is pinned here rather than
- * left to a comment.
- */
 class AuthorityAlertPayloadTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-09-25T22:00:00Z"), ZoneOffset.UTC);
@@ -63,8 +54,6 @@ class AuthorityAlertPayloadTest {
 
         String body = bodyOf(http);
         assertThat(body).contains("\"" + AuthorityPushTransport.ALERT_MARKER + "\":\"1\"");
-        // In data as well as in notification: what a foregrounded app receives is the data map, and it has
-        // to be able to draw the same words the tray would have drawn.
         assertThat(body).contains("\"data\":{");
         assertThat(body).contains("\"body\":\"A device asked\"");
     }
@@ -75,7 +64,6 @@ class AuthorityAlertPayloadTest {
         notifications.getApns().setBaseUrl("https://api.push.apple.com");
         notifications.getApns().setKeyId("AAAAAAAAAA");
         notifications.getApns().setTeamId("BBBBBBBBBB");
-        // P-256 specifically: ES256 is what Apple accepts and what nimbus will sign with.
         KeyPairGenerator ec = KeyPairGenerator.getInstance("EC");
         ec.initialize(new java.security.spec.ECGenParameterSpec("secp256r1"));
         notifications.getApns().setPrivateKeyPkcs8Base64(
@@ -101,7 +89,6 @@ class AuthorityAlertPayloadTest {
         return read(captor.getValue());
     }
 
-    /** The publisher the JDK client would have drained, drained here instead. */
     private static String read(HttpRequest request) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         request.bodyPublisher().orElseThrow().subscribe(new Flow.Subscriber<>() {

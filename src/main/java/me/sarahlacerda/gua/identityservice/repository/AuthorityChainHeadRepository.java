@@ -12,13 +12,7 @@ import org.springframework.data.repository.query.Param;
 
 import me.sarahlacerda.gua.identityservice.domain.AuthorityChainHead;
 
-/**
- * The head row, and the lock every authority write takes on it (ADM-009 decision 3).
- *
- * <p>Deliberately absent: any method that writes a head without holding the lock. The compare-and-set on
- * {@code prevHash} and {@code seq} is only a compare-and-set because the row is read {@code FOR UPDATE}
- * first, so an unlocked read-then-save here would write one device's decision over another's.
- */
+/** Every write must first read the row FOR UPDATE. Do not add an unlocked read-then-save. */
 public interface AuthorityChainHeadRepository extends JpaRepository<AuthorityChainHead, String> {
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)

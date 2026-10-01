@@ -26,17 +26,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 /**
- * A spent challenge stays spent when the request that spent it is refused (ADM-009 decision 2).
- *
- * <p>This one has to be driven through a real transaction, because the defect it pins is invisible without
- * one. Every other test here runs inside a single test-managed transaction that never commits and never rolls
- * back, so a burn written into the caller's transaction looks perfectly durable; in production every refusal
- * after the spend throws out of that transaction and took the burn with it, and one passkey assertion or PIN
- * entry paid for unlimited submission attempts inside the challenge's fifteen minutes.
- *
- * <p>So the test transaction is switched off ({@code NOT_SUPPORTED}) and the caller's transaction is driven
- * explicitly, with the beans wired as Spring wires them: {@code REQUIRES_NEW} is applied by the proxy, and a
- * hand-constructed service has no proxy at all.
+ * Runs outside the test transaction and on Spring-wired beans: the caller's rollback has to be real, and
+ * {@code REQUIRES_NEW} is applied only through the proxy.
  */
 @DataJpaTest(properties = {
         "spring.flyway.enabled=false",
@@ -68,9 +59,6 @@ class AuthorityChallengeBurnTest {
                 .mint(ACCOUNT, SESSION, Purpose.ADOPT, AuthFactor.PASSKEY, NOW.minus(Duration.ofDays(30)), NOW)
                 .challenge());
 
-        // Exactly the shape of the submission path: the challenge is spent, and then something later refuses
-        // the record. AuthorityTransitionException and InvalidAuthorityRecordException are both unchecked, and
-        // nothing in the feature declares noRollbackFor.
         assertThatThrownBy(() -> transaction.execute(status -> {
             challenges.spend(ACCOUNT, SESSION, Purpose.ADOPT, challenge, NOW);
             throw new IllegalStateException("the record was refused after its challenge was spent");
@@ -78,7 +66,6 @@ class AuthorityChallengeBurnTest {
 
         assertThat(challenges.find(challenge).orElseThrow().getSpentAt()).isEqualTo(NOW);
 
-        // And the captured request body is not replayable with it, which is the property decision 2 states.
         AuthorityTransitionException refusal = catchThrowableOfType(
                 () -> transaction.execute(status -> challenges.spend(ACCOUNT, SESSION, Purpose.ADOPT, challenge,
                         NOW)),
@@ -94,7 +81,6 @@ class AuthorityChallengeBurnTest {
                 .mint(ACCOUNT, SESSION, Purpose.GRANT, AuthFactor.PIN, NOW.minus(Duration.ofDays(30)), NOW)
                 .challenge());
 
-        // Spent for another purpose: refused, and burned, so a caller cannot grind the four bindings.
         AuthorityTransitionException refusal = catchThrowableOfType(
                 () -> transaction.execute(status -> challenges.spend(ACCOUNT, SESSION, Purpose.REVOKE, challenge,
                         NOW)),
@@ -104,12 +90,6 @@ class AuthorityChallengeBurnTest {
         assertThat(repository.findByAccountAndPurposeAndSpentAtIsNull(ACCOUNT, Purpose.GRANT)).isEmpty();
     }
 
-    /**
-     * The three beans as the application wires them, so the proxy that carries {@code REQUIRES_NEW} exists.
-     *
-     * <p>The policy's user-security collaborator is not reached by anything here: no hold is weighed while a
-     * challenge is minted or spent.
-     */
     @TestConfiguration
     static class Beans {
 

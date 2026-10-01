@@ -53,15 +53,8 @@ public class LoginSession {
          */
         ENROLL_STEP_UP,
         /**
-         * An already-signed-in user confirming one authority transition, and nothing else (ADM-009 decision 4
-         * step 2). Reached only by the session {@code POST /security/authority/step-up/start} mints, which
-         * carries the purpose it is scoped to and the hash of the access token that asked for it. Two proofs
-         * are accepted here, a user-verifying passkey assertion and the account PIN, and there is no third:
-         * no code is sent to the account's number at this step, ever, by ADM-009 decision 9.
-         *
-         * <p>It never issues an authorization code and never stores a factor. All it leaves behind is a
-         * record that this account proved a factor for that one transition, which the authority challenge
-         * endpoint spends once.
+         * An already-signed-in user confirming one authority transition. It never issues an authorization
+         * code, never stores a factor and never sends a code to the account's number.
          */
         AUTHORITY_STEP_UP,
         /** An account holding no factor, after declining the passkey offer; must set a PIN. */
@@ -209,26 +202,9 @@ public class LoginSession {
      */
     private AuthFactor enrollStepUpFactor;
 
-    /**
-     * Which authority transition this session was opened to confirm (ADM-009 decision 4 step 2), as the
-     * {@code Purpose} name the authority challenge is minted against: {@code ADOPT}, {@code GRANT},
-     * {@code REVOKE} or {@code RECOVER}. Null for every session that is not an authority step-up, which is
-     * every session that existed before this step did.
-     *
-     * <p>Held as the name rather than as the enum so the session model, which is JSON in Redis, stays free of
-     * the authority domain: a value written by a newer build and read by an older one is then a string an
-     * older build ignores rather than a deserialization failure in the middle of somebody's login.
-     */
+    /** Held as the enum name so an older build reading the Redis JSON ignores it instead of failing. */
     private String authorityPurpose;
 
-    /**
-     * SHA-256 of the {@code Authorization} header that asked for this sheet, so the proof the sheet leaves
-     * behind is spendable only by that same access token. Null for every session that is not an authority
-     * step-up.
-     *
-     * <p>The hash and never the token. This object is persisted, and a session store holding bearer tokens
-     * would be a far worse thing to lose than one holding digests of them.
-     */
     private String authoritySessionHash;
 
     /**
