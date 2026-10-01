@@ -685,7 +685,8 @@ class AccountAuthorityTransitionTest {
     @Test
     void anotificationWithNoAccountHolderIsLoudRatherThanSilent() {
         AuthorityPushNotifier notifier = new AuthorityPushNotifier(
-                org.mockito.Mockito.mock(AuthorityNotificationRegistry.class), List.of(), policy, clock);
+                org.mockito.Mockito.mock(AuthorityNotificationRegistry.class), List.of(), policy,
+                new AuthorityAfterCommit(Runnable::run), clock);
 
         assertThatThrownBy(() -> notifier.notifyTransitionCompleted(null, "ADOPT_ROOT", "iPhone"))
                 .isInstanceOf(IllegalStateException.class)

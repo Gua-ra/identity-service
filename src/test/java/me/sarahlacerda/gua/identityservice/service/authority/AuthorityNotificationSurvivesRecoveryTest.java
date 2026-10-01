@@ -172,7 +172,7 @@ class AuthorityNotificationSurvivesRecoveryTest {
         driveARecovery("902184");
 
         AuthorityPushNotifier notifier = new AuthorityPushNotifier(registry,
-                List.of(new ConfiguredTransport()), policy, clock);
+                List.of(new ConfiguredTransport()), policy, new AuthorityAfterCommit(Runnable::run), clock);
         assertThat(notifier.isOutOfBand()).isTrue();
         assertThat(notifier.reachesOutOfBand(USER)).isTrue();
     }

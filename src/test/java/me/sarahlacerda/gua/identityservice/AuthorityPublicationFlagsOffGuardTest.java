@@ -23,6 +23,7 @@ import me.sarahlacerda.gua.identityservice.domain.AuthorityChainHead;
 import me.sarahlacerda.gua.identityservice.repository.AuthorityHeadPublicationRepository;
 import me.sarahlacerda.gua.identityservice.service.authority.AuthorityAccounts;
 import me.sarahlacerda.gua.identityservice.service.authority.AuthorityHeadPublications;
+import me.sarahlacerda.gua.identityservice.service.authority.AuthorityAfterCommit;
 import me.sarahlacerda.gua.identityservice.service.authority.AuthorityHeadPublisher;
 import me.sarahlacerda.gua.identityservice.service.authority.AuthorityHeadSigner;
 import me.sarahlacerda.gua.identityservice.service.authority.AuthorityPublicationStartupCheck;
@@ -80,7 +81,7 @@ class AuthorityPublicationFlagsOffGuardTest {
         ResolverAuthorityHeadClient resolver = mock(ResolverAuthorityHeadClient.class);
         AuthorityHeadPublications publications = mock(AuthorityHeadPublications.class);
         AuthorityHeadPublisher publisher = new AuthorityHeadPublisher(untouched, repository, signer, resolver,
-                publications, Clock.systemUTC());
+                publications, new AuthorityAfterCommit(Runnable::run), Clock.systemUTC());
 
         assertThat(publisher.isEnabled()).isFalse();
         publisher.publishSettledHead(account(), settledHead(), Clock.systemUTC().instant());

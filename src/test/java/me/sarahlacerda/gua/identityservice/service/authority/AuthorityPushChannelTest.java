@@ -40,6 +40,7 @@ class AuthorityPushChannelTest {
     private MutableClock clock;
     private AuthorityPolicy policy;
     private AuthorityNotificationRegistry registry;
+    private final AuthorityAfterCommit inline = new AuthorityAfterCommit(Runnable::run);
 
     @BeforeEach
     void setUp() {
@@ -55,7 +56,7 @@ class AuthorityPushChannelTest {
         assertThat(properties.getAuthority().getNotifications().isEnabled()).isFalse();
 
         AuthorityPushNotifier notifier = new AuthorityPushNotifier(registry,
-                List.of(new StubTransport(Platform.APNS, true)), policy, clock);
+                List.of(new StubTransport(Platform.APNS, true)), policy, inline, clock);
 
         assertThat(notifier.isOutOfBand()).isFalse();
         assertThat(notifier.reachesOutOfBand("@sarah:gua.global")).isFalse();
@@ -66,7 +67,7 @@ class AuthorityPushChannelTest {
         properties.getAuthority().getNotifications().setEnabled(true);
 
         AuthorityPushNotifier notifier = new AuthorityPushNotifier(registry,
-                List.of(new StubTransport(Platform.APNS, false)), policy, clock);
+                List.of(new StubTransport(Platform.APNS, false)), policy, inline, clock);
 
         assertThat(notifier.isOutOfBand()).isFalse();
     }
@@ -77,7 +78,7 @@ class AuthorityPushChannelTest {
         when(registry.live("@sarah:gua.global", T0)).thenReturn(List.of());
 
         AuthorityPushNotifier notifier = new AuthorityPushNotifier(registry,
-                List.of(new StubTransport(Platform.APNS, true)), policy, clock);
+                List.of(new StubTransport(Platform.APNS, true)), policy, inline, clock);
 
         assertThat(notifier.isOutOfBand()).isTrue();
         assertThat(notifier.reachesOutOfBand("@sarah:gua.global")).isFalse();
@@ -89,7 +90,7 @@ class AuthorityPushChannelTest {
         StubTransport transport = new StubTransport(Platform.APNS, true);
         when(registry.live("@sarah:gua.global", T0)).thenReturn(List.of(registration()));
 
-        new AuthorityPushNotifier(registry, List.of(transport), policy, clock)
+        new AuthorityPushNotifier(registry, List.of(transport), policy, inline, clock)
                 .notifyTransitionPending("@sarah:gua.global", "ADOPT_ROOT", "iPhone",
                         T0.plus(Duration.ofHours(72)));
 
@@ -107,7 +108,7 @@ class AuthorityPushChannelTest {
         AuthorityNotificationRegistration row = registration();
         when(registry.live("@sarah:gua.global", T0)).thenReturn(List.of(row));
 
-        new AuthorityPushNotifier(registry, List.of(transport), policy, clock)
+        new AuthorityPushNotifier(registry, List.of(transport), policy, inline, clock)
                 .notifyTransitionCompleted("@sarah:gua.global", "DEVICE_GRANT", "iPad");
 
         verify(registry).recordOutcome(row, Outcome.UNREGISTERED, T0);
@@ -123,7 +124,7 @@ class AuthorityPushChannelTest {
         AuthorityNotificationRegistration healthy = registration();
         when(registry.live("@sarah:gua.global", T0)).thenReturn(List.of(broken, healthy));
 
-        new AuthorityPushNotifier(registry, List.of(transport), policy, clock)
+        new AuthorityPushNotifier(registry, List.of(transport), policy, inline, clock)
                 .notifyTransitionCompleted("@sarah:gua.global", "DEVICE_GRANT", "iPad");
 
         assertThat(transport.sent).extracting(StubTransport.Sent::token).containsExactly("apns-token");
@@ -139,7 +140,7 @@ class AuthorityPushChannelTest {
         fcmRow.setPlatform(Platform.FCM);
         when(registry.live("@sarah:gua.global", T0)).thenReturn(List.of(fcmRow));
 
-        new AuthorityPushNotifier(registry, List.of(apns), policy, clock)
+        new AuthorityPushNotifier(registry, List.of(apns), policy, inline, clock)
                 .notifyChannelRemoved("@sarah:gua.global", "iPad");
 
         assertThat(apns.sent).isEmpty();

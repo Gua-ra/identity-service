@@ -10,8 +10,6 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
 import me.sarahlacerda.gua.identityservice.domain.AuthorityNotificationRegistration;
@@ -28,13 +26,15 @@ public class AuthorityPushNotifier implements AuthorityNotifier {
     private final AuthorityNotificationRegistry registry;
     private final List<AuthorityPushTransport> transports;
     private final AuthorityPolicy policy;
+    private final AuthorityAfterCommit afterCommit;
     private final Clock clock;
 
     public AuthorityPushNotifier(AuthorityNotificationRegistry registry, List<AuthorityPushTransport> transports,
-            AuthorityPolicy policy, Clock clock) {
+            AuthorityPolicy policy, AuthorityAfterCommit afterCommit, Clock clock) {
         this.registry = registry;
         this.transports = List.copyOf(transports);
         this.policy = policy;
+        this.afterCommit = afterCommit;
         this.clock = clock;
     }
 
@@ -97,31 +97,7 @@ public class AuthorityPushNotifier implements AuthorityNotifier {
         }
         Instant now = clock.instant();
         List<AuthorityNotificationRegistration> destinations = registry.live(userId, now);
-        afterCommit(() -> deliver(userId, destinations, title, body, now));
-    }
-
-    /**
-     * Runs only once the surrounding transaction has committed: a rolled-back transition alerts nobody, and
-     * no push I/O happens while the transition holds the account's head row.
-     */
-    private static void afterCommit(Runnable delivery) {
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            delivery.run();
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCompletion(int status) {
-                if (status != TransactionSynchronization.STATUS_COMMITTED) {
-                    return;
-                }
-                try {
-                    delivery.run();
-                } catch (RuntimeException ex) {
-                    log.error("An authority alert could not be delivered: {}", ex.getMessage());
-                }
-            }
-        });
+        afterCommit.run(() -> deliver(userId, destinations, title, body, now));
     }
 
     private void deliver(String userId, List<AuthorityNotificationRegistration> destinations, String title,

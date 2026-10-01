@@ -116,7 +116,8 @@ class AuthorityAlertDeliveryTest {
         challenges = new AuthorityChallengeService(challengeRepository, policy,
                 new AuthorityChallengeBurn(challengeRepository));
         AuthorityNotifications notifications = new AuthorityNotifications(
-                List.of(new AuthorityPushNotifier(registry, List.of(transport), policy, clock)));
+                List.of(new AuthorityPushNotifier(registry, List.of(transport), policy,
+                        new AuthorityAfterCommit(Runnable::run), clock)));
         service = new AccountAuthorityService(policy, new AuthorityAccounts(genesisRepository), challenges,
                 mock(AuthorityStepUpService.class), headRepository, recordRepository, deviceRepository,
                 candidateRepository, notifications, new NoBackoff(policy),

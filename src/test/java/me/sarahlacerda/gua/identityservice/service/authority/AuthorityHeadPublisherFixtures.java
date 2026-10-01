@@ -20,7 +20,7 @@ final class AuthorityHeadPublisherFixtures {
     static AuthorityHeadPublisher off(IdentityServiceProperties properties) {
         return new AuthorityHeadPublisher(properties, mock(AuthorityHeadPublicationRepository.class),
                 mock(AuthorityHeadSigner.class), mock(ResolverAuthorityHeadClient.class),
-                mock(AuthorityHeadPublications.class), Clock.systemUTC());
+                mock(AuthorityHeadPublications.class), new AuthorityAfterCommit(Runnable::run), Clock.systemUTC());
     }
 
     /** {@code publications} must be the container's proxy: its acknowledgement is written in REQUIRES_NEW. */
@@ -30,6 +30,6 @@ final class AuthorityHeadPublisherFixtures {
         return new AuthorityHeadPublisher(properties, repository,
                 new AuthorityHeadSigner(properties, keys),
                 new ResolverAuthorityHeadClient(WebClient.builder(), properties),
-                publications, clock);
+                publications, new AuthorityAfterCommit(Runnable::run), clock);
     }
 }

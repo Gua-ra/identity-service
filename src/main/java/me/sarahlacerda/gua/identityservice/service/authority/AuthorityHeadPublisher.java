@@ -8,8 +8,6 @@ import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import me.sarahlacerda.gua.identityservice.account.authority.AuthorityHeadRecord;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
@@ -32,16 +30,19 @@ public class AuthorityHeadPublisher {
     private final AuthorityHeadSigner signer;
     private final ResolverAuthorityHeadClient resolver;
     private final AuthorityHeadPublications publications;
+    private final AuthorityAfterCommit afterCommit;
     private final Clock clock;
 
     public AuthorityHeadPublisher(IdentityServiceProperties properties,
             AuthorityHeadPublicationRepository repository, AuthorityHeadSigner signer,
-            ResolverAuthorityHeadClient resolver, AuthorityHeadPublications publications, Clock clock) {
+            ResolverAuthorityHeadClient resolver, AuthorityHeadPublications publications,
+            AuthorityAfterCommit afterCommit, Clock clock) {
         this.properties = properties;
         this.repository = repository;
         this.signer = signer;
         this.resolver = resolver;
         this.publications = publications;
+        this.afterCommit = afterCommit;
         this.clock = clock;
     }
 
@@ -95,8 +96,12 @@ public class AuthorityHeadPublisher {
             publication = sign(existing.orElse(null), account, head, now);
         }
 
-        deliverAfterCommit(publication.getAccount(), publication.getHeadSeq(), publication.getHeadHash(),
-                publication.getRecordB64(), publication.getSignatureB64());
+        String reference = publication.getAccount();
+        long headSeq = publication.getHeadSeq();
+        String headHash = publication.getHeadHash();
+        String recordB64 = publication.getRecordB64();
+        String signatureB64 = publication.getSignatureB64();
+        afterCommit.run(() -> deliver(reference, headSeq, headHash, recordB64, signatureB64));
     }
 
     private AuthorityHeadPublication sign(AuthorityHeadPublication existing, Resolved account,
@@ -124,23 +129,6 @@ public class AuthorityHeadPublisher {
         return publication.getIssuedAt()
                 .plus(properties.getAuthority().getPublication().getRepublishAfter())
                 .isBefore(now);
-    }
-
-    /** Uses afterCompletion, and only on commit: a rolled-back transition must deliver nothing. */
-    private void deliverAfterCommit(String account, long headSeq, String headHash, String recordB64,
-            String signatureB64) {
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            deliver(account, headSeq, headHash, recordB64, signatureB64);
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCompletion(int status) {
-                if (status == TransactionSynchronization.STATUS_COMMITTED) {
-                    deliver(account, headSeq, headHash, recordB64, signatureB64);
-                }
-            }
-        });
     }
 
     private void deliver(String account, long headSeq, String headHash, String recordB64, String signatureB64) {
