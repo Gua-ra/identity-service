@@ -84,7 +84,9 @@ public class AuthorityChallengeService {
             throw refused("the challenge is spent or expired");
         }
 
-        burn.burn(row.getChallengeHash(), now);
+        if (!burn.burn(row.getChallengeHash(), now)) {
+            throw refused("the challenge was spent by another request");
+        }
         return new Spent(decode(challengeB64.trim()), row.getFactor(), row.getFactorCreatedAt());
     }
 

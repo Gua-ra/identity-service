@@ -11,6 +11,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -88,6 +89,28 @@ class AuthorityChallengeBurnTest {
         assertThat(refusal).isNotNull();
         assertThat(challenges.find(challenge).orElseThrow().getSpentAt()).isEqualTo(NOW);
         assertThat(repository.findByAccountAndPurposeAndSpentAtIsNull(ACCOUNT, Purpose.GRANT)).isEmpty();
+    }
+
+    @Test
+    void aChallengeSpentByAnotherRequestAfterThisOneReadItIsRefused() {
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+        TransactionTemplate otherRequest = new TransactionTemplate(transactionManager);
+        otherRequest.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        String challenge = transaction.execute(status -> challenges
+                .mint(ACCOUNT, SESSION, Purpose.NOTIFY, null, null, NOW)
+                .challenge());
+
+        AuthorityTransitionException refusal = catchThrowableOfType(
+                () -> transaction.execute(status -> {
+                    assertThat(challenges.find(challenge).orElseThrow().getSpentAt()).isNull();
+                    otherRequest.execute(other -> challenges.spend(ACCOUNT, SESSION, Purpose.NOTIFY, challenge,
+                            NOW));
+                    return challenges.spend(ACCOUNT, SESSION, Purpose.NOTIFY, challenge, NOW);
+                }),
+                AuthorityTransitionException.class);
+
+        assertThat(refusal).isNotNull();
+        assertThat(refusal.getCode()).isEqualTo("authority_challenge_invalid");
     }
 
     @TestConfiguration

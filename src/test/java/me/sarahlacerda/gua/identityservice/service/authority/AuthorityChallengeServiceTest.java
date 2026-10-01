@@ -165,6 +165,11 @@ class AuthorityChallengeServiceTest {
         }
 
         @Override
+        public Optional<AuthorityChallenge> findByChallengeHashForUpdate(String challengeHash) {
+            return findByChallengeHash(challengeHash);
+        }
+
+        @Override
         public List<AuthorityChallenge> findByAccountAndPurposeAndSpentAtIsNull(String account, Purpose purpose) {
             return rows.stream()
                     .filter(row -> row.getAccount().equals(account))

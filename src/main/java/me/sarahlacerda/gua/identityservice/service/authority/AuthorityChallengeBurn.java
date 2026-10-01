@@ -23,13 +23,15 @@ public class AuthorityChallengeBurn {
         this.repository = repository;
     }
 
+    /** False when another request spent it first: the row is locked, so only one caller can win. */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void burn(String challengeHash, Instant now) {
-        AuthorityChallenge row = repository.findByChallengeHash(challengeHash).orElse(null);
+    public boolean burn(String challengeHash, Instant now) {
+        AuthorityChallenge row = repository.findByChallengeHashForUpdate(challengeHash).orElse(null);
         if (row == null || row.getSpentAt() != null) {
-            return;
+            return false;
         }
         row.setSpentAt(now);
         repository.save(row);
+        return true;
     }
 }
