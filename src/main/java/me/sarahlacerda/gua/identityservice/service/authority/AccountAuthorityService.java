@@ -609,8 +609,13 @@ public class AccountAuthorityService {
         pending.setSettledAt(now);
         recordRepository.save(pending);
 
-        // A cancelled record gives its slot back, so a retry lands at the same position.
-        head.rollBackTo(pending.getPrevHash(), pending.getSeq());
+        // Not to the record below: an outranking record is built on the one it cancelled.
+        Optional<AuthorityChainRecord> lastActive = recordRepository
+                .findFirstByAccountAndStateAndSeqLessThanOrderBySeqDesc(account.reference(),
+                        AuthorityChainRecord.State.ACTIVE, pending.getSeq());
+        head.rollBackTo(
+                lastActive.map(AuthorityChainRecord::getRecordHash).orElseGet(AuthorityRecord::emptyHeadHash),
+                lastActive.map(AuthorityChainRecord::getSeq).orElse(0L));
         head.clearPending();
         head.startCooldown(decoded.type().magic(), now.plus(policy.oppositionWindow()));
         head.setUpdatedAt(now);

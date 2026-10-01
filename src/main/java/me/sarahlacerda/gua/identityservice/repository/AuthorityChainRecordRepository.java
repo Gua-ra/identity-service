@@ -19,4 +19,7 @@ public interface AuthorityChainRecordRepository extends JpaRepository<AuthorityC
     Optional<AuthorityChainRecord> findByAccountAndRecordHash(String account, String recordHash);
 
     List<AuthorityChainRecord> findByAccountAndState(String account, State state);
+
+    Optional<AuthorityChainRecord> findFirstByAccountAndStateAndSeqLessThanOrderBySeqDesc(String account,
+            State state, long seq);
 }

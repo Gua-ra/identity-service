@@ -109,9 +109,9 @@ public class AuthorityChainHead {
         pendingExtended = false;
     }
 
-    public void rollBackTo(String prevHash, long seq) {
-        headHash = prevHash;
-        headSeq = seq - 1;
+    public void rollBackTo(String recordHash, long seq) {
+        headHash = recordHash;
+        headSeq = seq;
         cancelledCount++;
     }
 

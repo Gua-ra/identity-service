@@ -473,6 +473,27 @@ class AccountAuthorityTransitionTest {
     }
 
     @Test
+    void cancellingARecordThatOutrankedAnotherReturnsTheHeadToTheLastActiveRecord() {
+        rootTheAccount();
+        grantSecondDevice();
+        clock.advance(Duration.ofHours(73));
+        service.state(USER);
+        long activeSeq = head().getHeadSeq();
+        String activeHash = head().getHeadHash();
+        AccountAuthorityService.Submitted outranked = recoverThroughAccountRecovery();
+        AccountAuthorityService.Submitted revocation = revokeSecondDevice();
+        assertThat(recordRepository.findByAccountAndSeq(account(), outranked.seq()).orElseThrow().getState())
+                .isEqualTo(AuthorityChainRecord.State.CANCELLED);
+
+        opposeAsSecondDevice(revocation.recordHash());
+
+        assertThat(head().hasPending()).isFalse();
+        assertThat(head().getHeadSeq()).isEqualTo(activeSeq);
+        assertThat(head().getHeadHash()).isEqualTo(activeHash);
+        assertThat(service.state(USER).headHash()).isEqualTo(activeHash);
+    }
+
+    @Test
     void anActiveDeviceExtendsARecoveryWindowOnceAndNotTwice() {
         rootTheAccount();
         AccountAuthorityService.Submitted recovery = recoverWithTheCommittedKey();
