@@ -105,7 +105,6 @@ public class AuthorityStepUpService {
 
     private Accepted acceptPin(String userId, String pin, String operation, String requesterIp) {
         try {
-            // Called across the bean boundary so a wrong PIN counts toward the lockout.
             userSecurityService.validatePinOrThrow(userId, pin);
         } catch (RuntimeException ex) {
             auditLogger.reauthFailed(userId, operation, requesterIp);

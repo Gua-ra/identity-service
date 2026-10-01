@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -341,7 +342,9 @@ public class UserSecurityService {
                 .orElse(false);
     }
 
-    @Transactional(noRollbackFor = { InvalidPinException.class, PinLockedException.class })
+    /** Runs in its own transaction: a caller that rolls back must not undo the failed-attempt count. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW,
+            noRollbackFor = { InvalidPinException.class, PinLockedException.class })
     public void validatePinOrThrow(String userId, String providedPin) {
         IdentityUser user = repository.findByUserIdForUpdate(userId)
                 .orElseThrow(() -> new UnknownUserException("Unknown user: " + userId));
