@@ -45,10 +45,7 @@ identity:
     # Master switch. Off: POST /account/genesis answers 503, the "gua:" login-hint grammar is not
     # parsed, and no account is given a genesis row.
     enabled: ${IDENTITY_GENESIS_ENABLED:true}
-    # Whether ids may be issued under recovery framework 0x01. Off outside dev (ADM-008 decision 4):
-    # 0x01 commits no delay bounds and its recovery key shares the device store with the key it would
-    # veto, so production issuance waits on ADM-002 D1 and Q6. Dev sets this true and treats the ids
-    # it mints as disposable.
+    # Lets clients register their own account ids (recovery framework 0x01). Keep off in production.
     production-issuance: ${IDENTITY_GENESIS_PRODUCTION_ISSUANCE:false}
     # How long a registered but unattached genesis stays attachable.
     pending-ttl: ${IDENTITY_GENESIS_PENDING_TTL:PT30M}
