@@ -45,7 +45,6 @@ public class PinChangeService {
     private void acceptPasskey(String userId, String passkeyStepUpId, JsonNode passkeyCredential,
             String requesterIp) {
         try {
-            // Burned whether it is accepted or refused.
             PasskeyService.PasskeyAuthentication assertion =
                     passkeyService.finishStepUpAssertion(passkeyStepUpId, passkeyCredential);
             if (!userId.equals(assertion.userId())) {

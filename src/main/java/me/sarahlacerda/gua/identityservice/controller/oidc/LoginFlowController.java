@@ -207,7 +207,6 @@ public class LoginFlowController {
             return routeExistingUser(sessionId, session, userId, healed);
         }
 
-        // Reauthentication is login-only: an unknown phone is rejected here, never sent to account creation.
         if (session.getReauthUserId() != null) {
             throw reauthMismatch();
         }
@@ -247,7 +246,6 @@ public class LoginFlowController {
     /** The localpart is read from the directory row, never derived from the userId. */
     private ResponseEntity<LoginStateResponse> routeExistingUser(
             String sessionId, LoginSession session, String userId, DirectoryEntry entry) {
-        // On reauthentication the verified phone must belong to the already-authenticated user.
         if (session.getReauthUserId() != null && !session.getReauthUserId().equals(userId)) {
             throw reauthMismatch();
         }
@@ -271,7 +269,6 @@ public class LoginFlowController {
             loginSessionService.save(sessionId, session);
             return ResponseEntity.ok(state(session, null));
         }
-        // An account holding no factor must set one. It does not finish on the OTP.
         return offerPasskeyBeforePin(sessionId, session);
     }
 
@@ -377,7 +374,6 @@ public class LoginFlowController {
             loginFactorEnrollmentService.setUpEnrolledPin(session.getUserId(), request.pin().trim());
             return completeEnrollment(sessionId, session);
         }
-        // Refused under the row lock when the account already holds a factor.
         loginFactorEnrollmentService.setUpFirstPin(session.getUserId(), request.pin().trim());
         session.setAuthenticatedFactor(SessionFactor.ENROLLED);
         return complete(sessionId, session);
@@ -607,7 +603,6 @@ public class LoginFlowController {
         return complete(sessionId, session);
     }
 
-    /** Refuses a session that has not authenticated with a factor. */
     private ResponseEntity<LoginStateResponse> complete(String sessionId, LoginSession session) {
         if (session.getAuthenticatedFactor() == null) {
             throw new LoginFlowException(HttpStatus.CONFLICT, "factor_required",
@@ -819,7 +814,6 @@ public class LoginFlowController {
                 recovery);
     }
 
-    /** Null unless the phase is in FACTOR_REPORT_PHASES and the session carries the resolved subject. */
     private AuthFactorPolicy.RegisteredFactors publishableFactors(LoginSession session) {
         if (!FACTOR_REPORT_PHASES.contains(session.getPhase()) || !StringUtils.hasText(session.getUserId())) {
             return null;

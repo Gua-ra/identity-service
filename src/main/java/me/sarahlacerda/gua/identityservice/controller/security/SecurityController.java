@@ -279,7 +279,6 @@ public class SecurityController {
                         "That is not a redirect this deployment allows for enrollment."));
     }
 
-    /** Empty for a homeserver-issued token, which names no client of ours. */
     private Optional<String> clientRegisteredAppScheme() {
         return authenticatedUserAccessor.currentClientId()
                 .flatMap(clientId -> oidcProperties.getClients().stream()

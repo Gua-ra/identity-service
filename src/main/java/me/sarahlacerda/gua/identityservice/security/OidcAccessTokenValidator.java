@@ -27,7 +27,6 @@ public class OidcAccessTokenValidator {
         if (principal.isPresent()) {
             return principal;
         }
-        // Fall back to validating a Matrix-issued access token via the homeserver's whoami endpoint.
         Optional<String> matrixUserId = matrixAdminClient.whoami(accessToken);
         if (matrixUserId.isPresent()) {
             return Optional.of(new OidcAuthenticatedPrincipal(matrixUserId.get(), null, null, Set.of()));

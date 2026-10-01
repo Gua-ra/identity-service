@@ -3,7 +3,6 @@ package me.sarahlacerda.gua.identityservice.service.oidc;
 import java.util.Objects;
 import java.util.Set;
 
-/** clientId is null for a token this service did not mint. */
 public record OidcAuthenticatedPrincipal(
         String userId,
         String phoneNumber,

@@ -27,7 +27,6 @@ public class DirectoryService {
         return upsertByDigest(phoneDigest, null, userId, displayName);
     }
 
-    /** A null phoneMasked or displayName preserves the existing value. */
     @Transactional
     public DirectoryEntry upsertByDigest(String phoneDigest, String phoneMasked, String userId, String displayName) {
         DirectoryEntry entry = repository.findByPhoneDigest(phoneDigest)

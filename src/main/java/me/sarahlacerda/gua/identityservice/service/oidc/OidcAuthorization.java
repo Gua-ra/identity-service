@@ -3,7 +3,6 @@ package me.sarahlacerda.gua.identityservice.service.oidc;
 import java.util.Objects;
 import java.util.Set;
 
-/** endOtherSessions is set only when the sign-in completed an account recovery. */
 public record OidcAuthorization(
         String userId,
         String phoneNumber,

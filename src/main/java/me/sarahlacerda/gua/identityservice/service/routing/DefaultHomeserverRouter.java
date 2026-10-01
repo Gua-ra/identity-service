@@ -11,8 +11,6 @@ import org.springframework.stereotype.Component;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.domain.Homeserver;
 
-// Strategies (identity.routing.strategy): single uses the default homeserver, region matches the region hint
-// and falls back to weighted, weighted picks by configured weight.
 @Component
 @RequiredArgsConstructor
 public class DefaultHomeserverRouter implements HomeserverRouter {

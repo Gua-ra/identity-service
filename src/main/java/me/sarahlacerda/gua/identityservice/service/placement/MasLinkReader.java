@@ -11,7 +11,6 @@ public interface MasLinkReader {
 
     String describe();
 
-    /** A subject with links on two homeservers is a duplicate account. */
     List<MasLink> linksFor(String subject);
 
     /** Empty when the path cannot see claims_imports. */

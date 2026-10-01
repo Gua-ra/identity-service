@@ -58,7 +58,6 @@ public class AccountReauthService {
         return token;
     }
 
-    /** Same check without minting a token, for the first-factor enrollment step-up. */
     public void verifyPhoneOtp(String userId, String submittedPhone, String code, String operation,
             String requesterIp) {
         String phone = requireOwnPhone(userId, submittedPhone, operation, requesterIp);

@@ -266,7 +266,6 @@ public class PlacementShadowReconciler {
         if (result == PlacementShadowResult.AGREE) {
             return result;
         }
-        // No phone number, masked or otherwise, reaches this line.
         String message = "placement_shadow result={} accountId={} userId={} origin={} directoryHomeserver={} "
                 + "masHomeserver={} recordHomeserver={} reason={} known={}";
         Object[] fields = { result.tag(), row.accountId(), row.userId(), row.origin(),

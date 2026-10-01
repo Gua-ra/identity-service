@@ -41,7 +41,6 @@ public class PlacementAccountScanner {
 
     private final JdbcTemplate jdbcTemplate;
 
-    /** directoryHomeserverId is null for rows written before routing existed. */
     public record AccountRow(String accountId, String userId, String origin, String directoryHomeserverId) {
     }
 

@@ -57,7 +57,6 @@ public final class AccountGenesis {
         return entropy.clone();
     }
 
-    /** The bytes as received. The accountId hashes these, never a re-encoding. */
     public byte[] canonicalBytes() {
         return canonicalBytes.clone();
     }
