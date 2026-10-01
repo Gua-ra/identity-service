@@ -55,7 +55,6 @@ class PasskeyRemovalOwnershipTest {
         assertThat(service().removeCredential(NEW_MXID, CREDENTIAL_ID, true)).isTrue();
 
         verify(repository).delete(credential);
-        verify(repository, never()).findByUserId(anyString());
     }
 
     @Test
@@ -76,7 +75,6 @@ class PasskeyRemovalOwnershipTest {
         assertThat(service().removeCredential(NEW_MXID, CREDENTIAL_ID, true)).isFalse();
 
         verify(repository, never()).delete(any());
-        verify(repository, never()).findByUserId(anyString());
         verify(repository, never()).findByCredentialId(anyString());
     }
 
@@ -96,7 +94,6 @@ class PasskeyRemovalOwnershipTest {
                 });
 
         verify(repository, never()).delete(any());
-        verify(repository, never()).findByUserId(anyString());
     }
 
     @Test

@@ -70,6 +70,13 @@ class PasskeyStablePrincipalTest {
     }
 
     @Test
+    void theRepositoryOffersNoLookupByMatrixId() {
+        assertThat(PasskeyCredentialRepository.class.getDeclaredMethods())
+                .extracting(java.lang.reflect.Method::getName)
+                .noneMatch(name -> name.contains("UserId"));
+    }
+
+    @Test
     void recoveryRevokesCredentialsAfterTheMatrixIdentityChanged() {
         PasskeyCredential credential = credentialOwnedByThePrincipal();
         when(principals.forUserId(NEW_MXID))
@@ -82,7 +89,6 @@ class PasskeyStablePrincipalTest {
                 .as("recovery must revoke by stable principal, not by the Matrix id of the moment")
                 .isEqualTo(1);
         verify(repository).deleteAll(List.of(credential));
-        verify(repository, never()).findByUserId(anyString());
     }
 
     @Test
@@ -92,7 +98,6 @@ class PasskeyStablePrincipalTest {
         int removed = service().removeAllForUser(NEW_MXID);
 
         assertThat(removed).isZero();
-        verify(repository, never()).findByUserId(anyString());
         verify(repository, never()).findByAccountPrincipal(anyString());
     }
 
@@ -103,7 +108,6 @@ class PasskeyStablePrincipalTest {
         when(repository.existsByAccountPrincipal(PRINCIPAL)).thenReturn(true);
 
         assertThat(service().hasPasskey(NEW_MXID)).isTrue();
-        verify(repository, never()).existsByUserId(anyString());
     }
 
     @Test
@@ -111,7 +115,6 @@ class PasskeyStablePrincipalTest {
         when(principals.forUserId(NEW_MXID)).thenReturn(Optional.empty());
 
         assertThat(service().hasPasskey(NEW_MXID)).isFalse();
-        verify(repository, never()).existsByUserId(anyString());
         verify(repository, never()).existsByAccountPrincipal(anyString());
     }
 
@@ -120,7 +123,6 @@ class PasskeyStablePrincipalTest {
         when(repository.findByAccountPrincipal(PRINCIPAL)).thenReturn(List.of(credentialOwnedByThePrincipal()));
 
         assertThat(service().getCredentialIdsForUsername(PRINCIPAL)).hasSize(1);
-        verify(repository, never()).findByUserId(anyString());
     }
 
     @Test
@@ -265,7 +267,6 @@ class PasskeyStablePrincipalTest {
                 .contains(PRINCIPAL);
 
         verify(repository, never()).findByUserHandle(anyString());
-        verify(repository, never()).findByUserId(anyString());
     }
 
     @Test
