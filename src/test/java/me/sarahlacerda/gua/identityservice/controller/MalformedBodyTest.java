@@ -15,8 +15,7 @@ import org.springframework.web.context.WebApplicationContext;
 
 /**
  * A request with no body, or a body that is not JSON, is the caller's mistake and must
- * read as one. Before this, every such request reached the catch-all handler and came
- * back as a 500, which blamed the server and told the caller nothing.
+ * read as one: a 400 with a reason, never a 500 from the catch-all handler.
  */
 @SpringBootTest
 @ActiveProfiles("test")

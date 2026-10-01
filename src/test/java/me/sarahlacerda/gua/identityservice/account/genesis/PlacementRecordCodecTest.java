@@ -317,7 +317,7 @@ class PlacementRecordCodecTest {
         }
     }
 
-    // --- ADM-001 L15: nothing in a record identifies the human ---------------
+    // --- Nothing in a record identifies the human (ADM-001 L15) ---------------
 
     @Test
     void aRecordCarriesNoIdentifierNoPhoneNoPhoneHashAndNoMatrixUserId() {

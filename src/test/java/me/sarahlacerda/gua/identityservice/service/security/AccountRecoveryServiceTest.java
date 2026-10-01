@@ -359,7 +359,8 @@ class AccountRecoveryServiceTest {
     }
 
     /**
-     * D5 must survive a login that cannot be finished after the commit, and the account must not
+     * The owed sign-out must survive a login that cannot be finished after the commit, and the
+     * account must not
      * look dormant because the sign-in record after the commit never ran.
      */
     @Test

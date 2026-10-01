@@ -330,7 +330,7 @@ class AuthFlowIntegrationTest {
     }
 
     /**
-     * D2 over real HTTP: a new account cannot leave PIN setup without a PIN, and no code is
+     * Over real HTTP: a new account cannot leave PIN setup without a PIN, and no code is
      * issued however the step is left.
      */
     @Test
@@ -389,16 +389,11 @@ class AuthFlowIntegrationTest {
     }
 
     /**
-     * R1 end to end, on an account created the only way accounts are created: through the real
-     * interactive signup. The signed-in user confirms the number on their own account and the
-     * reauthentication proceeds; a number that is not theirs is refused in words that say nothing
-     * about whose it is, and no code is sent to it.
-     *
-     * <p>
-     * This is the case identity-service#44 was about. The old flow asked the homeserver which
-     * phone was linked to the account, and an account created through signup has no such binding,
-     * so phone change, deactivation and identity reset were unreachable for exactly the accounts
-     * a user can actually create.
+     * Reauthentication end to end, on an account created through the real interactive signup. The
+     * signed-in user confirms the number on their own account and the reauthentication proceeds;
+     * a number that is not theirs is refused in words that say nothing about whose it is, and no
+     * code is sent to it. The account has no homeserver phone binding, which is the shape every
+     * interactive signup produces (identity-service#44).
      */
     @Test
     void anInteractiveSignupCanReauthenticateWithItsOwnNumber() throws Exception {
@@ -440,7 +435,7 @@ class AuthFlowIntegrationTest {
     }
 
     /**
-     * R2 through the real security chain: a bearer session on its own cannot set a first PIN, and
+     * Through the real security chain: a bearer session on its own cannot set a first PIN, and
      * the flow it is sent to hands back a one-time URL whose session has proved nothing yet.
      */
     @Test
@@ -487,7 +482,10 @@ class AuthFlowIntegrationTest {
         assertThat(tooEarly.getBody()).containsEntry("code", "unexpected_step");
     }
 
-    /** E3 through the real security chain: an unauthenticated call is told the path is gone. */
+    /**
+     * The unauthenticated PIN reset is retired: through the real security chain, the call is told
+     * the path is gone.
+     */
     @Test
     void theRetiredPinResetEndpointsAnswerGoneWithoutABearerToken() {
         for (String path : List.of("/security/pin/reset", "/security/pin/reset/complete")) {

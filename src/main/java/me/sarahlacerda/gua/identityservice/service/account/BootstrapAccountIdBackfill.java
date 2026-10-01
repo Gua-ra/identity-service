@@ -16,7 +16,8 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.repository.AccountGenesisRepository;
 
 /**
- * Gives every account that predates account genesis a bootstrap accountId (ADM-001 L5 path B1).
+ * Gives every account that predates account genesis a bootstrap accountId: no authority key, and marked
+ * so an audit can tell it from a rooted one (ADM-001 L5).
  *
  * <p>Idempotent and resumable. It walks accounts in user-id order in batches, skips the ones that
  * already hold a genesis row, and mints one for the rest; a second run therefore mints nothing, and a

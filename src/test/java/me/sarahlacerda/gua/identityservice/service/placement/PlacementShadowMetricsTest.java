@@ -12,7 +12,7 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The names a scrape really exposes. The Phase 4 exit criteria are quoted in these names, so a panel or
+ * The names a scrape exposes. The shadow-window exit criteria are quoted in these names, so a panel or
  * an alert built on a name that does not exist would read as "no data" rather than as an error.
  */
 class PlacementShadowMetricsTest {

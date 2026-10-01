@@ -20,10 +20,10 @@ import me.sarahlacerda.gua.identityservice.service.placement.PlacementScheduling
 import me.sarahlacerda.gua.identityservice.service.placement.ResolverPlacementClient;
 
 /**
- * Placement is inert with the shipped defaults, proven by BOOTING the application rather than by
+ * Placement is inert with the shipped defaults, proven by booting the application rather than by
  * reading the source. The sibling guard test checks defaults and annotations reflectively, which is
- * necessary but not sufficient: the outage this project has already had came from a change that every
- * unit test passed because no test started the context in the shape a deployment actually runs.
+ * necessary but not sufficient: only a context started in the shape a deployment runs catches a
+ * startup failure.
  *
  * <p>The four things a disabled feature must satisfy, one test each: the application boots with no
  * placement configuration at all, existing endpoints answer exactly what they answered before, no

@@ -6,8 +6,8 @@ package me.sarahlacerda.gua.identityservice.account.genesis;
  *
  * <p>It commits nothing and makes no ADM-001 L4 claim. Its whole job is to give an account that predates
  * account authority, or one created on the web where no genesis design exists yet, an accountId that is
- * re-derivable and auditable, with the root class byte 0x00 marking it as a bootstrap account (L5 path
- * B1). The entropy is random and is never derived from the MXID or the phone: a preimage containing
+ * re-derivable and auditable, with the root class byte 0x00 marking it as a bootstrap account (the
+ * audit marker ADM-001 L5 requires). The entropy is random and is never derived from the MXID or the phone: a preimage containing
  * either would put an identifier, and with it the homeserver, inside the id, which L4 forbids and which
  * would turn replicated state into a linkage oracle.
  */

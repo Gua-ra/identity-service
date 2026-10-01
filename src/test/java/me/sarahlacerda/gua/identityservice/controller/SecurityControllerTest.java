@@ -163,7 +163,7 @@ class SecurityControllerTest {
         verify(userSecurityService).completePinChange("@user:domain", "chal-1", "987654", "654321");
     }
 
-    /** Whatever the body says, including an empty one: the answer is the same and nothing is read. */
+    /** Any body, including an empty one, gets the same response; the body is not read. */
     @Test
     void theBearerFirstPinIsRefusedWhateverTheBodySays() throws Exception {
         for (String body : java.util.List.of("{}", "{\"userId\":\"@user:domain\",\"currentPin\":\"123456\"}")) {

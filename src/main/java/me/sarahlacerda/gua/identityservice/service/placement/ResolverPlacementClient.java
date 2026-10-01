@@ -159,7 +159,7 @@ public class ResolverPlacementClient {
      *
      * <p>A conflict is reported, never retried and never forced: one accountId has one home, and a
      * record naming another homeserver is evidence of a duplicate identity or a bad signer, which a
-     * person has to explain (ADM-001 L9 refuses migration outright).
+     * person has to explain (Matrix has no identity-preserving migration, ADM-001 L9).
      */
     public PublishOutcome publish(PlacementRecordSigner.SignedPlacementRecord signed) {
         if (!configured) {

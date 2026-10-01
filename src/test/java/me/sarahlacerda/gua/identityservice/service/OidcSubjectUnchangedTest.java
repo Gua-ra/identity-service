@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 /**
- * ADM-001 S6 and ADM-008 decision 10: Phase 3 changes no OIDC subject semantics.
+ * Account genesis changes no OIDC subject semantics (ADM-001 S6, ADM-008 decision 10).
  *
  * <p>{@code sub} stays the Matrix user id, {@code preferred_username} stays the handle stored in the
  * directory, and no claim carries an accountId. The last one is load-bearing rather than cosmetic: MAS
