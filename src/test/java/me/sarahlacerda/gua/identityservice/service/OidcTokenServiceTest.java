@@ -209,7 +209,7 @@ class OidcTokenServiceTest {
 
     @Test
     void parseAccessTokenRejectsHs256Algorithm() throws Exception {
-        // Token signed by a different RSA key — verifier should reject.
+        // Token signed by a different RSA key: verifier should reject.
         KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
         gen.initialize(2048);
         KeyPair other = gen.generateKeyPair();

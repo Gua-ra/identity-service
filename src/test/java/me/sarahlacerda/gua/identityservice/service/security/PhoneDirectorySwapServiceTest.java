@@ -66,7 +66,7 @@ class PhoneDirectorySwapServiceTest {
 
     @Test
     void allowsWhenNewDigestAlreadyOwnedByCaller() {
-        // Idempotent re-run: the new digest is already the caller's — not a conflict.
+        // Idempotent re-run: the new digest is already the caller's, not a conflict.
         when(directoryService.findByDigest(NEW_DIGEST)).thenReturn(Optional.of(
                 DirectoryEntry.builder().phoneDigest(NEW_DIGEST).userId(USER).build()));
         when(directoryService.findByUserId(USER)).thenReturn(List.of(

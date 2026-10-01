@@ -63,7 +63,7 @@ public class SecurityConfig {
                 // - Every authenticated endpoint is STATELESS and bearer-token based
                 //   (OidcAccessTokenAuthenticationFilter reads the Authorization header,
                 //   not an ambient session cookie), so a browser cannot be tricked into
-                //   forging them — classic CSRF does not apply.
+                //   forging them, so classic CSRF does not apply.
                 // - The only cookie-bearing surface, /login/**, enforces its OWN
                 //   double-submit token: GET /login/context issues a CSRF token bound to
                 //   the Redis login session and every state-changing /login POST must echo

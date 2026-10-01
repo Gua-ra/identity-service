@@ -23,7 +23,7 @@ import com.nimbusds.jose.jwk.RSAKey;
 
 /**
  * Loads the RSA key used to sign OIDC tokens (RS256). If no key material is configured, generates an
- * ephemeral 2048-bit RSA key at startup and logs a WARN — suitable for local dev only.
+ * ephemeral 2048-bit RSA key at startup and logs a WARN, suitable for local dev only.
  */
 @Configuration
 public class OidcSigningKeyConfig {

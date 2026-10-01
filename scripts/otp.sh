@@ -2,7 +2,7 @@
 #
 # Local-dev helper to see Gua verification codes (OTPs) while testing.
 #
-# In local/dev the SMS sender doesn't really text anything — it logs the code
+# In local/dev the SMS sender doesn't really text anything; it logs the code
 # and stores it in Redis (key `otp:code:<E.164>`, TTL ~5 min). Production uses
 # Twilio and never logs codes, so this is a dev convenience only.
 #

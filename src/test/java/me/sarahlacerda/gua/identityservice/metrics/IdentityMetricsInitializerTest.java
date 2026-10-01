@@ -73,7 +73,7 @@ class IdentityMetricsInitializerTest {
 
         new IdentityMetricsInitializer(registry, new DummySmsSender());
 
-        // What a fresh pod serves on /actuator/prometheus before any traffic —
+        // What a fresh pod serves on /actuator/prometheus before any traffic:
         // every dashboard-referenced metric name must already be there.
         assertThat(registry.scrape())
                 .contains("gua_identity_signup_total")

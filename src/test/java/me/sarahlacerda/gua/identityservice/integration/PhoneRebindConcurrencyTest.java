@@ -121,7 +121,7 @@ class PhoneRebindConcurrencyTest {
         List<DirectoryEntry> all = directoryRepository.findByPhoneDigestIn(List.of(digest));
         assertThat(all).hasSize(1);
         assertThat(all.get(0).getUserId()).isIn(userA, userB);
-        // And at least one operation either succeeded or was rejected — i.e. all 2 threads were observed.
+        // And at least one operation either succeeded or was rejected, i.e. all 2 threads were observed.
         assertThat(ok.get() + conflicts.get()).isEqualTo(threads);
     }
 }

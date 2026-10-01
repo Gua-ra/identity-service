@@ -609,7 +609,7 @@ class PhoneChangeServiceTest {
     /**
      * Shared stubs for a /complete that passes OTP verification. Lenient where a
      * given test does not exercise every collaborator. The atomic swap itself is a
-     * void mock (no-op by default) — its internals are tested in
+     * void mock (no-op by default); its internals are tested in
      * PhoneDirectorySwapServiceTest.
      */
     private void primeSuccessfulComplete() {

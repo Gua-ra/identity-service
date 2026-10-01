@@ -140,7 +140,7 @@ public class OidcAuthorizationController {
         // Parked on the session so the registration guard can gate web signups only.
         session.setDownstreamClient(guaDownstream);
         // Re-authentication: an already signed-in user re-verifying (prompt=login /
-        // id_token_hint). Pin the session to that subject so the flow is LOGIN-ONLY —
+        // id_token_hint). Pin the session to that subject so the flow is LOGIN-ONLY:
         // the phone must already belong to this user and signup can never be reached.
         session.setReauthUserId(resolveReauthUserId(prompt, idTokenHint));
         session.setCsrfToken(loginSessionService.newToken());

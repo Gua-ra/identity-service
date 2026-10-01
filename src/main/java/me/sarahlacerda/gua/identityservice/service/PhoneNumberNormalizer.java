@@ -17,7 +17,7 @@ import me.sarahlacerda.gua.identityservice.exception.InvalidPhoneNumberException
  *
  * <p>
  * A bare national number (no leading {@code +}) is interpreted against the
- * {@value #DEFAULT_REGION} default region — the same region the clients assume
+ * {@value #DEFAULT_REGION} default region, the same region the clients assume
  * (Canada/US, {@code +1}). Anything that cannot be parsed to a valid number is
  * rejected with {@link InvalidPhoneNumberException} rather than being passed
  * through unnormalized.

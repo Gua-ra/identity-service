@@ -26,7 +26,7 @@ import me.sarahlacerda.gua.identityservice.service.SmsSender;
  * rather than a reuse of it: the code is namespaced per <b>challenge</b>
  * ({@code otp:code:change:{challengeId}}) instead of per phone
  * ({@code otp:code:{e164}}). That isolation means the public {@code /otp/send}
- * endpoint — which writes {@code otp:code:{e164}} — can neither overwrite nor race
+ * endpoint, which writes {@code otp:code:{e164}}, can neither overwrite nor race
  * the change OTP, and an attacker cannot pre-seed a code for the target number.
  * The per-phone / per-IP send rate limits and SMS metrics mirror OtpService so
  * abuse accounting stays consistent.

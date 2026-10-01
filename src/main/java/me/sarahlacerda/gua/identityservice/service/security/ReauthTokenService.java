@@ -21,7 +21,7 @@ import me.sarahlacerda.gua.identityservice.exception.InvalidReauthTokenException
  * possession of
  * their registered phone number and we issue an opaque token the client
  * immediately spends on a
- * single privileged operation. The token never grants long-term access — its
+ * single privileged operation. The token never grants long-term access; its
  * TTL is short and we
  * delete it on first use.
  * </p>
