@@ -95,13 +95,15 @@ public class PasskeyService implements CredentialRepository {
     /** Refuses to remove the account's last remaining factor. */
     @Transactional
     public boolean removeCredential(String userId, String credentialId, boolean accountHoldsAnotherFactor) {
-        Optional<PasskeyCredential> credential = repository.findByCredentialId(credentialId)
-                .filter(row -> row.getUserId().equals(userId));
+        Optional<String> principal = principals.forUserId(userId).map(PasskeyPrincipals.Principal::text);
+        Optional<PasskeyCredential> credential = principal.flatMap(owner ->
+                repository.findByCredentialId(credentialId)
+                        .filter(row -> owner.equals(row.getAccountPrincipal())));
         if (credential.isEmpty()) {
             // Same answer for another account's credential and for a missing one.
             return false;
         }
-        if (!accountHoldsAnotherFactor && repository.findByUserId(userId).size() <= 1) {
+        if (!accountHoldsAnotherFactor && repository.findByAccountPrincipal(principal.get()).size() <= 1) {
             throw new LoginFlowException(HttpStatus.CONFLICT, "factor_required",
                     "Set up another way to confirm it is you before removing this one.");
         }
