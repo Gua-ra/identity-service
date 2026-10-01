@@ -56,7 +56,11 @@ class RateLimitConfigurationTest {
             // binding, and verify checks a code on top. Bearer calls, so the limiter key carries
             // the user as well as the address, but the rule is needed for the same reason.
             "/account/reauth/start, 5, PT1M",
-            "/account/reauth/verify, 10, PT1M"
+            "/account/reauth/verify, 10, PT1M",
+            "/account/authority/challenge, 10, PT1M",
+            "/account/authority/oppose, 10, PT1M",
+            "/account/security-notifications/remove, 10, PT1M",
+            "/security/passkey/credentials/a-credential-id/remove, 10, PT1M"
     })
     void credentialEndpointsHaveTheirOwnPerAddressRule(String path, int limit, Duration refresh) {
         runner.run(ctx -> {

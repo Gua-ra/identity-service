@@ -170,6 +170,16 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_AUTHORITY_LIMIT:10}
         refresh-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_AUTHORITY_REFRESH:PT1M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_ACCOUNT_AUTHORITY_TIMEOUT:PT0S}
+      - path: /account/security-notifications/remove
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_NOTIFICATIONS_REMOVE_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_NOTIFICATIONS_REMOVE_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_NOTIFICATIONS_REMOVE_TIMEOUT:PT0S}
+      - path: /security/passkey/credentials/*/remove
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_SECURITY_PASSKEY_REMOVE_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_SECURITY_PASSKEY_REMOVE_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_SECURITY_PASSKEY_REMOVE_TIMEOUT:PT0S}
       - path: /signup/complete
         methods: [POST]
         limit-for-period: ${IDENTITY_RATE_LIMIT_SIGNUP_COMPLETE_LIMIT:10}
