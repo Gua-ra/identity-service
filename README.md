@@ -179,15 +179,15 @@ Golden vectors live in [`docs/specs/genesis-vectors.v1.json`](docs/specs/genesis
 
 A handle alone attaches nothing: the client must also sign a server-issued challenge with the committed authority key, and a failed attach fails the signup.
 
-**Flags** (all off by default, so a deployment that sets none behaves exactly as it did before this feature existed):
+**Flags.** Genesis and the bootstrap backfill are enabled by default; every other flag is off:
 
 | Property | Env | Default | Effect |
 | --- | --- | --- | --- |
-| `identity.genesis.enabled` | `IDENTITY_GENESIS_ENABLED` | `false` | Master switch. Off: the endpoint answers `503`, the `gua:` hint grammar is not parsed, and no account gets a genesis row. |
+| `identity.genesis.enabled` | `IDENTITY_GENESIS_ENABLED` | `true` | Master switch. Off: the endpoint answers `503`, the `gua:` hint grammar is not parsed, and no account gets a genesis row, so no new account can hold a passkey. |
 | `identity.genesis.production-issuance` | `IDENTITY_GENESIS_PRODUCTION_ISSUANCE` | `false` | Allows issuing ids under recovery framework `0x01`. Off outside dev: that framework commits no delay bounds, and its recovery key shares the device store with the key it would veto, so production issuance waits on ADM-002. Dev turns it on and treats the ids as disposable. |
 | `identity.genesis.pending-ttl` | `IDENTITY_GENESIS_PENDING_TTL` | `PT30M` | How long a registered genesis stays attachable. |
 | `identity.genesis.require-for-native` | `IDENTITY_GENESIS_REQUIRE_FOR_NATIVE` | `false` | Refuses a native signup that presents no handle instead of giving it a bootstrap id. Flip only once the clients ship genesis. |
-| `identity.genesis.bootstrap-backfill.enabled` | `IDENTITY_GENESIS_BOOTSTRAP_BACKFILL_ENABLED` | `false` | Mints a bootstrap accountId at startup for every existing account that has none. Idempotent and resumable, so it is safe to leave on. |
+| `identity.genesis.bootstrap-backfill.enabled` | `IDENTITY_GENESIS_BOOTSTRAP_BACKFILL_ENABLED` | `true` | Mints a bootstrap accountId at startup for every existing account that has none. Idempotent and resumable, so it is safe to leave on. Off, an existing account without one cannot hold a passkey. |
 
 **Metrics.** `gua_identity_account_genesis{origin}` and `gua_identity_accounts_without_genesis` are gauges registered only while the feature is on; the second must reach zero.
 

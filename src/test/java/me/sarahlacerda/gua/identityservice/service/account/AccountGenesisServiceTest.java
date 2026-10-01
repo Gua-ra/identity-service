@@ -183,7 +183,12 @@ class AccountGenesisServiceTest {
     @Test
     void productionIssuanceIsOffByDefault() {
         assertThat(new IdentityServiceProperties().getGenesis().isProductionIssuance()).isFalse();
-        assertThat(new IdentityServiceProperties().getGenesis().isEnabled()).isFalse();
+    }
+
+    @Test
+    void genesisAndTheBootstrapBackfillAreOnByDefault() {
+        assertThat(new IdentityServiceProperties().getGenesis().isEnabled()).isTrue();
+        assertThat(new IdentityServiceProperties().getGenesis().getBootstrapBackfill().isEnabled()).isTrue();
     }
 
     @Test

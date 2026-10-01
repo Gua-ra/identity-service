@@ -72,6 +72,15 @@ public final class AccountId {
         return new AccountId(PREFIX + Base32.encode(raw), raw);
     }
 
+    /** Inverse of {@link #rawBytes()}, held to the same checks as {@link #parse}. */
+    public static AccountId fromRawBytes(byte[] raw) {
+        if (raw == null || raw.length != RAW_LENGTH) {
+            throw new InvalidGenesisException("bad_account_id",
+                    "accountId bytes must be exactly " + RAW_LENGTH + " long");
+        }
+        return parse(PREFIX + Base32.encode(raw));
+    }
+
     /**
      * Parses an accountId, enforcing the canonical form.
      *

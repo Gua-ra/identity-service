@@ -54,6 +54,11 @@ import me.sarahlacerda.gua.identityservice.repository.PasskeyCredentialRepositor
 class PasskeyServiceStepUpTest {
 
     private static final String USER = "@alice:gua.global";
+    private static final me.sarahlacerda.gua.identityservice.account.genesis.AccountId ACCOUNT =
+            me.sarahlacerda.gua.identityservice.account.genesis.AccountId.derive(
+                    me.sarahlacerda.gua.identityservice.account.genesis.AccountId.CLASS_BOOTSTRAP,
+                    "alice-genesis".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    private static final String PRINCIPAL = ACCOUNT.value();
     // base64url of 32 bytes, the shape a stored credential id has.
     private static final String CREDENTIAL_ID = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
     // Stands in for the ceremony Redis is holding. The tests that use it replace the ceremony
@@ -63,6 +68,8 @@ class PasskeyServiceStepUpTest {
 
     @Mock
     private PasskeyCredentialRepository repository;
+    @Mock
+    private PasskeyPrincipals principals;
     @Mock
     private StringRedisTemplate redisTemplate;
     @Mock
@@ -74,14 +81,21 @@ class PasskeyServiceStepUpTest {
     @BeforeEach
     void setUp() {
         properties = new LoginFlowProperties();
-        service = new PasskeyService(repository, properties, redisTemplate, new ObjectMapper());
+        service = new PasskeyService(repository, principals, properties, redisTemplate, new ObjectMapper());
+        lenient().when(principals.forUserId(USER))
+                .thenReturn(java.util.Optional.of(new PasskeyPrincipals.Principal(PRINCIPAL, ACCOUNT.rawBytes())));
+        lenient().when(principals.fromText(PRINCIPAL))
+                .thenReturn(java.util.Optional.of(new PasskeyPrincipals.Principal(PRINCIPAL, ACCOUNT.rawBytes())));
+        lenient().when(principals.currentUserId(PRINCIPAL)).thenReturn(java.util.Optional.of(USER));
+        lenient().when(principals.fromHandleBytes(ACCOUNT.rawBytes()))
+                .thenReturn(java.util.Optional.of(new PasskeyPrincipals.Principal(PRINCIPAL, ACCOUNT.rawBytes())));
     }
 
     @Test
     void theStepUpCeremonyDemandsUserVerification() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(repository.existsByUserId(USER)).thenReturn(true);
-        when(repository.findByUserId(USER)).thenReturn(List.of(credential()));
+        when(repository.existsByAccountPrincipal(PRINCIPAL)).thenReturn(true);
+        when(repository.findByAccountPrincipal(PRINCIPAL)).thenReturn(List.of(credential()));
 
         service.startStepUpAssertion("step-1", USER);
 
@@ -89,7 +103,8 @@ class PasskeyServiceStepUpTest {
         verify(valueOperations).set(eq("passkey:stepup:step-1"), stored.capture(), any());
         assertThat(stored.getValue()).contains("\"userVerification\":\"required\"");
         // Pinned to the account that asked for it, so the assertion cannot resolve elsewhere.
-        assertThat(stored.getValue()).contains(USER);
+        assertThat(stored.getValue()).contains(PRINCIPAL);
+        assertThat(stored.getValue()).doesNotContain(USER);
     }
 
     @Test
@@ -122,7 +137,7 @@ class PasskeyServiceStepUpTest {
 
     @Test
     void anAccountWithNoCredentialGetsAClearRefusalAndNoChallenge() {
-        when(repository.existsByUserId(USER)).thenReturn(false);
+        when(repository.existsByAccountPrincipal(PRINCIPAL)).thenReturn(false);
 
         assertThatThrownBy(() -> service.startStepUpAssertion("step-1", USER))
                 .isInstanceOf(LoginFlowException.class)
@@ -135,8 +150,8 @@ class PasskeyServiceStepUpTest {
     @Test
     void aRefusedStepUpAssertionBurnsItsChallenge() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(repository.existsByUserId(USER)).thenReturn(true);
-        when(repository.findByUserId(USER)).thenReturn(List.of(credential()));
+        when(repository.existsByAccountPrincipal(PRINCIPAL)).thenReturn(true);
+        when(repository.findByAccountPrincipal(PRINCIPAL)).thenReturn(List.of(credential()));
         service.startStepUpAssertion("step-1", USER);
         ArgumentCaptor<String> stored = ArgumentCaptor.forClass(String.class);
         verify(valueOperations).set(eq("passkey:stepup:step-1"), stored.capture(), any());
@@ -275,8 +290,9 @@ class PasskeyServiceStepUpTest {
 
     private PasskeyCredential credential() {
         return PasskeyCredential.builder()
+                .accountPrincipal(PRINCIPAL)
                 .userId(USER)
-                .userHandle("dXNlcg")
+                .userHandle(new com.yubico.webauthn.data.ByteArray(ACCOUNT.rawBytes()).getBase64Url())
                 .credentialId(CREDENTIAL_ID)
                 .publicKeyCose(CREDENTIAL_ID)
                 .signatureCount(0)

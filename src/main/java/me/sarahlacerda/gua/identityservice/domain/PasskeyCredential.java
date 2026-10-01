@@ -27,8 +27,13 @@ public class PasskeyCredential {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
+    /** Matrix user id at registration. Audit only: ownership is {@link #accountPrincipal}. */
     @Column(name = "user_id", nullable = false)
     private String userId;
+
+    /** The owning account principal, in canonical text. Null means no owner, and assertion refuses it. */
+    @Column(name = "account_principal", length = 64)
+    private String accountPrincipal;
 
     @Column(name = "user_handle", nullable = false)
     private String userHandle;
@@ -56,6 +61,7 @@ public class PasskeyCredential {
 
     @Builder
     public PasskeyCredential(
+            String accountPrincipal,
             String userId,
             String userHandle,
             String credentialId,
@@ -63,6 +69,7 @@ public class PasskeyCredential {
             long signatureCount,
             boolean backupEligible,
             boolean backupState) {
+        this.accountPrincipal = accountPrincipal;
         this.userId = userId;
         this.userHandle = userHandle;
         this.credentialId = credentialId;
