@@ -188,7 +188,7 @@ public class SecurityController {
     }
 
     @PostMapping("/passkey/credentials/{credentialId}/remove")
-    @Operation(summary = "Remove one passkey credential", description = "Removes the named credential after a step-up: a user-verifying passkey assertion, or the account PIN. Until this existed the only way to remove a credential was to remove them all, so an owner locking a thief out of a stolen device had to wipe every credential and register a new one, which put their own remaining factor inside the fresh-2FA hold. The account's last factor is refused (409 factor_required): the way to be rid of every credential is still the delayed recovery, which assumes they are lost. A credential id that is not this account's is answered the same way as one that does not exist, so this cannot be used to ask whose a credential is.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @Operation(summary = "Remove one passkey credential", description = "Removes the named credential after a step-up: a user-verifying passkey assertion, or the account PIN. The account's last factor is refused (409 factor_required): the way to be rid of every credential is still the delayed recovery, which assumes they are lost. A credential id that is not this account's is answered the same way as one that does not exist, so this cannot be used to ask whose a credential is.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "204", description = "Removed, or there was nothing with that id"),
             @ApiResponse(responseCode = "400", description = "invalid_pin or invalid_request", content = @Content),
