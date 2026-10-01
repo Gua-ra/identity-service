@@ -118,7 +118,6 @@ public class AccountAuthorityService {
                 challengeB64);
     }
 
-    /** The first opposition needs no step-up. */
     @Transactional
     public void oppose(String userId, String recordHash, String passkeyStepUpId, JsonNode passkeyCredential,
             String pin, String requesterIp) {
@@ -396,7 +395,7 @@ public class AccountAuthorityService {
         requireSignerMayAct(account, record, devices, now);
 
         if (cancelledRecord != null) {
-            // Charged only once acceptance is certain: the backoff lives in Redis and would survive a rollback.
+            // Charged after the last refusal this method can raise: the Redis backoff survives a rollback.
             chargeCancellation(account, cancelledRecord, now);
         }
 
