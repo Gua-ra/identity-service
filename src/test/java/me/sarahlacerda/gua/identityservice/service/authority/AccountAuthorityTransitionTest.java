@@ -494,6 +494,30 @@ class AccountAuthorityTransitionTest {
     }
 
     @Test
+    void aRecoveryNamingADeviceTheAccountAlreadyHasSettlesOntoThatDevice() {
+        rootTheAccount();
+        grantSecondDevice();
+        String challenge = mint(Purpose.RECOVER);
+        byte[] bytes = AuthorityRecords.recoveryFor(reference, firstDevice.rawPublicKey(),
+                replacementRecoveryKey.rawPublicKey(), "iPhone again", AuthorityRecord.AUTHORIZATION_RECOVERY_KEY,
+                recoveryKey.rawPublicKey(), head().nextSeq(), hexToBytes(head().getHeadHash()));
+        AccountAuthorityService.Submitted recovery = service.recoverAuthority(USER, Optional.of(NATIVE_CLIENT),
+                SESSION, encode(bytes), sign(recoveryKey, AuthorityRecordType.AUTHORITY_RECOVERY, challenge, bytes),
+                challenge);
+
+        clock.advance(Duration.ofDays(8));
+        service.state(USER);
+
+        assertThat(deviceRepository.findByAccount(account())).hasSize(2);
+        AuthorityDevice named = device(firstDevice.rawPublicKey());
+        assertThat(named.getState()).isEqualTo(AuthorityDevice.State.ACTIVE);
+        assertThat(named.getGrantedSeq()).isEqualTo(recovery.seq());
+        assertThat(named.getRevokedSeq()).isNull();
+        assertThat(named.getLabel()).isEqualTo("iPhone again");
+        assertThat(device(secondDevice.rawPublicKey()).getState()).isEqualTo(AuthorityDevice.State.REVOKED);
+    }
+
+    @Test
     void anActiveDeviceExtendsARecoveryWindowOnceAndNotTwice() {
         rootTheAccount();
         AccountAuthorityService.Submitted recovery = recoverWithTheCommittedKey();

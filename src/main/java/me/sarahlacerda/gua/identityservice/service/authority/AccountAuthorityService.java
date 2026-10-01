@@ -643,15 +643,24 @@ public class AccountAuthorityService {
             }
             case DEVICE_REVOKE -> revokeDeviceRow(account, record.deviceKey(), seq, now);
             case AUTHORITY_RECOVERY -> {
+                String recovered = encode(record.deviceKey());
+                AuthorityDevice named = null;
                 for (AuthorityDevice device : deviceRepository.findByAccount(account.reference())) {
-                    if (device.getState() != AuthorityDevice.State.REVOKED) {
+                    if (device.getDeviceKeyB64().equals(recovered)) {
+                        named = device;
+                    } else if (device.getState() != AuthorityDevice.State.REVOKED) {
                         device.setState(AuthorityDevice.State.REVOKED);
                         device.setRevokedSeq(seq);
                         deviceRepository.save(device);
                     }
                 }
-                deviceRepository.save(AuthorityDevice.granted(account.reference(), encode(record.deviceKey()),
-                        record.label(), seq, null, AuthorityDevice.State.ACTIVE, now));
+                if (named == null) {
+                    named = AuthorityDevice.granted(account.reference(), recovered, record.label(), seq, null,
+                            AuthorityDevice.State.ACTIVE, now);
+                } else {
+                    named.activateAgain(record.label(), seq);
+                }
+                deviceRepository.save(named);
             }
             case OPPOSE -> throw new IllegalStateException("an Oppose has no effect to apply");
         }

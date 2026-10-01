@@ -12,6 +12,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -22,7 +23,8 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Entity
-@Table(name = "account_authority_device")
+@Table(name = "account_authority_device", uniqueConstraints = @UniqueConstraint(
+        name = "idx_account_authority_device_key", columnNames = { "account_id", "device_key_b64" }))
 public class AuthorityDevice {
 
     public enum State {
@@ -75,6 +77,14 @@ public class AuthorityDevice {
         device.state = state;
         device.createdAt = now;
         return device;
+    }
+
+    public void activateAgain(String label, long grantedSeq) {
+        this.label = label;
+        this.grantedSeq = grantedSeq;
+        this.revokedSeq = null;
+        this.quarantineUntil = null;
+        this.state = State.ACTIVE;
     }
 
     public boolean isQuarantined(Instant now) {
