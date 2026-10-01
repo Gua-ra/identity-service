@@ -55,12 +55,12 @@ public class AuthorityFcmTransport implements AuthorityPushTransport {
     public Outcome send(String token, String appId, String title, String body) {
         FcmProperties fcm = fcm();
         String url = fcm.getBaseUrl() + "/v1/projects/" + fcm.getProjectId() + "/messages:send";
-        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
-                .header("authorization", "Bearer " + bearer.current())
-                .header("content-type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(payload(token, title, body), StandardCharsets.UTF_8))
-                .build();
         try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                    .header("authorization", "Bearer " + bearer.current())
+                    .header("content-type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(payload(token, title, body), StandardCharsets.UTF_8))
+                    .build();
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
             return outcome(response.statusCode(), response.body());
         } catch (InterruptedException ex) {

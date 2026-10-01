@@ -75,15 +75,15 @@ public class AuthorityApnsTransport implements AuthorityPushTransport {
     public Outcome send(String token, String appId, String title, String body) {
         ApnsProperties apns = apns();
         String topic = apns.getTopics().getOrDefault(appId, appId);
-        HttpRequest request = HttpRequest.newBuilder(URI.create(apns.getBaseUrl() + "/3/device/" + token))
-                .header("authorization", "bearer " + providerToken())
-                .header("apns-topic", topic)
-                .header("apns-push-type", "alert")
-                .header("apns-priority", "10")
-                .header("content-type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(payload(title, body), StandardCharsets.UTF_8))
-                .build();
         try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(apns.getBaseUrl() + "/3/device/" + token))
+                    .header("authorization", "bearer " + providerToken())
+                    .header("apns-topic", topic)
+                    .header("apns-push-type", "alert")
+                    .header("apns-priority", "10")
+                    .header("content-type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(payload(title, body), StandardCharsets.UTF_8))
+                    .build();
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
             return outcome(response.statusCode(), response.body());
         } catch (InterruptedException ex) {

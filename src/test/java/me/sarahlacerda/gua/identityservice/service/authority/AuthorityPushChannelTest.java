@@ -114,6 +114,24 @@ class AuthorityPushChannelTest {
     }
 
     @Test
+    void aDestinationThatThrowsIsRecordedAsAFailureAndTheRestAreStillSent() {
+        properties.getAuthority().getNotifications().setEnabled(true);
+        StubTransport transport = new StubTransport(Platform.APNS, true);
+        transport.throwsFor = "broken-token";
+        AuthorityNotificationRegistration broken = registration();
+        broken.setToken("broken-token");
+        AuthorityNotificationRegistration healthy = registration();
+        when(registry.live("@sarah:gua.global", T0)).thenReturn(List.of(broken, healthy));
+
+        new AuthorityPushNotifier(registry, List.of(transport), policy, clock)
+                .notifyTransitionCompleted("@sarah:gua.global", "DEVICE_GRANT", "iPad");
+
+        assertThat(transport.sent).extracting(StubTransport.Sent::token).containsExactly("apns-token");
+        verify(registry).recordOutcome(broken, Outcome.RETRYABLE, T0);
+        verify(registry).recordOutcome(healthy, Outcome.DELIVERED, T0);
+    }
+
+    @Test
     void aRegistrationWhoseTransportIsNotConfiguredIsLeftAlone() {
         properties.getAuthority().getNotifications().setEnabled(true);
         StubTransport apns = new StubTransport(Platform.APNS, true);
@@ -167,6 +185,30 @@ class AuthorityPushChannelTest {
     }
 
     @Test
+    void anApnsTokenThatIsNotAUriPathIsAFailureAndNotAnException() throws Exception {
+        configureApns();
+        HttpClient http = mock(HttpClient.class);
+        AuthorityApnsTransport transport = new AuthorityApnsTransport(properties, http, clock);
+
+        assertThat(transport.send("not a token", "global.gua", "t", "b")).isEqualTo(Outcome.RETRYABLE);
+        verify(http, never()).send(any(HttpRequest.class), any());
+    }
+
+    @Test
+    void anFcmBearerThatCannotBeMintedIsAFailureAndNotAnException() throws Exception {
+        IdentityServiceProperties.FcmProperties fcm = properties.getAuthority().getNotifications().getFcm();
+        fcm.setBaseUrl("https://fcm.example.invalid");
+        fcm.setProjectId("gua");
+        AuthorityFcmBearer bearer = mock(AuthorityFcmBearer.class);
+        when(bearer.current()).thenThrow(new IllegalStateException("the FCM token exchange failed"));
+        HttpClient http = mock(HttpClient.class);
+
+        assertThat(new AuthorityFcmTransport(properties, bearer, http).send("token", "global.gua", "t", "b"))
+                .isEqualTo(Outcome.RETRYABLE);
+        verify(http, never()).send(any(HttpRequest.class), any());
+    }
+
+    @Test
     void anUnconfiguredApnsTransportSaysSo() {
         assertThat(new AuthorityApnsTransport(properties, mock(HttpClient.class), clock).isConfigured()).isFalse();
     }
@@ -202,6 +244,7 @@ class AuthorityPushChannelTest {
         private final boolean configured;
         private final List<Sent> sent = new ArrayList<>();
         private Outcome outcome = Outcome.DELIVERED;
+        private String throwsFor;
 
         private StubTransport(Platform platform, boolean configured) {
             this.platform = platform;
@@ -220,6 +263,9 @@ class AuthorityPushChannelTest {
 
         @Override
         public Outcome send(String token, String appId, String title, String body) {
+            if (token.equals(throwsFor)) {
+                throw new IllegalArgumentException("Illegal character in path");
+            }
             sent.add(new Sent(token, appId, title, body));
             return outcome;
         }

@@ -128,8 +128,7 @@ public class AuthorityPushNotifier implements AuthorityNotifier {
             String body, Instant now) {
         for (AuthorityNotificationRegistration row : destinations) {
             transport(row).ifPresent(transport -> {
-                AuthorityPushTransport.Outcome outcome =
-                        transport.send(row.getToken(), row.getAppId(), title, body);
+                AuthorityPushTransport.Outcome outcome = sendTo(transport, row, title, body);
                 if (outcome != AuthorityPushTransport.Outcome.DELIVERED) {
                     log.warn("A security notification for {} was not delivered ({}, {})", userId,
                             row.getTokenFingerprint(), outcome);
@@ -141,6 +140,17 @@ public class AuthorityPushNotifier implements AuthorityNotifier {
                             row.getTokenFingerprint(), ex.getMessage());
                 }
             });
+        }
+    }
+
+    private static AuthorityPushTransport.Outcome sendTo(AuthorityPushTransport transport,
+            AuthorityNotificationRegistration row, String title, String body) {
+        try {
+            return transport.send(row.getToken(), row.getAppId(), title, body);
+        } catch (RuntimeException ex) {
+            log.warn("A security notification could not be sent ({}): {}", row.getTokenFingerprint(),
+                    ex.getMessage());
+            return AuthorityPushTransport.Outcome.RETRYABLE;
         }
     }
 
