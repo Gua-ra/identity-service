@@ -111,12 +111,12 @@ public class UserSecurityService {
      * {@link PinChangeService}, after {@link #preparePinChange(String, String)} and an accepted
      * factor.
      */
-    String issuePinChangeChallenge(String userId, String phone, String requesterIp) {
+    String issuePinChangeChallenge(String userId, String phone, String requesterIp, String language) {
         // The challenge id is minted before the send because it is what the code is keyed
         // under. Scoped to this challenge, the code cannot be planted by, or satisfied by,
         // the unauthenticated public send.
         String challengeId = UUID.randomUUID().toString();
-        otpService.sendScopedOtp(OtpScope.PIN_CHANGE, challengeId, phone, requesterIp, null);
+        otpService.sendScopedOtp(OtpScope.PIN_CHANGE, challengeId, phone, requesterIp, language);
 
         Duration ttl = properties.getSecurity().getPinChangeChallengeTtl();
         redisTemplate.opsForValue().set(changeChallengeKey(challengeId), userId + "|" + phone, ttl);

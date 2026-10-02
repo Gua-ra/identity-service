@@ -35,8 +35,9 @@ public class PinChangeService {
     private final PasskeyService passkeyService;
     private final SecurityAuditLogger auditLogger;
 
+    /** {@code language} is the tag the code is texted in; null takes the default text. */
     public String start(String userId, String phone, String currentPin, String passkeyStepUpId,
-            JsonNode passkeyCredential, String requesterIp) {
+            JsonNode passkeyCredential, String requesterIp, String language) {
         // An explicit JSON null arrives as a NullNode, which is no more an assertion than a
         // missing field.
         boolean passkeyAttempted = StringUtils.hasText(passkeyStepUpId)
@@ -59,7 +60,7 @@ public class PinChangeService {
             // transactional method of the same class, the refusal rolled its own count back.
             userSecurityService.validatePinOrThrow(userId, currentPin);
         }
-        return userSecurityService.issuePinChangeChallenge(userId, phone, requesterIp);
+        return userSecurityService.issuePinChangeChallenge(userId, phone, requesterIp, language);
     }
 
     private void acceptPasskey(String userId, String passkeyStepUpId, JsonNode passkeyCredential,

@@ -4,10 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -224,6 +226,26 @@ class LoginFlowControllerTest {
     }
 
     @Test
+    void contextReportsTheLoginLanguage() throws Exception {
+        LoginSession session = session(Phase.PHONE);
+        session.setLocale("pt-BR");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.locale").value("pt-BR"));
+    }
+
+    @Test
+    void contextOmitsTheLanguageWhenNoneWasGiven() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.locale").doesNotExist());
+    }
+
+    @Test
     void contextExposesPasskeyIntent() throws Exception {
         LoginSession session = session(Phase.PHONE);
         session.setIntent(LoginSession.Intent.PASSKEY);
@@ -256,13 +278,80 @@ class LoginFlowControllerTest {
                                 org.hamcrest.Matchers.containsString("SameSite=Lax"))));
     }
 
+    /**
+     * A browser opened the link, so an expired one lands on the sign-in page in the user's
+     * language, where GET /login/context reports login_session_expired, rather than on raw JSON.
+     */
     @Test
-    void openPasskeyEnrollmentRejectsExpiredToken() throws Exception {
+    void anExpiredEnrollmentLinkRedirectsToTheSigninPageInTheRequestLanguage() throws Exception {
+        when(properties.getUiUrl()).thenReturn("/signin");
         when(loginSessionService.consumeEnrollToken("tok-1")).thenReturn(Optional.empty());
 
-        mockMvc.perform(get("/login/passkey/enroll/{token}", "tok-1"))
-                .andExpect(status().isGone())
-                .andExpect(jsonPath("$.code").value("enroll_link_expired"));
+        mockMvc.perform(get("/login/passkey/enroll/{token}", "tok-1")
+                .header("Accept-Language", "pt-BR,pt;q=0.9,en;q=0.8"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin?ui_locales=pt-BR"))
+                .andExpect(header().doesNotExist("Set-Cookie"));
+
+        verify(loginSessionService, never()).find(any());
+    }
+
+    @Test
+    void openEnrollmentCarriesTheUiLocalesOfItsUrl() throws Exception {
+        stubEnrollmentHandoff();
+        LoginSession session = session(Phase.ENROLL_STEP_UP);
+        session.setLocale("en");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(get("/login/enroll/{token}", "tok-1")
+                .param("ui_locales", "pt-BR")
+                .header("Accept-Language", "en-US"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin?ui_locales=pt-BR"));
+
+        // Saved, so GET /login/context and the step-up code use the same language.
+        ArgumentCaptor<LoginSession> saved = ArgumentCaptor.forClass(LoginSession.class);
+        verify(loginSessionService).save(eq(SID), saved.capture());
+        assertEquals("pt-BR", saved.getValue().getLocale());
+    }
+
+    @Test
+    void openEnrollmentKeepsTheLanguageTheAppStartedItIn() throws Exception {
+        stubEnrollmentHandoff();
+        LoginSession session = session(Phase.ENROLL_STEP_UP);
+        session.setLocale("es");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        // The web view reports the system language; the app's own request said es.
+        mockMvc.perform(get("/login/enroll/{token}", "tok-1")
+                .header("Accept-Language", "en-US,en;q=0.9"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin?ui_locales=es"));
+
+        verify(loginSessionService, never()).save(any(), any());
+    }
+
+    @Test
+    void openEnrollmentFallsBackToTheWebViewLanguage() throws Exception {
+        stubEnrollmentHandoff();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.ENROLL_STEP_UP)));
+
+        mockMvc.perform(get("/login/enroll/{token}", "tok-1")
+                .header("Accept-Language", "fr-CA,fr;q=0.9"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin?ui_locales=fr-CA"))
+                .andExpect(header().string("Set-Cookie", org.hamcrest.Matchers.containsString("gua_login=" + SID)));
+
+        ArgumentCaptor<LoginSession> saved = ArgumentCaptor.forClass(LoginSession.class);
+        verify(loginSessionService).save(eq(SID), saved.capture());
+        assertEquals("fr-CA", saved.getValue().getLocale());
+    }
+
+    private void stubEnrollmentHandoff() {
+        when(properties.isCookieSecure()).thenReturn(true);
+        when(properties.getSessionTtl()).thenReturn(Duration.ofMinutes(10));
+        when(properties.getUiUrl()).thenReturn("/signin");
+        when(loginSessionService.consumeEnrollToken("tok-1")).thenReturn(Optional.of(SID));
     }
 
     @Test
@@ -279,6 +368,41 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.maskedPhone").value("\u2022\u2022\u2022\u20224567"));
 
         verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+    }
+
+    @Test
+    void submitPhoneWithoutALanguageTextsInTheLanguageTheLoginStartedIn() throws Exception {
+        LoginSession session = session(Phase.PHONE);
+        session.setLocale("pt-BR");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(post("/login/phone")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phoneNumber\":\"" + PHONE + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.locale").value("pt-BR"));
+
+        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+    }
+
+    @Test
+    void submitPhoneWithALanguageReplacesTheOneTheLoginStartedIn() throws Exception {
+        LoginSession session = session(Phase.PHONE);
+        session.setLocale("pt-BR");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        // The user switched the page to Spanish.
+        mockMvc.perform(post("/login/phone")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phoneNumber\":\"" + PHONE + "\",\"locale\":\"es\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.locale").value("es"));
+
+        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("es"));
     }
 
     @Test

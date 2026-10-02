@@ -7,12 +7,14 @@ import java.util.UUID;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -45,6 +47,7 @@ import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
+import me.sarahlacerda.gua.identityservice.service.LanguageTags;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.Phase;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
@@ -124,7 +127,7 @@ public class SecurityController {
     }
 
     @PostMapping("/pin/enroll/start")
-    @Operation(summary = "Start in-app PIN enrollment", description = "Lets an already-signed-in user add a PIN from settings. Mirrors POST /security/passkey/enroll/start: it builds a login session pinned to the authenticated user and returns a one-time enroll URL the client opens in an authenticated web view. The session starts at ENROLL_STEP_UP and stores nothing until the account is confirmed there. The body is optional and carries at most the app-scheme redirect this build answers, which must be one the deployment allows.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @Operation(summary = "Start in-app PIN enrollment", description = "Lets an already-signed-in user add a PIN from settings. Mirrors POST /security/passkey/enroll/start: it builds a login session pinned to the authenticated user and returns a one-time enroll URL the client opens in an authenticated web view. The session starts at ENROLL_STEP_UP and stores nothing until the account is confirmed there. The body is optional and carries at most the app-scheme redirect this build answers, which must be one the deployment allows. The Accept-Language header sets the language the web view opens in, unless the enroll URL carries ui_locales.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Enrollment session created; open the returned enrollUrl in a web view"),
             @ApiResponse(responseCode = "400", description = "invalid_redirect_uri: the named redirect is not one this deployment allows. Retry once with no redirectUri to take the deployment's default.", content = @Content),
@@ -132,7 +135,8 @@ public class SecurityController {
             @ApiResponse(responseCode = "409", description = "pin_already_set: the account already has a PIN, or step_up_unavailable: the only factor this account holds is one this deployment cannot run", content = @Content)
     })
     public ResponseEntity<PinEnrollStartResponse> startPinEnrollment(
-            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Optional. The app-scheme redirect this build answers.", required = false, content = @Content(schema = @Schema(implementation = FactorEnrollStartRequest.class))) @RequestBody(required = false) FactorEnrollStartRequest request) {
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Optional. The app-scheme redirect this build answers.", required = false, content = @Content(schema = @Schema(implementation = FactorEnrollStartRequest.class))) @RequestBody(required = false) FactorEnrollStartRequest request,
+            @RequestHeader(value = HttpHeaders.ACCEPT_LANGUAGE, required = false) String acceptLanguage) {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
         // Same shape as the passkey guard below: an account that already has one is told so,
         // rather than being walked into a setup step that would refuse under the row lock.
@@ -141,11 +145,12 @@ public class SecurityController {
                     "This account already has a PIN.");
         }
         return ResponseEntity.ok(new PinEnrollStartResponse(
-                startFactorEnrollment(userId, LoginSession.EnrollTarget.PIN, requestedRedirectUri(request))));
+                startFactorEnrollment(userId, LoginSession.EnrollTarget.PIN, requestedRedirectUri(request),
+                        acceptLanguage)));
     }
 
     @PostMapping("/pin/change/start")
-    @Operation(summary = "Start an OTP-protected PIN change", description = "Enforces the change cooldown, authorizes the change with a user-verifying passkey step-up assertion (preferred) or the current PIN, and sends an OTP to the verified phone. Returns a challenge to redeem at /security/pin/change/complete.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @Operation(summary = "Start an OTP-protected PIN change", description = "Enforces the change cooldown, authorizes the change with a user-verifying passkey step-up assertion (preferred) or the current PIN, and sends an OTP to the verified phone, in the language of the Accept-Language header. Returns a challenge to redeem at /security/pin/change/complete.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Challenge created and OTP sent"),
             @ApiResponse(responseCode = "400", description = "Validation failed, current PIN incorrect, passkey assertion refused, or twofa_cooldown_active for a freshly registered passkey", content = @Content),
@@ -155,10 +160,12 @@ public class SecurityController {
     })
     public ResponseEntity<PinChangeStartResponse> startPinChange(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Phone to receive the OTP, and a passkey step-up assertion or the current PIN", required = true, content = @Content(schema = @Schema(implementation = PinChangeStartRequest.class))) @RequestBody @Valid PinChangeStartRequest request,
+            @RequestHeader(value = HttpHeaders.ACCEPT_LANGUAGE, required = false) String acceptLanguage,
             @Parameter(hidden = true) HttpServletRequest servletRequest) {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
         String challengeId = pinChangeService.start(userId, request.getPhone(), request.getCurrentPin(),
-                request.getPasskeyStepUpId(), request.getPasskeyCredential(), servletRequest.getRemoteAddr());
+                request.getPasskeyStepUpId(), request.getPasskeyCredential(), servletRequest.getRemoteAddr(),
+                LanguageTags.fromAcceptLanguage(acceptLanguage));
         long ttlSeconds = properties.getSecurity().getPinChangeChallengeTtl().toSeconds();
         return ResponseEntity.ok(new PinChangeStartResponse(challengeId, ttlSeconds));
     }
@@ -219,7 +226,7 @@ public class SecurityController {
     }
 
     @PostMapping("/passkey/enroll/start")
-    @Operation(summary = "Start in-app passkey enrollment", description = "Lets an already-signed-in user add a passkey from settings. Builds a login session pinned to the authenticated user and returns a one-time enroll URL the client opens in an authenticated web view. The session starts at ENROLL_STEP_UP and runs the passkey setup step only once the account has been confirmed there. The body is optional and carries at most the app-scheme redirect this build answers, which must be one the deployment allows.", security = @SecurityRequirement(name = "oidcAccessToken"))
+    @Operation(summary = "Start in-app passkey enrollment", description = "Lets an already-signed-in user add a passkey from settings. Builds a login session pinned to the authenticated user and returns a one-time enroll URL the client opens in an authenticated web view. The session starts at ENROLL_STEP_UP and runs the passkey setup step only once the account has been confirmed there. The body is optional and carries at most the app-scheme redirect this build answers, which must be one the deployment allows. The Accept-Language header sets the language the web view opens in, unless the enroll URL carries ui_locales.", security = @SecurityRequirement(name = "oidcAccessToken"))
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Enrollment session created; open the returned enrollUrl in a web view"),
             @ApiResponse(responseCode = "400", description = "invalid_redirect_uri: the named redirect is not one this deployment allows. Retry once with no redirectUri to take the deployment's default.", content = @Content),
@@ -227,7 +234,8 @@ public class SecurityController {
             @ApiResponse(responseCode = "409", description = "passkey_already_registered: the account already has a passkey, or step_up_unavailable: the only factor this account holds is one this deployment cannot run", content = @Content)
     })
     public ResponseEntity<PasskeyEnrollStartResponse> startPasskeyEnrollment(
-            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Optional. The app-scheme redirect this build answers.", required = false, content = @Content(schema = @Schema(implementation = FactorEnrollStartRequest.class))) @RequestBody(required = false) FactorEnrollStartRequest request) {
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Optional. The app-scheme redirect this build answers.", required = false, content = @Content(schema = @Schema(implementation = FactorEnrollStartRequest.class))) @RequestBody(required = false) FactorEnrollStartRequest request,
+            @RequestHeader(value = HttpHeaders.ACCEPT_LANGUAGE, required = false) String acceptLanguage) {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
 
         // Enrolling a second passkey for an account that already has one cannot succeed.
@@ -246,7 +254,8 @@ public class SecurityController {
         }
 
         return ResponseEntity.ok(new PasskeyEnrollStartResponse(
-                startFactorEnrollment(userId, LoginSession.EnrollTarget.PASSKEY, requestedRedirectUri(request))));
+                startFactorEnrollment(userId, LoginSession.EnrollTarget.PASSKEY, requestedRedirectUri(request),
+                        acceptLanguage)));
     }
 
     /**
@@ -276,7 +285,7 @@ public class SecurityController {
      * strongest proof the account can give was the point.
      */
     private String startFactorEnrollment(String userId, LoginSession.EnrollTarget target,
-            String requestedRedirectUri) {
+            String requestedRedirectUri, String acceptLanguage) {
         // Resolved first, before any account state is read: whether a redirect is one this
         // deployment allows is a fact about the request alone, so a refused one stops here
         // rather than being carried on an object that is about to be filled in.
@@ -306,6 +315,9 @@ public class SecurityController {
         // completion, and never reachable as an open login (reauthUserId is set above).
         session.setRedirectUri(redirectUri);
         session.setPhase(Phase.ENROLL_STEP_UP);
+        // The app's language, from its own API call. The web view that opens the link may report
+        // the system language instead, so the handoff prefers this one.
+        session.setLocale(LanguageTags.fromAcceptLanguage(acceptLanguage));
         session.setCsrfToken(loginSessionService.newToken());
 
         String sessionId = loginSessionService.create(session);

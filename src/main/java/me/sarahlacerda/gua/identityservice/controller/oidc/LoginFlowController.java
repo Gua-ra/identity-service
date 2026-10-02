@@ -27,6 +27,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.util.UriComponentsBuilder;
 
@@ -46,6 +47,7 @@ import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
 import me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
+import me.sarahlacerda.gua.identityservice.service.LanguageTags;
 import me.sarahlacerda.gua.identityservice.service.MatrixProvisioningService;
 import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
@@ -162,7 +164,7 @@ public class LoginFlowController {
     private final EndOtherSessionsService endOtherSessionsService;
 
     @GetMapping("/context")
-    @Operation(summary = "Fetch the current login state", description = "Returns the current step, the login intent (PHONE or PASSKEY, from the OIDC login_hint), a CSRF token to echo on subsequent calls, the masked phone when known, and whether this is an in-app passkey enrollment. Once the step is one the flow can only reach with the subject resolved, it also reports passkeyRegistered, preferredFactor and passkeysEnabled; all are absent before then, and in particular at the phone step, where the session holds a submitted number and nothing proved. At ENROLL_STEP_UP, and only there, it additionally reports pinRegistered, so the step-up offers the PIN beside the passkey only to an account that holds one. At PIN_REQUIRED and PASSKEY_REQUIRED after an OTP it also reports recovery, the delayed account recovery state, which is absent whenever recovery is not available to this session.")
+    @Operation(summary = "Fetch the current login state", description = "Returns the current step, the login intent (PHONE or PASSKEY, from the OIDC login_hint), a CSRF token to echo on subsequent calls, the login language (locale) when known, the masked phone when known, and whether this is an in-app passkey enrollment. Once the step is one the flow can only reach with the subject resolved, it also reports passkeyRegistered, preferredFactor and passkeysEnabled; all are absent before then, and in particular at the phone step, where the session holds a submitted number and nothing proved. At ENROLL_STEP_UP, and only there, it additionally reports pinRegistered, so the step-up offers the PIN beside the passkey only to an account that holds one. At PIN_REQUIRED and PASSKEY_REQUIRED after an OTP it also reports recovery, the delayed account recovery state, which is absent whenever recovery is not available to this session.")
     public ResponseEntity<LoginStateResponse> context(
             @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId) {
         LoginSession session = requireSession(sessionId);
@@ -170,14 +172,37 @@ public class LoginFlowController {
     }
 
     @GetMapping({ "/enroll/{token}", "/passkey/enroll/{token}" })
-    @Operation(summary = "Open the in-app factor enrollment web view", description = "One-time handoff for an already-signed-in user adding a passkey or a PIN from settings. The enrollment session is created by POST /security/passkey/enroll/start or POST /security/pin/enroll/start; the cookie set on that API call is not present in this separate web view, so this redeems the one-time token, drops the first-party login cookie, and redirects into the sign-in SPA, which finds the session at the ENROLL_STEP_UP step. The /passkey/ spelling is the path older enroll links carry and is the same handoff.")
+    @Operation(summary = "Open the in-app factor enrollment web view", description = "One-time handoff for an already-signed-in user adding a passkey or a PIN from settings. The enrollment session is created by POST /security/passkey/enroll/start or POST /security/pin/enroll/start; the cookie set on that API call is not present in this separate web view, so this redeems the one-time token, drops the first-party login cookie, and redirects into the sign-in SPA, which finds the session at the ENROLL_STEP_UP step. The redirect carries ui_locales: the ui_locales on this URL, else the language the enrollment was started in, else this request's Accept-Language. An expired or already used link redirects the same way without a cookie, so the SPA shows its own expired-session message in that language. The /passkey/ spelling is the path older enroll links carry and is the same handoff.")
     public ResponseEntity<Void> openPasskeyEnrollment(
-            @org.springframework.web.bind.annotation.PathVariable("token") String token) {
-        String sessionId = loginSessionService.consumeEnrollToken(token)
-                .orElseThrow(() -> new LoginFlowException(HttpStatus.GONE, "enroll_link_expired",
-                        "This passkey setup link has expired. Please try again."));
+            @org.springframework.web.bind.annotation.PathVariable("token") String token,
+            @RequestParam(value = LanguageTags.UI_LOCALES, required = false) String uiLocales,
+            @RequestHeader(value = HttpHeaders.ACCEPT_LANGUAGE, required = false) String acceptLanguage) {
+        Optional<String> redeemed = loginSessionService.consumeEnrollToken(token);
+        if (redeemed.isEmpty()) {
+            // A browser opened this, so answer with the sign-in page in the user's language, not raw
+            // JSON. No cookie is set, so the page reports login_session_expired, translated.
+            return ResponseEntity.status(HttpStatus.FOUND)
+                    .header(HttpHeaders.LOCATION, LanguageTags.withUiLocales(properties.getUiUrl(),
+                            LanguageTags.resolve(uiLocales, acceptLanguage)))
+                    .build();
+        }
+        String sessionId = redeemed.get();
         // Confirm the session is still live before establishing the cookie.
-        requireSession(sessionId);
+        LoginSession session = requireSession(sessionId);
+
+        // The web view's own Accept-Language is the system or browser language, so the language
+        // the app sent when it started the enrollment comes before it.
+        String locale = LanguageTags.fromUiLocales(uiLocales);
+        if (locale == null) {
+            locale = session.getLocale();
+        }
+        if (locale == null) {
+            locale = LanguageTags.fromAcceptLanguage(acceptLanguage);
+        }
+        if (locale != null && !locale.equals(session.getLocale())) {
+            session.setLocale(locale);
+            loginSessionService.save(sessionId, session);
+        }
 
         ResponseCookie cookie = ResponseCookie.from(properties.getCookieName(), sessionId)
                 .httpOnly(true)
@@ -189,7 +214,7 @@ public class LoginFlowController {
 
         return ResponseEntity.status(HttpStatus.FOUND)
                 .header(HttpHeaders.SET_COOKIE, cookie.toString())
-                .header(HttpHeaders.LOCATION, properties.getUiUrl())
+                .header(HttpHeaders.LOCATION, LanguageTags.withUiLocales(properties.getUiUrl(), locale))
                 .build();
     }
 
@@ -213,10 +238,11 @@ public class LoginFlowController {
         // deployment cannot be used to burn SMS credits or self-register. Native app
         // flows are exempt. Runs before the SMS is dispatched.
         registrationGuard.assertOtpAllowed(session, phone);
-        otpService.sendOtp(phone, servletRequest.getRemoteAddr(), request.locale());
+        String locale = postedLocale(request, session);
+        otpService.sendOtp(phone, servletRequest.getRemoteAddr(), locale);
 
         session.setPhoneNumber(phone);
-        session.setLocale(request.locale());
+        session.setLocale(locale);
         session.setPhase(Phase.OTP_SENT);
         loginSessionService.save(sessionId, session);
         return ResponseEntity.ok(state(session, null));
@@ -716,7 +742,7 @@ public class LoginFlowController {
         requireNoStrongerFactor(session);
 
         accountReauthService.startReauth(session.getUserId(), request.phoneNumber(),
-                servletRequest.getRemoteAddr(), request.locale());
+                servletRequest.getRemoteAddr(), postedLocale(request, session));
         // Nothing is recorded: the number is submitted again with the code, and checked again
         // the same way, so this step leaves no state behind for the next one to trust.
         return ResponseEntity.ok(state(session, null));
@@ -1087,6 +1113,7 @@ public class LoginFlowController {
                 maskPhone(session.getPhoneNumber()),
                 session.getPhoneHint(),
                 session.getCsrfToken(),
+                session.getLocale(),
                 session.isNewUser(),
                 redirectUrl,
                 session.getGenesisAttachChallenge(),
@@ -1144,6 +1171,12 @@ public class LoginFlowController {
      */
     private Boolean publishablePin(LoginSession session, AuthFactorPolicy.RegisteredFactors factors) {
         return factors == null || session.getPhase() != Phase.ENROLL_STEP_UP ? null : factors.pin();
+    }
+
+    /** The language the page posted, else the one this login started in. */
+    private static String postedLocale(PhoneRequest request, LoginSession session) {
+        String posted = LanguageTags.normalize(request.locale());
+        return posted != null ? posted : session.getLocale();
     }
 
     private static String maskPhone(String phone) {
@@ -1213,6 +1246,12 @@ public class LoginFlowController {
             String maskedPhone,
             String phoneHint,
             String csrfToken,
+            /**
+             * BCP 47 language of this login: the authorize ui_locales or Accept-Language, the
+             * language an enrollment was started or opened in, or the one the page last posted.
+             * Null, and omitted from the JSON, when none was given.
+             */
+            String locale,
             boolean newUser,
             String redirectUrl,
             /**

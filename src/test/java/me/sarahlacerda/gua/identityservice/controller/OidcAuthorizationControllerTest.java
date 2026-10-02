@@ -153,7 +153,78 @@ class OidcAuthorizationControllerTest {
         assertThat(session.getCodeChallenge()).isNull();
         assertThat(session.getIntent()).isEqualTo(LoginSession.Intent.PHONE);
         assertThat(session.getPhoneHint()).isNull();
+        assertThat(session.getLocale()).isNull();
         verifyNoInteractions(authorizationService);
+    }
+
+    // --- Login language -----------------------------------------------------------
+
+    @Test
+    void authorizePassesUiLocalesToTheLoginUi() throws Exception {
+        stubInteractiveFlow();
+
+        mockMvc.perform(authorizeRequest()
+                .param("ui_locales", "pt-BR")
+                .header("Accept-Language", "en-US,en;q=0.9"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin?ui_locales=pt-BR"));
+
+        assertThat(parkedSession().getLocale()).isEqualTo("pt-BR");
+    }
+
+    @Test
+    void authorizeFallsBackToTheAcceptLanguageHeader() throws Exception {
+        stubInteractiveFlow();
+
+        mockMvc.perform(authorizeRequest()
+                .header("Accept-Language", "en;q=0.5, es-419;q=0.9"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin?ui_locales=es-419"));
+
+        assertThat(parkedSession().getLocale()).isEqualTo("es-419");
+    }
+
+    @Test
+    void authorizeNormalizesTheTagItForwards() throws Exception {
+        stubInteractiveFlow();
+
+        // The ICU spelling, lower case, with a Unicode extension, then a second preference.
+        mockMvc.perform(authorizeRequest()
+                .param("ui_locales", "pt_br-u-ca-gregory fr"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin?ui_locales=pt-BR"));
+
+        assertThat(parkedSession().getLocale()).isEqualTo("pt-BR");
+    }
+
+    @Test
+    void authorizeSkipsAMalformedUiLocalesForTheHeader() throws Exception {
+        stubInteractiveFlow();
+
+        mockMvc.perform(authorizeRequest()
+                .param("ui_locales", "\"><script>")
+                .header("Accept-Language", "fr-CA"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin?ui_locales=fr-CA"));
+    }
+
+    @Test
+    void authorizeKeepsTheQueryAnAbsoluteUiUrlAlreadyHas() throws Exception {
+        stubInteractiveFlow();
+        when(loginFlowProperties.getUiUrl()).thenReturn("https://gua.example/signin?theme=dark");
+
+        mockMvc.perform(authorizeRequest()
+                .param("ui_locales", "fr"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "https://gua.example/signin?theme=dark&ui_locales=fr"));
+    }
+
+    private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder authorizeRequest() {
+        return get("/oauth2/authorize")
+                .param("response_type", "code")
+                .param("client_id", "mas")
+                .param("redirect_uri", CALLBACK)
+                .param("scope", "openid");
     }
 
     @Test
