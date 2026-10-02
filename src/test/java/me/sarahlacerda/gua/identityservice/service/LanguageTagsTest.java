@@ -74,4 +74,11 @@ class LanguageTagsTest {
         assertThat(LanguageTags.withUiLocales("/signin?ui_locales=en", "es")).isEqualTo("/signin?ui_locales=es");
         assertThat(LanguageTags.withUiLocales("/signin", null)).isEqualTo("/signin");
     }
+
+    @Test
+    void withUiLocalesNeverPutsARawValueInTheUrl() {
+        assertThat(LanguageTags.withUiLocales("/signin", "pt_br")).isEqualTo("/signin?ui_locales=pt-BR");
+        assertThat(LanguageTags.withUiLocales("/signin", "pt-BR\r\nSet-Cookie: x=1")).isEqualTo("/signin");
+        assertThat(LanguageTags.withUiLocales("/signin", "//evil.example")).isEqualTo("/signin");
+    }
 }

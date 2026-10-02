@@ -78,13 +78,17 @@ public final class LanguageTags {
         return tag != null ? tag : fromAcceptLanguage(acceptLanguage);
     }
 
-    /** {@code url} with {@code ui_locales} set to {@code tag}; unchanged when there is no tag. */
+    /**
+     * {@code url} with {@code ui_locales} set to {@code tag}; unchanged when {@code tag} is not a
+     * well-formed tag. It goes into a Location header, so it is checked here, whatever the caller did.
+     */
     public static String withUiLocales(String url, String tag) {
-        if (tag == null) {
+        String clean = normalize(tag);
+        if (clean == null) {
             return url;
         }
         return UriComponentsBuilder.fromUriString(url)
-                .replaceQueryParam(UI_LOCALES, tag)
+                .replaceQueryParam(UI_LOCALES, clean)
                 .build(true)
                 .toUriString();
     }
