@@ -77,7 +77,7 @@ class OtpServiceTest {
                 Duration.ofHours(1));
         verify(valueOperations).set(eq("otp:code:+12025550123"), eq("123456"), eq(properties.getOtp().getTtl()));
         verify(smsSender).send("+12025550123",
-                "Your Gua verification code is 123456. Never share this code with anyone. Gua will never ask you for it.");
+                "Your Gua verification code is 123456. Never share this code with anyone. Gua support will never ask you for it.");
     }
 
     @Test
@@ -307,6 +307,18 @@ class OtpServiceTest {
         otpService.sendOtp("+5511666666666", "203.0.113.6", "pt_BR");
 
         verify(smsSender).send("+5511666666666", "Código Gua: 555555");
+    }
+
+    @Test
+    void aScopedSendIsTextedInTheCallersLanguage() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("666666");
+        properties.getOtp().getLocalizedSmsTemplates().put("fr", "Code Gua : %s");
+
+        // The PIN change passes the Accept-Language of its start request.
+        otpService.sendScopedOtp(OtpScope.PIN_CHANGE, "chal-1", PHONE, "127.0.0.1", "fr-CA,fr;q=0.9,en;q=0.8");
+
+        verify(smsSender).send(PHONE, "Code Gua : 666666");
     }
 
     // -------------------- scoped codes --------------------

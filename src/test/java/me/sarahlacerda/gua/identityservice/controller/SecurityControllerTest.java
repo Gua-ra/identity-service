@@ -111,7 +111,8 @@ class SecurityControllerTest {
                 org.mockito.ArgumentMatchers.eq("123456"),
                 org.mockito.ArgumentMatchers.isNull(),
                 org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.anyString())).thenReturn("chal-1");
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.isNull())).thenReturn("chal-1");
 
         PinChangeStartRequest request = new PinChangeStartRequest();
         request.setPhone("+12025550123");
@@ -134,7 +135,8 @@ class SecurityControllerTest {
                 org.mockito.ArgumentMatchers.isNull(),
                 org.mockito.ArgumentMatchers.eq("step-1"),
                 org.mockito.ArgumentMatchers.argThat(node -> node != null && "cred-1".equals(node.path("id").asText())),
-                org.mockito.ArgumentMatchers.anyString())).thenReturn("chal-2");
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.isNull())).thenReturn("chal-2");
 
         // No currentPin at all: with an assertion supplied the PIN is not a required field.
         String body = "{\"phone\":\"+12025550123\",\"passkeyStepUpId\":\"step-1\",\"passkeyCredential\":{\"id\":\"cred-1\"}}";
@@ -144,6 +146,27 @@ class SecurityControllerTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.challengeId")
                         .value("chal-2"));
+    }
+
+    @Test
+    void startPinChangeTextsTheCodeInTheRequestLanguage() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
+        org.mockito.Mockito.when(pinChangeService.start(
+                org.mockito.ArgumentMatchers.eq("@user:domain"),
+                org.mockito.ArgumentMatchers.eq("+12025550123"),
+                org.mockito.ArgumentMatchers.eq("123456"),
+                org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.eq("pt-BR"))).thenReturn("chal-3");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/change/start")
+                .header("Accept-Language", "pt-BR,pt;q=0.9,en;q=0.8")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phone\":\"+12025550123\",\"currentPin\":\"123456\"}"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.challengeId")
+                        .value("chal-3"));
     }
 
     @Test
@@ -557,6 +580,29 @@ class SecurityControllerTest {
         // No directory display name -> localpart fallback.
         org.junit.jupiter.api.Assertions.assertEquals("alice", created.getDisplayName());
         org.junit.jupiter.api.Assertions.assertEquals("alice", created.getPreferredUsername());
+    }
+
+    @Test
+    void anEnrollmentSessionKeepsTheLanguageTheAppStartedItIn() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
+        org.mockito.Mockito.when(directoryService.findByUserId("@alice:dev.local"))
+                .thenReturn(java.util.List.of());
+        org.mockito.Mockito.when(loginSessionService.create(org.mockito.ArgumentMatchers.any(LoginSession.class)))
+                .thenReturn("sess-1");
+        org.mockito.Mockito.when(loginSessionService.createEnrollToken(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenReturn("tok-1");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/passkey/enroll/start")
+                .header("Accept-Language", "fr-CA;q=1.0, en;q=0.9")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                // The URL itself carries no language; the handoff reads it off the session.
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.enrollUrl")
+                        .value("https://auth.example.com/login/enroll/tok-1"));
+
+        org.mockito.ArgumentCaptor<LoginSession> captor = org.mockito.ArgumentCaptor.forClass(LoginSession.class);
+        verify(loginSessionService).create(captor.capture());
+        org.junit.jupiter.api.Assertions.assertEquals("fr-CA", captor.getValue().getLocale());
     }
 
     @Test

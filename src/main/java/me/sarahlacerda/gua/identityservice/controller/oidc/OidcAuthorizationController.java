@@ -36,6 +36,7 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.exception.OidcInvalidRequestException;
+import me.sarahlacerda.gua.identityservice.service.LanguageTags;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
@@ -101,7 +102,9 @@ public class OidcAuthorizationController {
             @Parameter(description = "Optional login hint forwarded verbatim by MAS. Either an E.164 phone number to pre-fill the login UI, or the reserved value `passkey` (case-insensitive), which records a passkey sign-in intent on the session and is never treated as a phone number.") @RequestParam(value = "login_hint", required = false) String loginHint,
             @Parameter(description = "OIDC prompt parameter. `login` requests re-authentication of an already signed-in user (login-only).") @RequestParam(value = "prompt", required = false) String prompt,
             @Parameter(description = "OIDC id_token_hint: a previously issued ID token identifying the already-authenticated user for re-authentication.") @RequestParam(value = "id_token_hint", required = false) String idTokenHint,
-            @Parameter(description = "Downstream client MAS is authenticating for (`web` for the web client, `native` for the apps). Forwarded by MAS and used to gate web signups behind the registration allowlist. Only the configured native marker (default `native`) exempts the flow; an absent or any other value is treated as web.") @RequestParam(value = "gua_downstream", required = false) String guaDownstream) {
+            @Parameter(description = "Downstream client MAS is authenticating for (`web` for the web client, `native` for the apps). Forwarded by MAS and used to gate web signups behind the registration allowlist. Only the configured native marker (default `native`) exempts the flow; an absent or any other value is treated as web.") @RequestParam(value = "gua_downstream", required = false) String guaDownstream,
+            @Parameter(description = "OIDC ui_locales: BCP 47 tags separated by spaces, in preference order. The first well-formed one (else the Accept-Language header) becomes the login language, is reported as `locale` by /login/context, and is passed to the login UI as `ui_locales`.") @RequestParam(value = "ui_locales", required = false) String uiLocales,
+            @RequestHeader(value = HttpHeaders.ACCEPT_LANGUAGE, required = false) String acceptLanguage) {
         if (!"code".equals(responseType)) {
             throw new OidcInvalidRequestException("unsupported_response_type", "Only response_type=code is supported");
         }
@@ -143,6 +146,9 @@ public class OidcAuthorizationController {
         // id_token_hint). Pin the session to that subject so the flow is LOGIN-ONLY —
         // the phone must already belong to this user and signup can never be reached.
         session.setReauthUserId(resolveReauthUserId(prompt, idTokenHint));
+        // The app's language, as MAS forwards it, or the browser's when nothing was forwarded.
+        String locale = LanguageTags.resolve(uiLocales, acceptLanguage);
+        session.setLocale(locale);
         session.setCsrfToken(loginSessionService.newToken());
         String sessionId = loginSessionService.create(session);
 
@@ -156,7 +162,7 @@ public class OidcAuthorizationController {
 
         return ResponseEntity.status(HttpStatus.FOUND)
                 .header(HttpHeaders.SET_COOKIE, cookie.toString())
-                .location(URI.create(loginProperties.getUiUrl()))
+                .location(URI.create(LanguageTags.withUiLocales(loginProperties.getUiUrl(), locale)))
                 .build();
     }
 
