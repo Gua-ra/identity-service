@@ -110,5 +110,5 @@ Flyway applies migrations at startup. Never edit a migration that has been appli
 Gua's federation and account architecture is documented in gua-resolver. This README describes this service.
 
 - [Gua identity and federation](https://github.com/Gua-ra/gua-resolver/blob/main/docs/architecture/gua-identity-and-federation.md)
-- [Decision records](https://github.com/Gua-ra/gua-resolver/tree/main/docs/decisions)
+- [Account identifiers and placement records](https://github.com/Gua-ra/gua-resolver/blob/main/docs/specs/account-identifiers-and-placement-records.md)
 - [`docs/specs/genesis-vectors.v1.json`](docs/specs/genesis-vectors.v1.json): test vectors for the account ID encoding
