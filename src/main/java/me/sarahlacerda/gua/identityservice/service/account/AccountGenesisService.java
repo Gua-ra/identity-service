@@ -35,7 +35,13 @@ import me.sarahlacerda.gua.identityservice.exception.GenesisRegistrationExceptio
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.repository.AccountGenesisRepository;
 
-/** The accountId is never read for routing or login and never becomes a claim, a localpart or a directory column. */
+/**
+ * Registration, attach and bootstrap for account genesis.
+ *
+ * <p>Nothing here is read for routing or for login. The accountId is derived, stored and audited; it
+ * never becomes a claim, a localpart or a directory column, because the MAS localpart template can
+ * be built from any imported claim.
+ */
 @Service
 @RequiredArgsConstructor
 public class AccountGenesisService {
@@ -49,10 +55,12 @@ public class AccountGenesisService {
 
     private final SecureRandom random = new SecureRandom();
 
+    /** Master switch. While false the whole feature is inert. */
     public boolean isEnabled() {
         return genesisProperties().isEnabled();
     }
 
+    /** Whether a native signup must present an attach handle rather than fall back to a bootstrap id. */
     public boolean isRequiredForNative() {
         return genesisProperties().isRequireForNative();
     }
@@ -61,6 +69,13 @@ public class AccountGenesisService {
         return properties.getGenesis();
     }
 
+    /**
+     * Registers an account genesis and returns its accountId with a single-use attach handle.
+     *
+     * <p>The proof is verified against the authority key inside the object itself, which makes the
+     * endpoint self-authenticating before any session exists. Registering attaches nothing: a handle is
+     * a routing hint, not a capability.
+     */
     @Transactional
     public AccountGenesisRegisterResponse register(String genesisB64, String proofB64) {
         if (!isEnabled()) {
@@ -94,6 +109,8 @@ public class AccountGenesisService {
         if (existing.isPresent()) {
             AccountGenesisRecord row = existing.get();
             if (row.isAttached()) {
+                // The client must generate a fresh genesis; re-using one that already owns an account
+                // would be an attempt to re-point it.
                 throw new GenesisRegistrationException(HttpStatus.CONFLICT, "genesis_already_attached",
                         "This genesis is already attached to an account.");
             }
@@ -120,13 +137,28 @@ public class AccountGenesisService {
         return new AccountGenesisRegisterResponse(accountId.value(), handle, expiresAt);
     }
 
+    /**
+     * Issues the 32 CSPRNG bytes a client must sign to attach its genesis, base64url. They are held on
+     * the server-side login session and never accepted back from the client as a lookup key.
+     */
     public String issueAttachChallenge() {
         byte[] challenge = new byte[GenesisProofs.ATTACH_CHALLENGE_LENGTH];
         random.nextBytes(challenge);
         return encodeBase64Url(challenge);
     }
 
-    /** MANDATORY: a failed attach must roll back the account creation it runs in. */
+    /**
+     * Attaches a registered genesis to a newly created account, inside the caller's transaction.
+     * {@link Propagation#MANDATORY} so a failed attach rolls back the account creation it runs in.
+     *
+     * @param attachHandle the handle carried by the login session, never one read from the request body
+     * @param challengeB64 the challenge held against that session, never one supplied by the client
+     * @param proofB64     the client's signature over the domain, the challenge and the raw accountId
+     * @param userId       the MXID of the account being created
+     * @return the attached accountId
+     * @throws LoginFlowException 400 {@code genesis_attach_failed} for every failure mode; there is no
+     *                            silent downgrade to a bootstrap id
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public AccountId attach(String attachHandle, String challengeB64, String proofB64, String userId) {
         if (!StringUtils.hasText(attachHandle)) {
@@ -177,6 +209,8 @@ public class AccountGenesisService {
             throw attachFailed("the attach proof does not verify");
         }
 
+        // One atomic compare-and-set. Two sessions racing on one handle therefore resolve to a single
+        // attach: the loser updates no rows and its signup fails.
         int updated = repository.attach(accountId.value(), sha256Hex(attachHandle), userId, Instant.now(),
                 State.PENDING, State.ATTACHED);
         if (updated != 1) {
@@ -186,13 +220,19 @@ public class AccountGenesisService {
         return accountId;
     }
 
-    /** Idempotent: an account that already holds a genesis row keeps it. */
+    /**
+     * Mints a bootstrap accountId for an account that presented no handle. Idempotent: an account that
+     * already holds a genesis row keeps it, so this is safe on a retry and from the backfill.
+     *
+     * @return the accountId now held by the account
+     */
     @Transactional
     public AccountId bootstrap(String userId) {
         Optional<AccountGenesisRecord> existing = repository.findByUserId(userId);
         if (existing.isPresent()) {
             return AccountId.parse(existing.get().getAccountId());
         }
+        // Random entropy, never the MXID or the phone: either would put an identifier inside the id.
         BootstrapGenesis genesis = BootstrapGenesisCodec.mint();
         AccountId accountId = genesis.accountId();
         repository.save(AccountGenesisRecord.attachedBootstrap(
@@ -205,6 +245,7 @@ public class AccountGenesisService {
         return accountId;
     }
 
+    /** Deletes pending registrations nobody attached inside their window. */
     @Transactional
     public int sweepExpired() {
         return repository.deleteExpiredPending(State.PENDING, Instant.now());
@@ -238,6 +279,7 @@ public class AccountGenesisService {
         }
     }
 
+    /** SHA-256 hex of an attach handle. Only the hash is ever stored. */
     static String sha256Hex(String value) {
         try {
             return HexFormat.of().formatHex(

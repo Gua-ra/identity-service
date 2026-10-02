@@ -27,6 +27,8 @@ public class OidcAccessTokenValidator {
         if (principal.isPresent()) {
             return principal;
         }
+        // Fall back to validating Matrix-issued access tokens (MAS or Synapse) through the homeserver's
+        // whoami endpoint, so the apps can reuse their SDK access token on authenticated endpoints.
         Optional<String> matrixUserId = matrixAdminClient.whoami(accessToken);
         if (matrixUserId.isPresent()) {
             return Optional.of(new OidcAuthenticatedPrincipal(matrixUserId.get(), null, null, Set.of()));

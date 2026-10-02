@@ -21,13 +21,25 @@ import org.springframework.stereotype.Component;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.HomeserverConfig;
 
-// Off by default: needs a read-only role on each MAS database.
-// Must never read upstream_oauth_links.human_account_name, which holds the phone number.
+/**
+ * The fallback MAS read path: a read-only role on each MAS database.
+ *
+ * <p>Off by default ({@code identity.placement.mas.sql.enabled}). It needs a login role per MAS with
+ * {@code SELECT} on exactly three tables: {@code upstream_oauth_links}, {@code users} and
+ * {@code upstream_oauth_providers}.
+ *
+ * <p><b>The column this must never read:</b> {@code upstream_oauth_links.human_account_name} holds
+ * the account's phone number. {@code MasSqlLinkReaderTest} fails if it appears in this file.
+ */
 @Component
 public class MasSqlLinkReader implements MasLinkReader {
 
     private static final Logger log = LoggerFactory.getLogger(MasSqlLinkReader.class);
 
+    /**
+     * Columns named one by one, never {@code SELECT *}: a wildcard here would start returning the phone
+     * column the moment someone reordered the table.
+     */
     private static final String LINKS_QUERY = """
             SELECT l.subject, l.user_id, u.username
               FROM upstream_oauth_links l
@@ -43,6 +55,7 @@ public class MasSqlLinkReader implements MasLinkReader {
              WHERE upstream_oauth_provider_id = ?
             """;
 
+    /** How a connection to one MAS database is opened. Overridable so tests need no live database. */
     @FunctionalInterface
     public interface ConnectionFactory {
         Connection open(String jdbcUrl, String username, String password) throws SQLException;
@@ -138,7 +151,7 @@ public class MasSqlLinkReader implements MasLinkReader {
         return effective;
     }
 
-    /** MAS defaults to fail when the key is absent. */
+    /** The effective value, with the MAS default applied: {@code fail} when the key is absent. */
     private String onConflictOf(String claimsImportsJson) {
         if (claimsImportsJson == null || claimsImportsJson.isBlank()) {
             return "fail";

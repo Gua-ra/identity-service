@@ -6,6 +6,10 @@ import java.security.PrivateKey;
 import java.security.Signature;
 import java.util.Arrays;
 
+/**
+ * Throwaway Ed25519 keys, minted in memory for the duration of one test. Nothing here reads a key from
+ * a cluster, a secret or a file: a test that needs a signature generates the pair it signs with.
+ */
 public final class TestEd25519 {
 
     private TestEd25519() {

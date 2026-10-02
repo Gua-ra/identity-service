@@ -197,6 +197,7 @@ class AccountControllerTest {
                 .startReauth(any(), any(), any(), any());
     }
 
+    /** One refusal, whoever the number belongs to. */
     @Test
     void startReauthMapsAMismatchTo403WithTheNeutralCode() throws Exception {
         when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn(USER);

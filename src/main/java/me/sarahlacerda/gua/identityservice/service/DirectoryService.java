@@ -27,6 +27,7 @@ public class DirectoryService {
         return upsertByDigest(phoneDigest, null, userId, displayName);
     }
 
+    /** Also persists the display-only masked phone. A null phoneMasked or displayName preserves the existing value. */
     @Transactional
     public DirectoryEntry upsertByDigest(String phoneDigest, String phoneMasked, String userId, String displayName) {
         DirectoryEntry entry = repository.findByPhoneDigest(phoneDigest)
@@ -58,6 +59,10 @@ public class DirectoryService {
         return repository.findByPhoneDigest(phoneDigest);
     }
 
+    /**
+     * Contact discovery: resolves phone digests to directory entries, excluding
+     * accounts that opted out of discovery ({@code discoverable = false}).
+     */
     @Transactional(readOnly = true)
     public List<DirectoryEntry> findDiscoverableByDigests(Collection<String> digests) {
         return repository.findByPhoneDigestInAndDiscoverableTrue(digests);
@@ -73,6 +78,10 @@ public class DirectoryService {
         return repository.findByUserId(userId);
     }
 
+    /**
+     * Returns the display-only masked phone (e.g. "••••4567") linked to the user,
+     * or empty when none is recorded. Never exposes the full number.
+     */
     @Transactional(readOnly = true)
     public Optional<String> findMaskedPhoneByUserId(String userId) {
         return repository.findByUserId(userId).stream()
@@ -81,6 +90,11 @@ public class DirectoryService {
                 .findFirst();
     }
 
+    /**
+     * Records this deployment's routing choice for an account: the homeserver it was created on and
+     * the username, which is unique within this directory only. Looked up by phone digest. A
+     * {@code null} value leaves the existing column untouched, so this is safe to call on re-link.
+     */
     @Transactional
     public DirectoryEntry assignRouting(String phoneDigest, String homeserverId, String username) {
         DirectoryEntry entry = repository.findByPhoneDigest(phoneDigest)
@@ -95,7 +109,10 @@ public class DirectoryService {
         return repository.save(entry);
     }
 
-    /** The builder does not carry discoverable, so a phone change must call this to preserve an opt-out. */
+    /**
+     * Sets the contact-discovery opt-out flag on the entry for {@code phoneDigest}. The builder does
+     * not carry {@code discoverable}, so a phone change must call this to preserve a prior opt-out.
+     */
     @Transactional
     public DirectoryEntry setDiscoverable(String phoneDigest, boolean discoverable) {
         DirectoryEntry entry = repository.findByPhoneDigest(phoneDigest)
@@ -110,6 +127,10 @@ public class DirectoryService {
         return repository.existsByUsernameIgnoreCase(username);
     }
 
+    /**
+     * Resolves a username to its directory entry (Matrix user id and the homeserver recorded for it).
+     * Uniqueness is enforced within this directory, not across the federation.
+     */
     @Transactional(readOnly = true)
     public Optional<DirectoryEntry> resolveByUsername(String username) {
         return repository.findByUsernameIgnoreCase(username);

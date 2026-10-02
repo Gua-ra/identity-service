@@ -17,6 +17,7 @@ class MatrixIdsTest {
         assertThat(MatrixIds.localpartOf("@alice.b_c-d:dev.local:8448")).isEqualTo("alice.b_c-d");
     }
 
+    /** Anything that is not {@code @localpart:server} is refused, so {@code ga1abc:x} never yields a localpart. */
     @ParameterizedTest
     @NullAndEmptySource
     @ValueSource(strings = { "ga1abc:x", "ga1abc:y", "u1", "alice", "alice:dev.local", "@alice", "@:dev.local",

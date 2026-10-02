@@ -16,7 +16,22 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Gene
 import me.sarahlacerda.gua.identityservice.domain.AccountGenesisRecord.Origin;
 import me.sarahlacerda.gua.identityservice.repository.AccountGenesisRepository;
 
-/** Registered only while the feature is on. Each value is read from the database at most once per REFRESH. */
+/**
+ * Two gauges:
+ *
+ * <ul>
+ *   <li>{@code gua_identity_account_genesis{origin}}: how many accounts are rooted in a genesis and
+ *       how many are bootstrap;</li>
+ *   <li>{@code gua_identity_accounts_without_genesis}: accounts that still hold no genesis row.</li>
+ * </ul>
+ *
+ * <p>Those are the exact scraped names (gauges carry no {@code _total} suffix);
+ * {@code AccountGenesisMetricsTest} pins them.
+ *
+ * <p>Registered only while the feature is on, so with everything off
+ * {@link AccountScanner#countAccountsWithoutGenesis()}, a full pass over the account tables, never
+ * runs. Each value is read from the database at most once per {@link #REFRESH} and cached in between.
+ */
 @Component
 public class AccountGenesisMetrics {
 
@@ -30,6 +45,7 @@ public class AccountGenesisMetrics {
 
     public AccountGenesisMetrics(MeterRegistry metrics, AccountGenesisRepository repository,
             AccountScanner accountScanner, IdentityServiceProperties properties) {
+        // Wrapping a supplier reads nothing; only a scrape of a registered gauge does.
         this.genesisCount = new Cached(() -> repository.countByOrigin(Origin.GENESIS));
         this.bootstrapCount = new Cached(() -> repository.countByOrigin(Origin.BOOTSTRAP));
         this.withoutGenesisCount = new Cached(accountScanner::countAccountsWithoutGenesis);
@@ -52,6 +68,7 @@ public class AccountGenesisMetrics {
                 .register(metrics);
     }
 
+    /** A value read at most once per {@link #REFRESH}, which never propagates a database failure. */
     private static final class Cached {
 
         private final Supplier<Long> source;
@@ -71,7 +88,7 @@ public class AccountGenesisMetrics {
                 snapshot.set(new Snapshot(Instant.now(), value));
                 return value;
             } catch (RuntimeException ex) {
-                // A scrape must never fail because the database is briefly unavailable.
+                // A scrape must never fail because the database is briefly unavailable: serve the last value.
                 log.debug("Could not refresh an account genesis gauge: {}", ex.getMessage());
                 return current.value();
             }

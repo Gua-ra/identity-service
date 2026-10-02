@@ -20,6 +20,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import me.sarahlacerda.gua.identityservice.config.OidcProperties;
 
+/** The recovery marker survives the trip through the stored authorization code. */
 class OidcAuthorizationServiceTest {
 
     private final Map<String, String> redis = new HashMap<>();
@@ -61,6 +62,7 @@ class OidcAuthorizationServiceTest {
                 .isEqualTo(false);
     }
 
+    /** A code stored by the previous release has no such field, and is never a recovery. */
     @Test
     void aCodeStoredBeforeTheFieldExistedIsNotARecovery() {
         redis.put("oidc:code:legacy", "{\"userId\":\"@alice:gua.global\",\"phoneNumber\":\"+15551234567\","

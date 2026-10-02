@@ -25,6 +25,10 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 
+/**
+ * The owed sign-out is written with the recovery or not at all: just before its commit, and taken
+ * back out when the commit does not happen.
+ */
 class EndOtherSessionsServiceTest {
 
     private static final String USER = "@alice:gua.global";
@@ -86,6 +90,7 @@ class EndOtherSessionsServiceTest {
                 .isInstanceOf(IllegalStateException.class);
         synchronizations.forEach(sync -> sync.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
 
+        // Nothing was written, so nothing is taken back out, including a mark an earlier recovery left.
         verify(redisTemplate, never()).delete(anyString());
     }
 

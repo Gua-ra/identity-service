@@ -7,6 +7,13 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 
+/**
+ * Computes a deterministic, secret-keyed digest (HMAC-SHA256) of E.164 phone numbers, using the
+ * server-side pepper from {@link IdentityServiceProperties.DirectoryProperties}, so the raw number
+ * never needs to be stored or compared directly.
+ *
+ * <p>Thread-safe: {@link Mac} is not, so a per-thread instance is cached in a {@link ThreadLocal}.
+ */
 @Component
 public class PhoneNumberHasher {
 
@@ -20,6 +27,11 @@ public class PhoneNumberHasher {
         this.macSupplier = ThreadLocal.withInitial(this::createMac);
     }
 
+    /**
+     * Returns the HMAC-SHA256 digest of an E.164 phone number as 64 lowercase hex characters.
+     *
+     * @throws IllegalStateException if the MAC cannot be (re)initialized
+     */
     public String digest(String e164PhoneNumber) {
         Mac mac = macSupplier.get();
         mac.reset();

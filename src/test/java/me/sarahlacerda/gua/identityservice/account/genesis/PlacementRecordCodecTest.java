@@ -35,6 +35,8 @@ class PlacementRecordCodecTest {
                 now.plus(400, ChronoUnit.DAYS));
     }
 
+    // --- The layout ----------------------------------------------------------
+
     @Test
     void aRecordRoundTripsAndKeepsTheBytesItWasGiven() {
         AccountId accountId = genesisRootedId();
@@ -52,6 +54,7 @@ class PlacementRecordCodecTest {
         assertThat(decoded.issuedAt()).isEqualTo(now);
         assertThat(decoded.notBefore()).isEqualTo(now);
         assertThat(decoded.notAfter()).isEqualTo(notAfter);
+        // The signature covers what arrived, so the decoded object must hand back exactly that.
         assertThat(decoded.canonicalBytes()).isEqualTo(bytes);
     }
 
@@ -74,6 +77,8 @@ class PlacementRecordCodecTest {
         assertThat(bytes[7]).isEqualTo(AccountId.CLASS_GENESIS);
         assertThat(bytes[40]).isEqualTo(AccountId.CLASS_GENESIS);
     }
+
+    // --- The rejection rules -------------------------------------------------
 
     @Test
     void aShortBufferIsRefused() {
@@ -116,6 +121,7 @@ class PlacementRecordCodecTest {
         assertThatThrownBy(() -> PlacementRecordCodec.decode(bytes))
                 .isInstanceOf(InvalidGenesisException.class)
                 .extracting("reason").isEqualTo("origin_class_mismatch");
+        // And the encoder refuses to build one in the first place.
         assertThatThrownBy(() -> PlacementRecordCodec.encode(genesisRootedId(), AccountId.CLASS_BOOTSTRAP,
                 HOMESERVER, now, now, now.plus(1, ChronoUnit.DAYS)))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -144,6 +150,8 @@ class PlacementRecordCodecTest {
     void aTrailingByteIsRefused() {
         byte[] bytes = valid();
         byte[] longer = Arrays.copyOf(bytes, bytes.length + 1);
+        // Otherwise one record would have several spellings and a signature over the longer buffer would
+        // still verify.
         assertThatThrownBy(() -> PlacementRecordCodec.decode(longer))
                 .isInstanceOf(InvalidGenesisException.class)
                 .extracting("reason").isEqualTo("wrong_length");
@@ -201,8 +209,11 @@ class PlacementRecordCodecTest {
                 .extracting("reason").isEqualTo("unknown_account_id_version");
     }
 
-    // Buffers are assembled by hand because the encoder refuses to produce them. Each rule is pinned by its
-    // exact reason token.
+    // --- The decoder rules the encoder cannot reach --------------------------
+    //
+    // The decoder sees whatever arrives, and ResolverPlacementClient.findRecord swallows its failure and
+    // logs only the reason, so each rule is pinned by its exact reason token. Buffers are assembled by
+    // hand because the encoder refuses to produce them.
 
     @Test
     void aZeroLengthHomeserverIdPrefixIsRefusedByTheDecoder() {
@@ -243,6 +254,7 @@ class PlacementRecordCodecTest {
         long instant = now.toEpochMilli();
         byte[] bytes = handBuilt(HOMESERVER.length(), HOMESERVER, instant, instant, instant);
 
+        // notAfter must be strictly after notBefore, so a zero-length window is refused too.
         assertThatThrownBy(() -> PlacementRecordCodec.decode(bytes))
                 .isInstanceOf(InvalidGenesisException.class)
                 .extracting("reason").isEqualTo("inverted_window");
@@ -265,9 +277,15 @@ class PlacementRecordCodecTest {
         byte[] bytes = handBuilt(HOMESERVER.length(), HOMESERVER, start, start,
                 now.plus(400, ChronoUnit.DAYS).toEpochMilli());
 
+        // The boundary is inclusive, so the tests above fail for the rule they name and not for an
+        // off-by-one in the hand-built buffer.
         assertThat(PlacementRecordCodec.decode(bytes).homeserverId()).isEqualTo(HOMESERVER);
     }
 
+    /**
+     * Canonical bytes assembled directly, so the decoder can be handed a buffer the encoder would refuse
+     * to build. Everything except the length prefix and the three timestamps is well formed.
+     */
     private byte[] handBuilt(int lengthPrefix, String homeserverId, long issuedAt, long notBefore,
             long notAfter) {
         byte[] idBytes = homeserverId.getBytes(StandardCharsets.US_ASCII);
@@ -291,6 +309,8 @@ class PlacementRecordCodecTest {
             out[offset + i] = (byte) (value >>> (56 - 8 * i));
         }
     }
+
+    // --- Nothing in a record identifies the human ---------------
 
     @Test
     void aRecordCarriesNoIdentifierNoPhoneNoPhoneHashAndNoMatrixUserId() {

@@ -39,6 +39,7 @@ public class TwilioSmsSender implements SmsSender {
     public void send(String e164PhoneNumber, String messageBody) {
         try {
             PhoneNumber to = new PhoneNumber(e164PhoneNumber);
+            // A Messaging Service (number pool, opt-out, compliance) takes precedence over a single from-number.
             if (StringUtils.hasText(messagingServiceSid)) {
                 Message.creator(to, messagingServiceSid, messageBody).create();
             } else {

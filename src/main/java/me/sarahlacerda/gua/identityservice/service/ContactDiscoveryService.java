@@ -12,19 +12,32 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.domain.ContactMatch;
 import me.sarahlacerda.gua.identityservice.exception.LookupBatchTooLargeException;
 
-// Raw numbers are digested in memory and never persisted or logged.
-// Client-side hashing is not used: the phone keyspace is small enough to reverse by dictionary.
+/**
+ * Address-book contact discovery.
+ *
+ * <p>Privacy model: clients submit raw E.164 numbers over TLS; this service digests them in memory
+ * with the peppered HMAC ({@link PhoneNumberHasher}) and matches against the at-rest digests. Raw
+ * numbers are never persisted or logged. Client-side hashing is deliberately not used: the phone
+ * keyspace is small enough that any digest a client could compute is reversible by dictionary.
+ * Enumeration is limited by authentication, the per-request batch cap, the endpoint rate limit and
+ * the per-account discoverable opt-out.
+ */
 @Service
 @RequiredArgsConstructor
 public class ContactDiscoveryService {
 
+    /** E.164: leading +, no leading zero, 7 to 15 digits total. */
     private static final Pattern E164 = Pattern.compile("^\\+[1-9]\\d{6,14}$");
 
     private final DirectoryService directoryService;
     private final PhoneNumberHasher phoneNumberHasher;
     private final IdentityServiceProperties properties;
 
-    /** Invalid entries are skipped so one bad contact does not fail the sync. */
+    /**
+     * Matches the submitted phone numbers against discoverable accounts. Entries that are not valid
+     * E.164 are skipped so one bad contact does not fail the sync, duplicates are collapsed, and batches
+     * above the configured cap are rejected.
+     */
     public List<ContactMatch> match(List<String> phoneNumbers) {
         int maxBatch = properties.getDirectory().getMaxLookupBatch();
         if (phoneNumbers.size() > maxBatch) {

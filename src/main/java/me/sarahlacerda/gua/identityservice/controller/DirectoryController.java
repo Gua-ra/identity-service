@@ -95,7 +95,10 @@ public class DirectoryController {
             .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
-    /** Legacy rows without a homeserver id fall back to the domain in the MXID. */
+    /**
+     * Maps the stored homeserver id to its Matrix domain. Falls back to the domain
+     * embedded in the MXID for legacy rows that predate routing.
+     */
     private String resolveHomeserverDomain(DirectoryEntry entry) {
         if (entry.getHomeserverId() != null) {
             return homeserverRegistry.findById(entry.getHomeserverId())

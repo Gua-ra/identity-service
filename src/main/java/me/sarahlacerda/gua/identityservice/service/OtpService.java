@@ -51,15 +51,25 @@ public class OtpService {
         send(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), e164PhoneNumber, requesterIp, language);
     }
 
+    /**
+     * Sends an OTP that belongs to one flow instead of a phone number: the code is written under
+     * {@code otp:code:{scope}:{scopeId}}, which the unauthenticated {@code POST /otp/send} cannot write.
+     * Send limits, code length, TTL, metrics and the per-code guess budget are the same as {@link #sendOtp}.
+     */
     public void sendScopedOtp(OtpScope scope, String scopeId, String e164PhoneNumber, String requesterIp,
             String language) {
         send(scopedCodeKey(scope, scopeId), scopedAttemptsKey(scope, scopeId), e164PhoneNumber, requesterIp, language);
     }
 
+    /** Redeems a scoped code under the same per-code guess cap as {@link #verifyOtp}. */
     public void verifyScopedOtp(OtpScope scope, String scopeId, String code) {
         verify(scopedCodeKey(scope, scopeId), scopedAttemptsKey(scope, scopeId), code, scope.verifyFlow());
     }
 
+    /**
+     * Destroys a scoped code and its guess counter, for a flow that is abandoning the
+     * challenge the code belonged to.
+     */
     public void discardScopedOtp(OtpScope scope, String scopeId) {
         redisTemplate.delete(scopedCodeKey(scope, scopeId));
         redisTemplate.delete(scopedAttemptsKey(scope, scopeId));
@@ -77,6 +87,7 @@ public class OtpService {
         redisTemplate.opsForValue().set(codeKey, code, ttl);
         try {
             smsSender.send(e164PhoneNumber, messageBody);
+            // gua_identity_sms_send_total{provider,result}: SMS usage and delivery failures.
             metrics.counter("gua.identity.sms.send", "provider", smsProvider, "result", "sent").increment();
         } catch (RuntimeException ex) {
             metrics.counter("gua.identity.sms.send", "provider", smsProvider, "result", "failed").increment();
@@ -84,8 +95,13 @@ public class OtpService {
         }
     }
 
-    // Each guess is counted with an atomic INCR before comparison, so one code absorbs at most
-    // max-verify-attempts guesses.
+    /**
+     * Redeems {@code code} for the phone's live OTP. Every guess is counted per code with an atomic
+     * INCR before it is compared, so one code absorbs at most {@code identity.otp.max-verify-attempts}
+     * guesses however they are spread or parallelized. The last allowed wrong guess deletes the code,
+     * and a guess over the cap is refused without being compared. The counter expires with the code's
+     * TTL; only a new send resets it.
+     */
     public void verifyOtp(String e164PhoneNumber, String code) {
         verify(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), code, OtpVerifyFlow.PHONE);
     }
@@ -93,6 +109,7 @@ public class OtpService {
     private void verify(String codeKey, String attemptsKey, String code, OtpVerifyFlow flow) {
         String storedCode = redisTemplate.opsForValue().get(codeKey);
         if (!StringUtils.hasText(storedCode)) {
+            // gua_identity_otp_verify_total{result}: wrong or expired codes.
             metrics.counter("gua.identity.otp.verify", "result", "invalid", "flow", flow.tagValue()).increment();
             throw new InvalidOtpException("Invalid or expired verification code");
         }
@@ -124,6 +141,7 @@ public class OtpService {
     private InvalidOtpException exhausted(String codeKey, OtpVerifyFlow flow) {
         // Only the code is deleted. Deleting the counter would give a racing guess a fresh budget.
         redisTemplate.delete(codeKey);
+        // gua_identity_otp_verify_total{result="exhausted"}: guesses refused by the cap (brute-force signal).
         metrics.counter("gua.identity.otp.verify", "result", "exhausted", "flow", flow.tagValue()).increment();
         return new InvalidOtpException("Too many incorrect verification codes; request a new code");
     }
@@ -161,7 +179,11 @@ public class OtpService {
         }
     }
 
-    /** Platform locale APIs hand out pt_BR, so the underscore is folded to a hyphen before matching. */
+    /**
+     * Picks the SMS template for the requested language, keyed by BCP-47 tag. The underscore is folded
+     * to a hyphen first because platform locale APIs hand out the ICU identifier ({@code pt_BR}) instead
+     * of the language tag ({@code pt-BR}); without the fold a Brazilian caller would be texted in English.
+     */
     private String resolveTemplate(String requestedLanguage) {
         String defaultTemplate = properties.getOtp().getSmsTemplate();
         if (!StringUtils.hasText(requestedLanguage)) {

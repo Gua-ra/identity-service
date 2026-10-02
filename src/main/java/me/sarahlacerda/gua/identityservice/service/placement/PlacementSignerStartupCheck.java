@@ -16,8 +16,20 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Home
 import me.sarahlacerda.gua.identityservice.service.placement.ResolverPlacementClient.RosterEntryView;
 import me.sarahlacerda.gua.identityservice.service.placement.ResolverPlacementClient.RosterView;
 
-// Fails startup unless each publishing homeserver's ACTIVE roster entry matches the configured id and key.
-// Inert unless identity.placement.publish.enabled is on.
+/**
+ * Refuses to start a deployment that would publish placement records under the wrong identity.
+ *
+ * <p>The resolver verifies a record against the key in the named homeserver's ACTIVE roster entry.
+ * So before this service signs anything: the roster entry must exist and be ACTIVE, the roster id
+ * this deployment writes into records must be that entry's id, and the private key in the deployment
+ * Secret must be the private half of that entry's published key.
+ *
+ * <p>The local registry id and the roster id are joined on the Matrix domain, which is unique in the
+ * roster. The legacy synthesised homeserver has no roster identity, so publishing requires an
+ * explicit {@code identity.routing.homeservers} list.
+ *
+ * <p>Inert unless {@code identity.placement.publish.enabled} is on.
+ */
 @Component
 public class PlacementSignerStartupCheck {
 
@@ -60,6 +72,8 @@ public class PlacementSignerStartupCheck {
         for (HomeserverConfig homeserver : properties.getRouting().getHomeservers()) {
             String configuredKey = homeserver.getPlacementSigningPrivateKey();
             if (configuredKey == null || configuredKey.isBlank()) {
+                // Not a homeserver this deployment publishes for. Records are only ever signed for the
+                // homeservers whose membership key it actually holds.
                 continue;
             }
             verifyOne(homeserver, roster);
@@ -73,7 +87,11 @@ public class PlacementSignerStartupCheck {
         log.info("Placement signing identity verified against the roster for {} homeserver(s)", verified);
     }
 
-    /** Checked at boot so a window the codec would refuse fails startup. */
+    /**
+     * The configured window must be one the codec will encode. {@code recordValidity} is freely
+     * configurable while {@link PlacementRecordCodec} refuses anything over its maximum, so a longer
+     * value fails startup here instead of throwing on every signature.
+     */
     private void verifyValidityWindow() {
         Duration validity = properties.getPlacement().getRecordValidity();
         if (validity.isZero() || validity.isNegative()) {

@@ -15,8 +15,15 @@ import me.sarahlacerda.gua.identityservice.repository.AccountGenesisRepository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * {@code origin} says whether an account's identity is rooted in a genesis the client proved
+ * possession of, or is a bootstrap id this deployment minted. An auditor can rely on that split only
+ * if nothing can flip it, so this test enforces it from three directions: no mutator on the entity,
+ * no repository method that names the field, and no modifying query that writes the column.
+ */
 class AccountGenesisOriginImmutableTest {
 
+    /** The only mutable fields on the row: re-registering a pending genesis rotates the pair. */
     private static final List<String> ALLOWED_SETTERS = List.of("setAttachHandleHash", "setExpiresAt");
 
     @Test
@@ -49,6 +56,8 @@ class AccountGenesisOriginImmutableTest {
                 .filter(name -> !name.equals("countByOrigin"))
                 .toList();
 
+        // countByOrigin reads, for the audit split gauge. A derived deleteBy/removeBy or any other
+        // method naming the field would be a write path.
         assertThat(naming).isEmpty();
     }
 

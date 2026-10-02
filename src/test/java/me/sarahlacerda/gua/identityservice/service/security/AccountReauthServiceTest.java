@@ -99,10 +99,17 @@ class AccountReauthServiceTest {
         service.startReauth(USER, PHONE, "1.2.3.4", "en-US");
 
         verify(otpService).sendOtp(PHONE, "1.2.3.4", "en-US");
+        // Nothing was written: no pending-phone record, no raw number.
         verify(valueOperations, never()).set(any(), any());
+        // And the attempt reserved for the comparison was given back, so confirming your own
+        // number costs nothing out of the hour's budget of wrong ones.
         verify(valueOperations).decrement(MISMATCH_KEY);
     }
 
+    /**
+     * The reservation is taken before the number is compared, not after: a read-then-increment cap
+     * would let a parallel burst all pass the gate.
+     */
     @Test
     void theAttemptIsReservedBeforeTheNumberIsCompared() {
         directoryHolds(DIGEST);
@@ -114,6 +121,11 @@ class AccountReauthServiceTest {
         inOrder.verify(directoryService).findByUserId(USER);
     }
 
+    /**
+     * The submitted number is normalized before it is digested, so a national number typed
+     * without a country code resolves to the same digest the directory holds instead of being
+     * refused as somebody else's.
+     */
     @Test
     void startNormalizesTheSubmittedNumberBeforeComparing() {
         when(phoneNumberNormalizer.toE164("2025550123")).thenReturn(PHONE);
@@ -124,6 +136,11 @@ class AccountReauthServiceTest {
         verify(otpService).sendOtp(PHONE, "1.2.3.4", null);
     }
 
+    /**
+     * The refusal for a number that belongs to another account is the same refusal as for one
+     * that belongs to nobody, and it sends no SMS: this endpoint is not a way to ask who owns a
+     * number.
+     */
     @Test
     void aNumberThatIsNotTheAccountsIsRefusedWithoutSayingWhose() {
         directoryHolds(DIGEST);
@@ -148,6 +165,10 @@ class AccountReauthServiceTest {
                 .hasMessage("That is not the number on your account.");
     }
 
+    /**
+     * Pepper-drift fallback: a directory row digested under a rotated pepper no longer matches, and the
+     * homeserver's phone binding still resolves the account.
+     */
     @Test
     void aDriftedDigestFallsBackToTheHomeserverPhoneBinding() {
         directoryHolds("digest-under-the-old-pepper");
@@ -158,6 +179,7 @@ class AccountReauthServiceTest {
         verify(otpService).sendOtp(PHONE, "1.2.3.4", null);
     }
 
+    /** A failed homeserver lookup is a miss, not a pass. */
     @Test
     void anUnavailableFallbackRefusesRatherThanAccepts() {
         directoryHolds("digest-under-the-old-pepper");
@@ -179,6 +201,7 @@ class AccountReauthServiceTest {
         verify(valueOperations, never()).increment(MISMATCH_KEY);
     }
 
+    /** A stolen session gets a budget of guesses at the account's own number, not a walk. */
     @Test
     void theAttemptCapRefusesFurtherGuesses() {
         when(valueOperations.increment(MISMATCH_KEY))
@@ -189,10 +212,12 @@ class AccountReauthServiceTest {
                 .hasMessageNotContaining(USER);
 
         verifyNoInteractions(otpService);
+        // Refused without the comparison being made, which is what caps the guessing.
         verifyNoInteractions(directoryService);
         verifyNoInteractions(matrixAdminClient);
     }
 
+    /** The cap refuses the right number too once it is spent: it is a cap on the account. */
     @Test
     void theAttemptCapAlsoRefusesTheCorrectNumber() {
         when(valueOperations.increment(MISMATCH_KEY)).thenReturn(6L);
@@ -202,6 +227,7 @@ class AccountReauthServiceTest {
         verifyNoInteractions(otpService);
     }
 
+    /** A counter that cannot be updated refuses the attempt: it is the only bound there is. */
     @Test
     void anUnreachableCounterRefusesTheAttempt() {
         when(valueOperations.increment(MISMATCH_KEY))
@@ -226,6 +252,10 @@ class AccountReauthServiceTest {
         verify(redisTemplate).expire(MISMATCH_KEY, Duration.ofHours(1));
     }
 
+    /**
+     * The window is re-armed on every attempt inside the budget, so a counter left without an expiry
+     * picks one up instead of refusing the account for good.
+     */
     @Test
     void aLaterAttemptInsideTheBudgetArmsTheWindowToo() {
         directoryHolds(DIGEST);
@@ -238,6 +268,7 @@ class AccountReauthServiceTest {
         verify(redisTemplate).expire(MISMATCH_KEY, Duration.ofHours(1));
     }
 
+    /** Not re-armed once the budget is spent, so a flood of refused attempts cannot extend the window. */
     @Test
     void aRefusedAttemptDoesNotPushTheWindowOut() {
         when(valueOperations.increment(MISMATCH_KEY)).thenReturn(9L);
@@ -285,6 +316,7 @@ class AccountReauthServiceTest {
         verifyNoInteractions(reauthTokenService);
     }
 
+    /** The enrollment step-up needs the proof, not a token to spend on a privileged endpoint. */
     @Test
     void verifyPhoneOtpProvesTheNumberWithoutMintingAToken() {
         directoryHolds(DIGEST);
@@ -311,6 +343,7 @@ class AccountReauthServiceTest {
         verifyNoInteractions(reauthTokenService);
     }
 
+    /** The account's own directory rows, which is the binding the comparison is made against. */
     private void directoryHolds(String phoneDigest) {
         when(directoryService.findByUserId(USER)).thenReturn(List.of(
                 DirectoryEntry.builder().userId(USER).phoneDigest(phoneDigest).build()));

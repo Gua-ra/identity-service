@@ -18,6 +18,11 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Home
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * The SQL fallback read path, against an embedded database standing in for a MAS. The deployed MAS
+ * configuration puts the account's phone number in {@code upstream_oauth_links.human_account_name},
+ * so the reader must never select it, even through a wildcard.
+ */
 class MasSqlLinkReaderTest {
 
     private static final String JDBC_URL = "jdbc:h2:mem:mas-links;DB_CLOSE_DELAY=-1;MODE=PostgreSQL";
@@ -52,6 +57,7 @@ class MasSqlLinkReaderTest {
             statement.execute("INSERT INTO upstream_oauth_links VALUES "
                     + "('l1', '" + PROVIDER + "', 'u1', '@alice:example.test', '"
                     + PHONE_IN_THE_PHONE_COLUMN + "')");
+            // An unfinished login: no MAS user, so it is not evidence of placement.
             statement.execute("INSERT INTO upstream_oauth_links VALUES "
                     + "('l2', '" + PROVIDER + "', NULL, '@bob:example.test', NULL)");
         }
@@ -93,6 +99,7 @@ class MasSqlLinkReaderTest {
         MasSqlLinkReader aliasReader = new MasSqlLinkReader(aliased, new ObjectMapper(),
                 (url, username, password) -> DriverManager.getConnection(url));
 
+        // The reader must resolve the roster id through the alias map, like the comparison does.
         assertThat(aliasReader.linksFor("@alice:example.test").get(0).federationId())
                 .isEqualTo(PlacementTestFixtures.FEDERATION_ID);
     }
@@ -101,10 +108,15 @@ class MasSqlLinkReaderTest {
     void theColumnHoldingAPhoneNumberIsNeverRead() {
         List<MasLink> links = reader.linksFor("@alice:example.test");
 
+        // Nothing that came back carries it, in any field.
         assertThat(links.toString()).doesNotContain(PHONE_IN_THE_PHONE_COLUMN);
         assertThat(links.get(0).masUsername()).isNotEqualTo(PHONE_IN_THE_PHONE_COLUMN);
     }
 
+    /**
+     * The structural half: the column name does not appear in the reader's SQL, and no statement uses a
+     * wildcard that would start returning the column.
+     */
     @Test
     void theReaderSourceNeitherNamesThePhoneColumnNorSelectsAWildcard() throws Exception {
         Path source = Path.of("src", "main", "java", "me", "sarahlacerda", "gua", "identityservice",
@@ -140,6 +152,7 @@ class MasSqlLinkReaderTest {
                 .isEqualTo(Map.of(PlacementTestFixtures.FEDERATION_ID, "add"));
 
         updateClaimsImports("{\"localpart\":{\"action\":\"require\"}}");
+        // Absent means fail, which is the MAS default.
         assertThat(reader.localpartOnConflictByHomeserver())
                 .isEqualTo(Map.of(PlacementTestFixtures.FEDERATION_ID, "fail"));
     }

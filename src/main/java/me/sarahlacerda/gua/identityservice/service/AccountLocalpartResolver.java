@@ -14,8 +14,21 @@ import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.domain.MatrixIds;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 
-// The preferred_username MAS imports as the localpart: the stored directory username, else the MXID localpart.
-// Two accounts sharing a localpart would be merged in MAS, so a conflict is refused.
+/**
+ * Chooses the localpart an existing account presents as the {@code preferred_username} claim, which
+ * MAS imports as the Matrix localpart on a first delegated login.
+ *
+ * <p>The source is the username stored in the directory, which no code path changes once stored. It
+ * is read, never derived from the user id. Rows without a stored username (legacy native signups,
+ * rows healed from the homeserver phone binding) fall back to the localpart of a well-formed Matrix
+ * user id via {@link MatrixIds}; that value is refused when another account in this directory holds
+ * it as its stored username.
+ *
+ * <p>Every candidate must match {@link UsernamePolicy#hasValidFormat}. Anything that fails is
+ * refused with {@code account_identity_inconsistent}: MAS imports claims with
+ * {@code on_conflict: add}, so a localpart shared by two accounts would link the second account onto
+ * the first account's MAS user.
+ */
 @Component
 @RequiredArgsConstructor
 public class AccountLocalpartResolver {
@@ -26,6 +39,13 @@ public class AccountLocalpartResolver {
 
     private final DirectoryService directoryService;
 
+    /**
+     * @param userId the account's Matrix user id (the OIDC {@code sub})
+     * @param rows   the account's directory rows the caller already loaded; may be empty
+     * @return the localpart to emit as {@code preferred_username}
+     * @throws LoginFlowException 500 {@code account_identity_inconsistent} when no
+     *                            per-account localpart can be established
+     */
     public String forExistingAccount(String userId, List<DirectoryEntry> rows) {
         if (!StringUtils.hasText(userId)) {
             throw inconsistent(null, "missing user id");

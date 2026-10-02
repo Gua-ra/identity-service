@@ -168,6 +168,11 @@ class OidcAuthorizationControllerTest {
         verifyNoInteractions(authorizationService);
     }
 
+    /**
+     * A request that still carries the legacy OTP query parameters must be indistinguishable from an
+     * interactive request: same redirect to the login UI, same parked session at the phone step, no
+     * code, and neither the OTP service nor the authorization service is touched.
+     */
     @Test
     void authorizeIgnoresLegacyOtpParametersAndNeverIssuesCode() throws Exception {
         stubInteractiveFlow();
@@ -221,6 +226,7 @@ class OidcAuthorizationControllerTest {
         verifyNoInteractions(otpService);
     }
 
+    /** Keeps the removal visible as a named test: no path turns an OTP into an authorization code. */
     @Test
     void authorizationServiceHasNoOtpBackedCodeIssuancePath() {
         assertThat(Arrays.stream(OidcAuthorizationService.class.getDeclaredMethods()).map(Method::getName))
@@ -275,6 +281,11 @@ class OidcAuthorizationControllerTest {
                 .andExpect(header().string("Location", "/signin"));
     }
 
+    /**
+     * The reserved login_hint {@code passkey} is an intent, not a phone number: the session parks at
+     * the phone step flagged PASSKEY, and the marker never lands in the phone hint. Matching ignores
+     * case and surrounding whitespace.
+     */
     @ParameterizedTest
     @ValueSource(strings = {"passkey", "PASSKEY", " passkey "})
     void authorizePasskeyLoginHintParksPasskeyIntentWithoutPhoneHint(String loginHint) throws Exception {
@@ -297,6 +308,10 @@ class OidcAuthorizationControllerTest {
         assertThat(session.getPhoneHint()).isEqualTo("+15551234567");
     }
 
+    /**
+     * Anything that is neither a phone nor exactly the reserved marker is ignored:
+     * phone intent, no pre-fill. Near misses of the marker must not be promoted.
+     */
     @ParameterizedTest
     @ValueSource(strings = {"mxid:@alice:example.org", "passkeys", "passkey:+15551234567", "not a hint"})
     void authorizeUnrecognisedLoginHintKeepsPhoneIntentAndNoPhoneHint(String loginHint) throws Exception {

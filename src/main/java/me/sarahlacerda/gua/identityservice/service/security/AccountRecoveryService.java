@@ -18,8 +18,28 @@ import me.sarahlacerda.gua.identityservice.exception.AccountRecoveryNotReadyExce
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryState.Status;
 import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditLogger;
 
-// Delayed recovery for a caller who proved the phone number but holds no usable factor.
-// Every write takes the account row lock and re-evaluates under it.
+/**
+ * The delayed account recovery: the way back for someone who proved the phone number but cannot
+ * present any factor the account holds.
+ *
+ * <p>An SMS code proves possession of a number, which a SIM swap also gives. The account holder
+ * still has a signed-in device or a factor, so recovery gives them time to use it:
+ * <ul>
+ * <li>it can be requested only once the account has gone a dormancy period without a completed
+ * sign-in;</li>
+ * <li>it can be completed only after a waiting period, during which every signed-in app shows a
+ * banner with a cancel button, and any sign-in with the PIN or a passkey ends it;</li>
+ * <li>completing it sets a new PIN, removes every stored passkey and signs out every other
+ * session.</li>
+ * </ul>
+ *
+ * <p>The episode is stamped on {@code identity_users.pin_reset_requested_at} and has one liveness
+ * rule, {@code live = stamp != null && now < stamp + life}. A dead stamp is treated as absent.
+ *
+ * <p>Every write takes the account row lock and re-evaluates under it, because start, complete and
+ * cancel race each other and the sign-in writers. This service sends no SMS: the phone was proved
+ * by the OTP step that made recovery available.
+ */
 @Service
 @RequiredArgsConstructor
 public class AccountRecoveryService {
@@ -31,12 +51,19 @@ public class AccountRecoveryService {
     private final SecurityAuditLogger auditLogger;
     private final Clock clock;
 
+    /** Where the account stands right now. Reads only. */
     @Transactional(readOnly = true)
     public AccountRecoveryState stateFor(String userId) {
         return evaluate(userSecurityService.findUser(userId).orElse(null), clock.instant());
     }
 
-    /** A live episode is returned unchanged, so asking again cannot restart the wait. */
+    /**
+     * Opens an episode when recovery is available, and otherwise leaves the account as it was. A live
+     * episode is returned unchanged, so asking again can neither restart the wait nor push it out.
+     *
+     * @throws AccountRecoveryCooldownException when the account completed a sign-in inside the
+     *                                          dormancy period
+     */
     @Transactional
     public AccountRecoveryState start(String userId, String maskedPhone, String requesterIp) {
         Instant now = clock.instant();
@@ -58,8 +85,18 @@ public class AccountRecoveryService {
         }
     }
 
-    // Signing out other sessions is not done here. The transaction records it as owed and the login carries the
-    // claim.
+    /**
+     * Completes a ready episode with a new PIN, in one transaction under the row lock: re-check that
+     * it is ready, validate the PIN, apply it, end the episode, clear any PIN lock, remove every stored
+     * passkey, and count the completion as account activity.
+     *
+     * <p>Signing out other sessions is not done here. The transaction records that sign-out as owed
+     * ({@link EndOtherSessionsService}) and the caller finishes the login with a claim the
+     * authentication service acts on.
+     *
+     * @return how many passkeys were removed
+     * @throws AccountRecoveryNotReadyException when the episode is not ready under the lock
+     */
     @Transactional
     public int complete(String userId, String newPin) {
         Instant now = clock.instant();
@@ -68,6 +105,8 @@ public class AccountRecoveryService {
         if (state.status() != Status.READY) {
             throw new AccountRecoveryNotReadyException("Account recovery is not ready to complete", state);
         }
+        // A malformed or weak PIN is refused before anything is written and without counting against
+        // the account: it is the new PIN being chosen, not a guess at the old one.
         userSecurityService.applyRecoveredPin(user, newPin);
         int removed = passkeyService.removeAllForUser(userId);
         // Stamped here because the sign-in record that follows the commit is not guaranteed to run.
@@ -77,7 +116,12 @@ public class AccountRecoveryService {
         return removed;
     }
 
-    /** Counts as account activity, so the dormancy period starts again. */
+    /**
+     * The account holder's cancel from a signed-in app. Ends a live episode and counts as account
+     * activity, so the dormancy period starts again.
+     *
+     * @return whether a live episode was ended. The endpoint answers the same either way
+     */
     @Transactional
     public boolean cancel(String userId, String requesterIp) {
         Instant now = clock.instant();
@@ -92,6 +136,7 @@ public class AccountRecoveryService {
         return true;
     }
 
+    /** The live episode, for the banner the signed-in apps show; empty when none is live. */
     @Transactional(readOnly = true)
     public Optional<AccountRecoveryState> pendingFor(String userId) {
         AccountRecoveryState state = stateFor(userId);
@@ -100,9 +145,13 @@ public class AccountRecoveryService {
                 : Optional.empty();
     }
 
-    /** Live wins over dormancy. */
+    /**
+     * The status rules, in the order they are decided. Live wins over dormancy: an account waiting on
+     * a recovery reports the recovery, not the sign-in that preceded it.
+     */
     AccountRecoveryState evaluate(IdentityUser user, Instant now) {
         IdentityServiceProperties.SecurityProperties security = properties.getSecurity();
+        // Published at every status, so the client states the waits this deployment enforces.
         long dormancy = security.getAccountRecoveryDormancy().toSeconds();
         long wait = security.getAccountRecoveryWait().toSeconds();
         if (user != null && isLive(user, now)) {
@@ -134,8 +183,12 @@ public class AccountRecoveryService {
         return instant.getNano() == 0 ? instant.getEpochSecond() : instant.getEpochSecond() + 1;
     }
 
-    // Rounded up to the next UTC day so it does not reveal the time of the last sign-in.
-    // Rounded to the next minute when short durations are allowed for testing.
+    /**
+     * The time a too-soon account is told it can start recovery, rounded up to the start of the next
+     * UTC day so it does not reveal the time of the last sign-in. Rounded to the next whole minute
+     * when short durations are allowed for testing. The cooldown's retry-after is derived from this
+     * value, so the two always agree.
+     */
     private Instant publishedAvailableAt(Instant availableAt) {
         ChronoUnit unit = properties.getSecurity().isAccountRecoveryAllowShortForTesting()
                 ? ChronoUnit.MINUTES

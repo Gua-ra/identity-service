@@ -1,6 +1,16 @@
 name: CI/CD
 
 # Builds, tests and publishes signed images; deploys dev only. Production is promoted by promote-prod.yml.
+#
+# Triggers:
+#   - PR labelled `deploy:dev`  -> build that branch and roll it onto dev. Remove and re-add the label to
+#                                  redeploy after new commits.
+#   - merge to main             -> build, test, publish, deploy dev.
+#   - workflow_dispatch         -> `dev` builds and rolls dev; `none` builds, tests and publishes without
+#                                  deploying, which is how a branch produces a promotable artifact.
+#
+# Every pushed image carries a build provenance attestation binding its digest to the commit it was built
+# from. Promotion verifies it and refuses an image without one.
 
 on:
   push:
@@ -23,7 +33,7 @@ permissions:
 
 env:
   IMAGE: ghcr.io/gua-ra/identity-service
-  # Only people with write access can label a PR.
+  # Label a PR with this to roll its build onto dev. Only people with write access can label a PR.
   DEPLOY_LABEL: deploy:dev
 
 jobs:
@@ -64,6 +74,7 @@ jobs:
       - id: ref
         run: echo "ref=${IMAGE}:sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
+      # An unlabelled PR stops at "it builds and the tests pass": no image, no deploy.
       - if: github.event_name != 'pull_request' || steps.gate.outputs.dev == 'true'
         uses: docker/setup-buildx-action@v3
       - if: github.event_name != 'pull_request' || steps.gate.outputs.dev == 'true'
@@ -77,7 +88,7 @@ jobs:
         id: meta
         with:
           images: ${{ env.IMAGE }}
-          # Deploys use the immutable sha tag. The dev tag stays pinned to main.
+          # Deploys use the immutable sha tag. The dev tag stays pinned to main; a labelled PR gets a pr-N tag.
           tags: |
             type=sha,format=long
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/main' }}
@@ -95,6 +106,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       # Sign the index (manifest-list) digest: it is what production is set to and what promotion verifies.
+      # An unreadable digest would leave a published image unsigned, so the guard below fails closed.
       - name: Require a usable digest from the push
         if: github.event_name != 'pull_request' || steps.gate.outputs.dev == 'true'
         id: digest
@@ -117,6 +129,7 @@ jobs:
           # Deliberately off: the bundle stays with the repository, not the registry.
           push-to-registry: false
 
+  # Runs on merge to main, for a PR labelled `deploy:dev`, and by hand via workflow_dispatch with environment=dev.
   deploy-dev:
     needs: build
     if: >-
@@ -129,6 +142,7 @@ jobs:
       - name: Roll out ${{ needs.build.outputs.ref }} to dev
         run: |
           IMG="${{ needs.build.outputs.ref }}"
+          # k8s pulls the immutable sha-tagged image from GHCR via the ghcr-pull secret, so no docker is needed.
           # k3s' bundled kubectl as root, so PATH and kubeconfig are correct on the node.
           sudo k3s kubectl -n gua set image deployment/identity-service identity-service="$IMG"
           sudo k3s kubectl -n gua rollout status deployment/identity-service --timeout=180s
@@ -144,3 +158,5 @@ jobs:
               repo: context.repo.repo,
               body: `Deployed to **dev** (ns \`gua\`): \`${{ needs.build.outputs.ref }}\`\n\nDev keeps running this build until something else is deployed over it. Merging to main returns dev to main's build.`
             })
+
+  # No deploy-prod job by design: production is promoted from an existing artifact by promote-prod.yml.

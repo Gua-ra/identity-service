@@ -1,15 +1,27 @@
 package me.sarahlacerda.gua.identityservice.account.genesis;
 
+/**
+ * A decoded account genesis (suite 0x01) together with the exact bytes it was decoded from.
+ * Immutable: every accessor returns a copy, so nothing downstream can mutate the bytes the
+ * accountId is derived from.
+ *
+ * <p>It commits the authority key, the algorithm identifiers and the recovery authority. It holds no
+ * identifier and no homeserver.
+ */
 public final class AccountGenesis {
 
+    /** Total canonical length. Any other length is rejected. */
     public static final int LENGTH = 87;
 
+    /** ASCII {@code GUAG}, the domain separator. */
     public static final String MAGIC = "GUAG";
 
     public static final int VERSION = 0x01;
 
+    /** Ed25519 authority, Ed25519 recovery, SHA-256. */
     public static final int SUITE_ED25519_SHA256 = 0x01;
 
+    /** One committed recovery authority key. */
     public static final int RECOVERY_FRAMEWORK_COMMITTED_KEY = 0x01;
 
     public static final int ENTROPY_LENGTH = 16;
@@ -41,6 +53,7 @@ public final class AccountGenesis {
         return suite;
     }
 
+    /** The raw 32-byte Ed25519 account authority key. */
     public byte[] authorityPublicKey() {
         return authorityPublicKey.clone();
     }
@@ -57,6 +70,7 @@ public final class AccountGenesis {
         return entropy.clone();
     }
 
+    /** The bytes as received. The accountId is the hash of these, never of a re-encoding. */
     public byte[] canonicalBytes() {
         return canonicalBytes.clone();
     }

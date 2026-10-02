@@ -34,6 +34,8 @@ class IdentityServicePropertiesResolverEnvTest {
                 .run(ctx -> {
                     assertThat(ctx).hasNotFailed();
                     assertThat(ctx).hasSingleBean(IdentityServiceProperties.class);
+                    // The variables really are visible to relaxed binding; there is just no
+                    // identity.resolver.* property left for them to land on.
                     assertThat(ctx.getEnvironment().getProperty("identity.resolver.baseurl"))
                             .isEqualTo("http://resolver.example.test");
                     assertThat(ctx.getBean(IdentityServiceProperties.class).getDirectory().getPepper())

@@ -6,8 +6,30 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 
-// Canonical fixed-width encoding with one length-prefixed field.
-// Decoded records keep the received bytes for signature checks.
+/**
+ * Canonical codec for a generation-1 placement record.
+ *
+ * <pre>
+ * off     len   field
+ * 0       4     magic "GUAP"            also the signature domain
+ * 4       1     version 0x01
+ * 5       1     generation 0x01
+ * 6       34    accountId raw           0x01 || class || SHA-256(genesis bytes)
+ * 40      1     origin                  0x00 bootstrap | 0x01 genesis; equals the class byte at offset 7
+ * 41      1     n                       len(homeserverId), 1..64
+ * 42      n     homeserverId            ASCII roster id, never the Matrix domain
+ * 42+n    8     issuedAt                epoch milliseconds, unsigned
+ * 50+n    8     notBefore               epoch milliseconds, unsigned
+ * 58+n    8     notAfter                epoch milliseconds, unsigned
+ * 66+n          end
+ * </pre>
+ *
+ * <p>Big-endian, no delimiters, one length-prefixed field. The decoder refuses an unknown version or
+ * generation, a wrong length, a length prefix that disagrees with the buffer, a non-printable or
+ * over-long homeserver id, an origin byte that disagrees with the class byte inside the accountId, and
+ * a window that is inverted or longer than 400 days. The decoded record keeps the received bytes, so a
+ * verifier checks the signature against what arrived.
+ */
 public final class PlacementRecordCodec {
 
     private static final byte[] MAGIC = PlacementRecord.MAGIC.getBytes(StandardCharsets.US_ASCII);
@@ -19,12 +41,17 @@ public final class PlacementRecordCodec {
     private static final int OFFSET_HOMESERVER_LENGTH = 41;
     private static final int OFFSET_HOMESERVER_ID = 42;
 
-    /** A longer window is refused, not clamped. */
+    /** Maximum validity. A longer window is refused, not clamped. */
     public static final Duration MAX_VALIDITY = Duration.ofDays(400);
 
     private PlacementRecordCodec() {
     }
 
+    /**
+     * Strictly decodes canonical bytes.
+     *
+     * @throws InvalidGenesisException on any rule above, with a stable machine-readable reason
+     */
     public static PlacementRecord decode(byte[] bytes) {
         if (bytes == null || bytes.length < PlacementRecord.LENGTH_WITHOUT_HOMESERVER_ID + 1) {
             throw new InvalidGenesisException("wrong_length", "placement record is shorter than the fixed layout");
@@ -42,10 +69,14 @@ public final class PlacementRecordCodec {
         }
 
         byte[] rawAccountId = Arrays.copyOfRange(bytes, OFFSET_ACCOUNT_ID, OFFSET_ORIGIN);
+        // Re-encoding the raw bytes and parsing the string applies the canonical-spelling rule in one
+        // place rather than duplicating it here.
         AccountId accountId = AccountId.parse(AccountId.PREFIX + Base32.encode(rawAccountId));
 
         byte origin = bytes[OFFSET_ORIGIN];
         if (origin != accountId.rootClass()) {
+            // The record's audit marker and the class byte baked into the id must agree, or a bootstrap
+            // account could be published as a rooted one.
             throw new InvalidGenesisException("origin_class_mismatch",
                     "the origin byte disagrees with the accountId root class");
         }
@@ -56,6 +87,8 @@ public final class PlacementRecordCodec {
         }
         int expectedLength = PlacementRecord.LENGTH_WITHOUT_HOMESERVER_ID + homeserverIdLength;
         if (bytes.length != expectedLength) {
+            // The length prefix and the buffer must agree exactly; trailing bytes would give one record
+            // several spellings, and a signature over the longer buffer would still verify.
             throw new InvalidGenesisException("wrong_length",
                     "placement record length does not match its homeserver id length prefix");
         }
@@ -82,6 +115,7 @@ public final class PlacementRecordCodec {
                 bytes.clone());
     }
 
+    /** Builds canonical bytes. The signature is produced over exactly what this returns. */
     public static byte[] encode(AccountId accountId, byte origin, String homeserverId, Instant issuedAt,
             Instant notBefore, Instant notAfter) {
         if (origin != accountId.rootClass()) {
@@ -120,6 +154,10 @@ public final class PlacementRecordCodec {
         return out;
     }
 
+    /**
+     * ASCII, printable, no whitespace. A roster id is an opaque token; refusing everything else keeps a
+     * control character or a smuggled newline out of the one free-form field.
+     */
     private static String decodeHomeserverId(byte[] value) {
         for (byte b : value) {
             int c = b & 0xFF;

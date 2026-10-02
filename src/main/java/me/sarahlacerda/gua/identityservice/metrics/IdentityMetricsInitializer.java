@@ -6,7 +6,19 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import me.sarahlacerda.gua.identityservice.service.SmsSender;
 
-/** Registers the counters at startup so they read 0, not "no data", before the first increment. */
+/**
+ * Eagerly registers every {@code gua_identity_*} counter family at startup, so the metric names are
+ * on {@code /actuator/prometheus} from the first scrape of a fresh pod and panels read 0, not "no data":
+ * <ul>
+ *   <li>{@code gua_identity_signup_total{result="success",country="unknown"}}</li>
+ *   <li>{@code gua_identity_login_total{result="success"}}</li>
+ *   <li>{@code gua_identity_otp_verify_total{result="valid"|"invalid"|"exhausted",flow=&lt;where the code was spent&gt;}}</li>
+ *   <li>{@code gua_identity_sms_send_total{provider=&lt;wired sender&gt;,result="sent"|"failed"}}</li>
+ * </ul>
+ * Registration is idempotent: {@link MeterRegistry#counter} returns the same instances for the same
+ * name and tags. Only tag values the increment call sites already produce are used, so tag
+ * cardinality is unchanged.
+ */
 @Component
 public class IdentityMetricsInitializer {
 
@@ -27,6 +39,8 @@ public class IdentityMetricsInitializer {
             Counter.builder("gua.identity.otp.verify").tag("result", "exhausted").tag("flow", flow).register(metrics);
         }
 
+        // provider matches whichever SmsSender bean is wired (twilio in prod, logging in dev), the same
+        // value OtpService tags its increments with.
         String provider = SmsSender.providerTag(smsSender);
         Counter.builder("gua.identity.sms.send").tag("provider", provider).tag("result", "sent").register(metrics);
         Counter.builder("gua.identity.sms.send").tag("provider", provider).tag("result", "failed").register(metrics);

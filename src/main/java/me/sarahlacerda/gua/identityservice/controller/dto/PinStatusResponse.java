@@ -4,6 +4,11 @@ import java.util.List;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
+/**
+ * What the account has registered and what the server will accept from it. Everything here is
+ * server truth: there is no field for the client to say a factor is unavailable, since that claim
+ * would only be a request for something weaker.
+ */
 @Schema(description = "Status of the authenticated user's security PIN and the factors the account holds")
 public record PinStatusResponse(
         @Schema(description = "True when the user has configured a security PIN") boolean hasPin,

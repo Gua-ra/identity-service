@@ -1,15 +1,23 @@
 package me.sarahlacerda.gua.identityservice.account.genesis;
 
-// Gives an account without an authority key a re-derivable accountId.
-// The entropy is random, never derived from the MXID or the phone.
+/**
+ * A decoded bootstrap genesis (suite 0x00) together with the exact bytes it was decoded from.
+ *
+ * <p>It commits nothing. It gives an account without an authority key a re-derivable, auditable
+ * accountId whose root class byte 0x00 marks it as bootstrap. The entropy is random and never derived
+ * from the MXID or the phone, which would put an identifier inside the id.
+ */
 public final class BootstrapGenesis {
 
+    /** Total canonical length. Any other length is rejected. */
     public static final int LENGTH = 22;
 
+    /** ASCII {@code GUAB}, the domain separator. */
     public static final String MAGIC = "GUAB";
 
     public static final int VERSION = 0x01;
 
+    /** No authority key. */
     public static final int SUITE_NONE = 0x00;
 
     public static final int ENTROPY_LENGTH = 16;
@@ -38,6 +46,7 @@ public final class BootstrapGenesis {
         return entropy.clone();
     }
 
+    /** The bytes as received or as minted. Stored so the id stays re-derivable and auditable. */
     public byte[] canonicalBytes() {
         return canonicalBytes.clone();
     }

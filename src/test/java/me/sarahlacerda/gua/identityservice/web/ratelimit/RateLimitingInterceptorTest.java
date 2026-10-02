@@ -67,7 +67,7 @@ class RateLimitingInterceptorTest {
             .timeoutDuration(Duration.ZERO)
             .build();
         RateLimiter rateLimiter = RateLimiter.of("test-exhausted", config);
-        rateLimiter.acquirePermission();
+        rateLimiter.acquirePermission(); // consume the only permit
 
         when(response.getWriter()).thenReturn(writer);
         when(endpointRateLimiter.resolve(request)).thenReturn(Optional.of(new EndpointRateLimiter.ResolvedLimiter(rateLimiter, Duration.ZERO, Duration.ofSeconds(30))));

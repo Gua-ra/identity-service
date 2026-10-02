@@ -10,6 +10,10 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * The names a scrape really exposes. A panel or alert built on a name that does not exist reads as
+ * "no data", not as an error.
+ */
 class PlacementShadowMetricsTest {
 
     private IdentityServiceProperties enabled() {
@@ -51,6 +55,7 @@ class PlacementShadowMetricsTest {
 
         new PlacementShadowMetrics(registry, enabled());
 
+        // A fresh pod serves zeros from its first scrape rather than nothing at all.
         String scrape = registry.scrape();
         for (PlacementShadowResult result : PlacementShadowResult.values()) {
             assertThat(scrape).contains("result=\"" + result.tag() + "\"");
@@ -93,6 +98,7 @@ class PlacementShadowMetricsTest {
 
         metrics.failed("unknown_homeserver");
 
+        // This is the series that alerts when accounts cannot be compared.
         String scrape = registry.scrape();
         assertThat(scrape).contains("gua_identity_placement_shadow_failures_total{");
         for (String reason : PlacementShadowMetrics.FAILURE_REASONS) {

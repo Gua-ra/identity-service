@@ -15,8 +15,13 @@ import me.sarahlacerda.gua.identityservice.domain.AccountGenesisRecord.State;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-// The schema comes from the entity mapping because the Flyway migrations are Postgres-only.
-// SchemaParityTest checks that the two agree.
+/**
+ * The genesis table against a real database engine. The compare-and-set attach is the point: a
+ * mocked repository cannot show that the SQL makes two racing sessions resolve to a single attach.
+ *
+ * <p>The schema comes from the entity mapping because the Flyway migrations are Postgres-only.
+ * {@code SchemaParityTest} checks that the two agree.
+ */
 @DataJpaTest(properties = {
         "spring.flyway.enabled=false",
         "spring.jpa.hibernate.ddl-auto=create-drop",

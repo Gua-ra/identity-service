@@ -25,7 +25,10 @@ import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationServi
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
-/** No claim may carry an accountId: the MAS localpart template could be pointed at it. */
+/**
+ * {@code sub} stays the Matrix user id, {@code preferred_username} stays the handle stored in the
+ * directory, and no claim carries an accountId: the MAS localpart template could be pointed at it.
+ */
 class OidcSubjectUnchangedTest {
 
     private static final String MXID = "@alice:example.org";
@@ -104,6 +107,7 @@ class OidcSubjectUnchangedTest {
 
     @Test
     void theGuardPatternWouldActuallyCatchAnAccountId() {
+        // Guards that cannot fail are worthless: this shows the pattern used above matches a real id.
         assertThat(ACCOUNT_ID.matcher(
                 AccountId.derive(AccountId.CLASS_GENESIS, "bytes".getBytes()).value()).matches()).isTrue();
     }

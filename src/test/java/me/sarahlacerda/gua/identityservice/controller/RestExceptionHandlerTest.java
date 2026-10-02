@@ -49,6 +49,10 @@ class RestExceptionHandlerTest {
             .andExpect(jsonPath("$.code").value("service_unavailable"));
     }
 
+    /**
+     * The wire shape of the fresh-2FA refusal: clients read {@code retryAfterSeconds} from the body,
+     * with the header as a fallback.
+     */
     @Test
     void aFreshFactorRefusalCarriesTheCodeAndTheWaitBothClientsRead() throws Exception {
         mockMvc.perform(get("/_test/fresh-2fa"))
@@ -58,6 +62,10 @@ class RestExceptionHandlerTest {
             .andExpect(header().string("Retry-After", "432000"));
     }
 
+    /**
+     * The separate minimum gap between two successful phone changes keeps its own status
+     * and its own code. Collapsing the two would tell a client to wait out the wrong one.
+     */
     @Test
     void theChangeCooldownKeepsItsOwnStatusAndCode() throws Exception {
         mockMvc.perform(get("/_test/change-cooldown"))
@@ -65,6 +73,7 @@ class RestExceptionHandlerTest {
             .andExpect(jsonPath("$.code").value("phone_change_cooldown"));
     }
 
+    /** Error bodies that carry no wait do not grow the field. */
     @Test
     void anUnrelatedErrorBodyIsUnchanged() throws Exception {
         mockMvc.perform(get("/_test/redis-down"))

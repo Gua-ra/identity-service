@@ -19,6 +19,11 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.service.placement.PlacementSchedulingConfig;
 import me.sarahlacerda.gua.identityservice.service.placement.ResolverPlacementClient;
 
+/**
+ * Placement is inert with the shipped defaults, proven by booting the application: it boots with no
+ * placement configuration, existing endpoints answer as before, no background work is set up, and
+ * nothing about the feature's configuration can stop startup.
+ */
 @SpringBootTest
 @ActiveProfiles("test")
 class PlacementInertAtStartupTest {
@@ -48,11 +53,14 @@ class PlacementInertAtStartupTest {
 
         @Test
         void noBackgroundWorkIsScheduled() {
+                // The scheduling configuration is the only thing that turns @Scheduled on for this feature.
+                // If it is present with the flags off, the reconciler runs on a timer against real tables.
                 assertThat(context.getBeanNamesForType(PlacementSchedulingConfig.class)).isEmpty();
         }
 
         @Test
         void noPlacementMeterIsRegistered() {
+                // A component must not register meters while its feature is off.
                 assertThat(meterRegistry.getMeters())
                                 .noneMatch(meter -> meter.getId().getName().startsWith("gua.identity.placement"));
         }

@@ -31,24 +31,37 @@ public class DirectoryEntry {
     @Column(name = "phone_digest", nullable = false, unique = true, length = 64)
     private String phoneDigest;
 
-    /** Display-only mask. The raw phone is never stored. */
+    /**
+     * Display-only masked phone (e.g. "••••4567"). Not reversible to the full
+     * number; the raw phone is never stored.
+     */
     @Column(name = "phone_masked", length = 32)
     private String phoneMasked;
 
     @Column(name = "user_id", nullable = false)
     private String userId;
 
-    /** Null for rows created before routing existed. */
+    /**
+     * Stable identifier of the homeserver this account lives on (see
+     * {@code Homeserver#id()}). Nullable for rows created before routing existed.
+     */
     @Column(name = "homeserver_id", length = 64)
     private String homeserverId;
 
-    /** Unique within this deployment's directory only (case-insensitive index). */
+    /**
+     * Human-readable handle, unique within this deployment's directory (case-insensitive index), not
+     * federation-wide. The interactive login path uses the same handle as the MXID localpart.
+     */
     @Column(name = "username", length = 64)
     private String username;
 
     @Column(name = "display_name")
     private String displayName;
 
+    /**
+     * Contact-discovery opt-out. When {@code false} the account is excluded from
+     * address-book matching ({@code /directory/lookup}); messaging is unaffected.
+     */
     @Column(name = "discoverable", nullable = false)
     private boolean discoverable = true;
 

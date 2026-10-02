@@ -74,6 +74,8 @@ class BootstrapGenesisCodecTest {
 
     @Test
     void aBootstrapObjectIsNeverConfusableWithAGenesisOne() {
+        // Both families open with ASCII "GUA" but never with the same fourth byte, and their lengths
+        // differ, so neither decoder accepts the other's bytes.
         assertThatThrownBy(() -> AccountGenesisCodec.decode(valid()))
                 .isInstanceOf(InvalidGenesisException.class);
     }

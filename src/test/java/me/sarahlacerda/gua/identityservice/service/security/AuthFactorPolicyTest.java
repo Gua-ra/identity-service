@@ -9,6 +9,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+/**
+ * The answers login, the phone-change step-up and recovery all get. Frozen here: an SMS code never
+ * finishes a sign-in for an account holding a factor, the policy never narrows an operation's
+ * accepted factors by what the account holds, and it never refuses recovery to an account that has
+ * a stronger factor.
+ */
 @ExtendWith(MockitoExtension.class)
 class AuthFactorPolicyTest {
 
@@ -23,13 +29,18 @@ class AuthFactorPolicyTest {
         return new AuthFactorPolicy(userSecurityService, passkeyService);
     }
 
+    // -------------------- registered factors --------------------
+
     @Test
     void aPasskeyCountsAsRegisteredOnlyWhenTheDeploymentCanActuallyAssertIt() {
         when(passkeyService.isEnabled()).thenReturn(false);
 
+        // A stored credential on a deployment with passkeys switched off is a factor nobody
+        // can produce, so reporting it would offer a way in that does not exist.
         assertThat(policy().passkeyRegistered(USER)).isFalse();
     }
 
+    /** Deployment capability, not account state: read from configuration, so signup may act on it. */
     @Test
     void passkeysSupportedReportsTheDeploymentAndAsksNothingAboutTheAccount() {
         when(passkeyService.isEnabled()).thenReturn(true);
@@ -74,6 +85,8 @@ class AuthFactorPolicyTest {
         assertThat(policy().preferredFactor(USER)).isEqualTo(AuthFactor.PHONE_OTP);
     }
 
+    // -------------------- login --------------------
+
     @Test
     void anAccountHoldingAPinIsAskedForItAndMayPresentItsPasskeyInstead() {
         when(passkeyService.hasPasskey(USER)).thenReturn(true);
@@ -95,6 +108,7 @@ class AuthFactorPolicyTest {
 
         AuthFactorPolicy.LoginPolicy passkeyOnly = policy().loginPolicy(USER);
 
+        // Not lockout: an account that cannot present it has the delayed recovery.
         assertThat(passkeyOnly.passkeyRequired()).isTrue();
         assertThat(passkeyOnly.pinStepRequired()).isFalse();
         assertThat(passkeyOnly.factorSetupRequired()).isFalse();
@@ -125,6 +139,7 @@ class AuthFactorPolicyTest {
         }
     }
 
+    /** Switching passkeys off must not turn a passkey-only account into one the SMS code finishes. */
     @Test
     void aStoredPasskeyStillGatesSignInWhenTheDeploymentHasPasskeysSwitchedOff() {
         lenient().when(passkeyService.isEnabled()).thenReturn(false);
@@ -139,6 +154,8 @@ class AuthFactorPolicyTest {
         assertThat(policy.loginPolicy(USER).factorSetupRequired()).isFalse();
     }
 
+    // -------------------- step-up --------------------
+
     @Test
     void thePhoneChangeAcceptsThePasskeyAheadOfThePinAndNothingElse() {
         AuthFactorPolicy.StepUpPolicy stepUp = policy().stepUpFor(ReauthOperation.PHONE_CHANGE);
@@ -146,6 +163,8 @@ class AuthFactorPolicyTest {
         assertThat(stepUp.accepted()).containsExactly(AuthFactor.PASSKEY, AuthFactor.PIN);
         assertThat(stepUp.outranks(AuthFactor.PASSKEY, AuthFactor.PIN)).isTrue();
         assertThat(stepUp.outranks(AuthFactor.PIN, AuthFactor.PASSKEY)).isFalse();
+        // The reauth token proves a code sent to the number being re-pointed, so it cannot
+        // carry this operation on its own.
         assertThat(stepUp.accepts(AuthFactor.PHONE_OTP)).isFalse();
         assertThat(stepUp.hardBlockWhenUnsatisfied()).isTrue();
     }
@@ -154,6 +173,8 @@ class AuthFactorPolicyTest {
     void theAcceptedFactorsDoNotNarrowToWhatTheAccountHappensToHold() {
         AuthFactorPolicy policy = policy();
 
+        // stepUpFor takes no account: an account with only a PIN still sees PASSKEY accepted, and one with
+        // only a passkey still sees PIN accepted.
         assertThat(policy.stepUpFor(ReauthOperation.PHONE_CHANGE).accepts(AuthFactor.PIN)).isTrue();
         assertThat(policy.stepUpFor(ReauthOperation.PHONE_CHANGE).accepts(AuthFactor.PASSKEY)).isTrue();
         assertThat(policy.stepUpFor(ReauthOperation.PHONE_CHANGE))
@@ -172,6 +193,7 @@ class AuthFactorPolicyTest {
     void deactivateAndIdentityResetAreReportedAsTheyAreActuallyEnforced() {
         AuthFactorPolicy policy = policy();
 
+        // Both are reauth-token-only today, which is weaker than the phone change.
         assertThat(policy.stepUpFor(ReauthOperation.DEACTIVATE).accepted())
                 .containsExactly(AuthFactor.PHONE_OTP);
         assertThat(policy.stepUpFor(ReauthOperation.IDENTITY_RESET).accepted())
@@ -179,12 +201,16 @@ class AuthFactorPolicyTest {
         assertThat(policy.stepUpFor(ReauthOperation.DEACTIVATE).hardBlockWhenUnsatisfied()).isFalse();
     }
 
+    // -------------------- recovery --------------------
+
     @Test
     void recoveryIsTheSamePathWhetherOrNotTheAccountHoldsAPasskey() {
         when(passkeyService.hasPasskey(USER)).thenReturn(true);
 
         AuthFactorPolicy.RecoveryPolicy withPasskey = policy().recoveryFor(USER);
 
+        // Not refused for holding a stronger factor, which would leave that account no way back.
+        // The passkey is removed on completion, because the premise is that it cannot be used.
         assertThat(withPasskey.restores()).isEqualTo(AuthFactor.PIN);
         assertThat(withPasskey.provenBy()).isEqualTo(AuthFactor.PHONE_OTP);
         assertThat(withPasskey.removesPasskeys()).isTrue();

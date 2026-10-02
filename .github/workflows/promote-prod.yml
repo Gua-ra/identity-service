@@ -1,7 +1,12 @@
 name: Promote to production
 
 # Promotes an already built image to production; nothing is compiled here.
-# The input is a source commit: its digest is deployed only if a Sigstore certificate binds it to that commit.
+#
+# The input is a source commit, not an image: an image name is caller-chosen and carries no provenance.
+# What is deployed is the digest that commit's tag resolves to. The tag is only the lookup (anyone with
+# package write can move it), so the digest is trusted only when a Sigstore certificate binds it to that
+# commit. The deciding fields come from the certificate GitHub minted for the build run, never from the
+# attestation predicate, which a compromised build could write freely.
 
 on:
   workflow_dispatch:
@@ -16,8 +21,10 @@ env:
   NAMESPACE: gua-prod
   DEPLOYMENT: identity-service
   CONTAINER: identity-service
-  # Which builds may reach production: the signing workflow file and the ref it ran on.
-  # Widen only in a reviewed change.
+  # Which builds may reach production, as a Sigstore certificate identity: the signing workflow file and the
+  # ref it ran on. Both matter, because CI signs a publish-only build dispatched on any branch. `main` is the
+  # normal path; `hotfix/*` exists because a hotfix branches from what is deployed. Widen only in a reviewed
+  # change.
   PROMOTABLE_IDENTITY: '^https://github\.com/Gua-ra/identity-service/\.github/workflows/ci-cd\.yml@refs/heads/(main|hotfix/[A-Za-z0-9._/-]+)$'
   PROMOTABLE_REFS: '^refs/heads/(main|hotfix/[A-Za-z0-9._/-]+)$'
 
@@ -28,6 +35,7 @@ concurrency:
 permissions:
   contents: read
   packages: read
+  # To fetch the signed build-provenance bundle for a digest from this repository.
   attestations: read
 
 jobs:
@@ -59,6 +67,9 @@ jobs:
           COMMIT: ${{ steps.shape.outputs.commit }}
         run: |
           set -euo pipefail
+          # Asks THIS repository for THAT object. A sha from a fork, from another repository, or invented
+          # is a 404 and stops here. The returned sha is compared back, so a redirect or an abbreviation
+          # cannot widen the match.
           resolved="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${COMMIT}" --jq '.sha' 2>/dev/null || true)"
           if [ -z "$resolved" ]; then
             echo "::error::${COMMIT} is not a commit in ${GITHUB_REPOSITORY}. Refusing to promote."
@@ -93,16 +104,19 @@ jobs:
         run: |
           set -euo pipefail
           ref="${IMAGE}:sha-${COMMIT}"
+          # If CI never produced this artifact, promotion stops: an artifact that does not exist was never tested.
           if ! docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
             echo "::error::No artifact at ${ref}. Build and test that commit first; promotion never builds."
             exit 1
           fi
           digest="$(docker buildx imagetools inspect "$ref" --format '{{ .Manifest.Digest }}' 2>/dev/null || true)"
+          # Fail closed on anything ambiguous: empty, malformed, or more than one line.
           if [ "$(printf '%s' "$digest" | wc -l | tr -d ' ')" != "0" ] \
              || ! printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
             echo "::error::Could not resolve a single immutable digest for ${ref} (got: '${digest}')."
             exit 1
           fi
+          # The tag is the lookup, not the evidence. The next step is what binds these bytes to this commit.
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "ref=${IMAGE}@${digest}" >> "$GITHUB_OUTPUT"
           {
@@ -118,7 +132,13 @@ jobs:
           DIGEST: ${{ steps.artifact.outputs.digest }}
         run: |
           set -euo pipefail
-          # Every flag is checked against the Sigstore certificate, not the attestation body.
+          # Every flag is checked against the Sigstore certificate, not the attestation body:
+          #   --repo                      the source repository the signing identity was issued for.
+          #   --cert-oidc-issuer          GitHub's OIDC issuer. Also gh's default; naming it pins it.
+          #   --cert-identity-regex       the signing workflow file and the ref it ran on (PROMOTABLE_IDENTITY).
+          #   --source-digest             the commit the signing run was for. Not settable by the build.
+          #   --deny-self-hosted-runners  CI builds on ubuntu-latest, so this rejects attestations minted on a
+          #                               machine someone else controls.
           if ! gh attestation verify "oci://${IMAGE}@${DIGEST}" \
                  --repo "${GITHUB_REPOSITORY}" \
                  --cert-oidc-issuer "https://token.actions.githubusercontent.com" \
@@ -137,7 +157,9 @@ jobs:
             exit 1
           fi
 
-          # Every attestation must pass, not just one.
+          # Checked with `all(...)` over every returned attestation, so one good entry cannot mask a bad one.
+          # Only `signature.certificate` and `verifiedTimestamps` are read: the originating workflow cannot
+          # manipulate those. Nothing under `statement.predicate` decides anything.
           bad="$(jq -r \
             --arg commit "$COMMIT" \
             --arg bare "${DIGEST#sha256:}" \
@@ -194,6 +216,10 @@ jobs:
             echo "attestation predicate is not used for any decision here."
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Also ungated and read-only; separate because only an in-cluster runner can see production. It shows the
+  # approver the configured image, the observed running digest and the rollback target.
+  # The rollback target is read from every ready pod the Deployment owns, and only while the Deployment is
+  # settled: during a rollout the pod list carries both ReplicaSets.
   inspect-production:
     needs: verify
     runs-on: [self-hosted, identity-service-incluster-prod]
@@ -225,11 +251,15 @@ jobs:
             exit 1
           fi
 
+          # Use the Deployment's own selector rather than a hardcoded label, so this cannot drift from
+          # whatever actually owns the pods.
           selector="$(kubectl -n "$NAMESPACE" get deploy "$DEPLOYMENT" \
             -o go-template='{{range $k, $v := .spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}')"
           selector="${selector%,}"
           [ -n "$selector" ] || { echo "::error::deployment/${DEPLOYMENT} has no matchLabels selector."; exit 1; }
 
+          # One line per pod: name, phase, container readiness, imageID, owner kinds. Terminating pods are
+          # skipped because they may be running the previous image.
           rows="$(kubectl -n "$NAMESPACE" get pods -l "$selector" -o go-template='
             {{- range .items -}}
               {{- if not .metadata.deletionTimestamp -}}
@@ -302,6 +332,8 @@ jobs:
           if printf '%s' "$configured" | grep -Eq '@sha256:[0-9a-f]{64}$'; then
             rollback="$configured"
             basis="the Deployment's configured image, which is already digest-pinned"
+            # A settled Deployment pinned to a digest must be running exactly that digest. If the ready pods
+            # disagree there is no honest rollback target, so refuse.
             if [ "${configured##*@}" != "$observed" ]; then
               echo "::error::Production's configured digest (${configured##*@}) is not what its ready pods are running (${observed}), although the Deployment reports settled."
               echo "::error::There is no honest rollback baseline in that state. Refusing."
@@ -358,6 +390,8 @@ jobs:
           # Re-read now: an approval can sit for a while.
           before="$(kubectl -n "$NAMESPACE" get deploy "$DEPLOYMENT" \
             -o jsonpath='{.spec.template.spec.containers[?(@.name=="'"$CONTAINER"'")].image}')"
+          # If production moved between inspection and approval, the approver read a stale rollback target.
+          # Both the declared image and the running digest are re-checked.
           if [ "$before" != "$INSPECTED_CONFIGURED" ]; then
             echo "::error::Production changed after it was inspected: it was '${INSPECTED_CONFIGURED}', it is now '${before}'."
             echo "::error::The rollback target shown at approval time is stale. Re-run this workflow so the approver sees the current state."

@@ -5,6 +5,18 @@ import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Arrays;
 
+/**
+ * Canonical codec for {@code BootstrapGenesis}, suite 0x00.
+ *
+ * <pre>
+ * off len field
+ * 0   4   magic "GUAB"
+ * 4   1   version = 0x01
+ * 5   1   suite = 0x00
+ * 6   16  entropy   CSPRNG, never derived from the MXID or the phone
+ * 22      end
+ * </pre>
+ */
 public final class BootstrapGenesisCodec {
 
     private static final byte[] MAGIC = BootstrapGenesis.MAGIC.getBytes(StandardCharsets.US_ASCII);
@@ -17,6 +29,11 @@ public final class BootstrapGenesisCodec {
     private BootstrapGenesisCodec() {
     }
 
+    /**
+     * Strictly decodes canonical bytes.
+     *
+     * @throws InvalidGenesisException on a wrong length, magic, version or suite
+     */
     public static BootstrapGenesis decode(byte[] bytes) {
         if (bytes == null || bytes.length != BootstrapGenesis.LENGTH) {
             throw new InvalidGenesisException("wrong_length",
@@ -49,6 +66,7 @@ public final class BootstrapGenesisCodec {
         return out;
     }
 
+    /** Mints a fresh bootstrap genesis with 16 CSPRNG bytes of entropy. */
     public static BootstrapGenesis mint() {
         byte[] entropy = new byte[BootstrapGenesis.ENTROPY_LENGTH];
         RANDOM.nextBytes(entropy);

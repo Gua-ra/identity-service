@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1.6
 
+##############################
+# Build stage
+##############################
 # Build the (arch-independent) jar on the native builder arch so cross-building an
 # amd64 image from an arm64 host doesn't run Gradle under slow QEMU emulation.
 FROM --platform=$BUILDPLATFORM eclipse-temurin:21-jdk AS builder
@@ -16,15 +19,20 @@ RUN chmod +x gradlew
 # Warm up dependency cache (ignore failure if dependencies task isn't available)
 RUN ./gradlew --no-daemon help >/dev/null 2>&1 || true
 
+# Copy source and resources
 COPY src src
 
-# Build the fat jar (tests skipped – rely on CI instead)
+# Build the fat jar (tests skipped, rely on CI instead)
 RUN ./gradlew --no-daemon bootJar -x test
 
+##############################
+# Runtime stage
+##############################
 FROM eclipse-temurin:21-jre
 LABEL org.opencontainers.image.source="https://github.com/Gua-ra/identity-service"
 WORKDIR /app
 
+# Copy built jar
 COPY --from=builder /workspace/build/libs/identity-service-*.jar app.jar
 
 ENV JAVA_OPTS="" \

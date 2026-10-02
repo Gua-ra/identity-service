@@ -4,6 +4,11 @@ import java.time.Instant;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
+/**
+ * The registered accountId and the single-use handle that lets the next login session claim it.
+ * The handle is a routing hint, not a capability: the attach also needs a signature over
+ * server-chosen bytes bound to that login session.
+ */
 @Schema(description = "A registered accountId and its single-use attach handle")
 public record AccountGenesisRegisterResponse(
         @Schema(description = "The derived accountId", example = "ga1aea6aqb5opmzmutench3ggzepkhgwmkajb3epqqrhckkf7bcbcwl2cy")

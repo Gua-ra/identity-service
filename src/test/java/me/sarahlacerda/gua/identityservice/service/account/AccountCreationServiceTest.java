@@ -18,6 +18,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+/**
+ * Which branch a new account takes: attach, bootstrap or refuse. A handle that was presented and
+ * fails to attach fails the whole signup; a signup presenting no handle takes the bootstrap branch.
+ */
 class AccountCreationServiceTest {
 
     private static final String DIGEST = "digest";
@@ -68,6 +72,8 @@ class AccountCreationServiceTest {
 
     @Test
     void aHandleThatFailsToAttachFailsTheWholeSignup() {
+        // No silent downgrade to a bootstrap id: the exception propagates out of the transactional
+        // method, so the directory write made a moment ago rolls back with it.
         when(accountGenesisService.attach(anyString(), any(), any(), anyString()))
                 .thenThrow(new LoginFlowException(org.springframework.http.HttpStatus.BAD_REQUEST,
                         "genesis_attach_failed", "nope"));
@@ -115,6 +121,7 @@ class AccountCreationServiceTest {
 
     @Test
     void withNoAttachmentAtAllTheAccountIsWrittenExactlyAsBefore() {
+        // What the login flow passes when the feature is off: only the two directory writes happen.
         service.createAccount(DIGEST, MASKED, USER_ID, "Alice", "default", "alice", null);
 
         assertTheAccountWasWritten();

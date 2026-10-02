@@ -18,6 +18,8 @@ class PhoneNumberNormalizerTest {
 
     @Test
     void addsDefaultRegionCountryCodeWhenMissing() {
+        // National number with no country code resolves against the CA/US (+1) default
+        // region, so it can never key OTP / the digest under a different value.
         assertThat(normalizer.toE164("6042251234")).isEqualTo("+16042251234");
     }
 

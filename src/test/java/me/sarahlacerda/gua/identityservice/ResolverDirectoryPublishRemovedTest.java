@@ -14,6 +14,11 @@ import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 
+/**
+ * Guards against the return of the deleted client that published {@code phone -> homeserver} rows
+ * into the gua-resolver directory. Scans every compiled class, main and test, for the strings that
+ * mechanism needed: the resolver write endpoint, the client type and its canonical signing prefix.
+ */
 class ResolverDirectoryPublishRemovedTest {
 
     private static final String SERVICE_CLASSES = "classpath*:me/sarahlacerda/gua/identityservice/**/*.class";

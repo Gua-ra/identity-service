@@ -92,6 +92,7 @@ class OidcTokenServiceTest {
         assertClaims(SignedJWT.parse(tokens.idToken()), authorization);
     }
 
+    /** The subject stays the full Matrix user id and preferred_username is carried verbatim from the authorization. */
     @Test
     void subjectStaysTheMatrixUserIdAndPreferredUsernameIsCarriedVerbatim() throws ParseException {
         OidcAuthorization authorization = new OidcAuthorization(
@@ -106,6 +107,7 @@ class OidcTokenServiceTest {
         }
     }
 
+    /** Only a completed account recovery asks for other sessions to end, and it asks in the ID token. */
     @Test
     void onlyARecoverySignInCarriesTheEndOtherSessionsClaimAndOnlyInTheIdToken() throws ParseException {
         OidcAuthorization recovery = new OidcAuthorization("@alice:gua.global", "+15551234567", "Alice", "alice",
@@ -128,6 +130,10 @@ class OidcTokenServiceTest {
                 .doesNotContainKey("gua_end_other_sessions");
     }
 
+    /**
+     * The sign-out a recovery owes is settled when the claim actually leaves in an ID token, and by
+     * nothing else: an ordinary sign-in leaves it owed.
+     */
     @Test
     void issuingTheClaimSettlesTheSignOutARecoveryOwed() {
         tokenService.issueTokens(new OidcAuthorization("@alice:gua.global", "+15551234567", "Alice", "alice",
@@ -149,6 +155,8 @@ class OidcTokenServiceTest {
         assertThat(principal.userId()).isEqualTo("user-99");
         assertThat(principal.phoneNumber()).isEqualTo("+15550009999");
         assertThat(principal.scope()).containsExactly("openid");
+        // The client the token was accepted on, which is what tells the enrollment handoff
+        // which app scheme to return to.
         assertThat(principal.clientId()).isEqualTo("gua-ios");
     }
 
@@ -157,6 +165,7 @@ class OidcTokenServiceTest {
         OidcAuthorization authorization = new OidcAuthorization(
                 "user-99", "+15550009999", null, Set.of("openid"), "gua-ios");
         String token = tokenService.issueTokens(authorization).accessToken();
+        // Flip a few characters in the signature segment.
         int lastDot = token.lastIndexOf('.');
         String tampered = token.substring(0, lastDot + 1) + (token.charAt(lastDot + 1) == 'A' ? "B" : "A")
                 + token.substring(lastDot + 2);
@@ -166,6 +175,7 @@ class OidcTokenServiceTest {
 
     @Test
     void parseAccessTokenRejectsExpiredToken() throws Exception {
+        // Build a token with an expiration in the past, signed with the real key.
         SignedJWT expired = signTestToken(builder -> builder
                 .issuer(properties.getIssuer())
                 .subject("user-1")
@@ -192,6 +202,7 @@ class OidcTokenServiceTest {
 
     @Test
     void parseAccessTokenRejectsHs256Algorithm() throws Exception {
+        // Token signed by a different RSA key: the verifier must reject it.
         KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
         gen.initialize(2048);
         KeyPair other = gen.generateKeyPair();

@@ -31,6 +31,10 @@ import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.SessionFactor;
 import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditLogger;
 
+/**
+ * The ENROLLED decision: a session that has only proved the phone may finish by creating the
+ * account's first factor, and the "first" is decided under the row lock at the moment of writing.
+ */
 class LoginFactorEnrollmentServiceTest {
 
     private static final String USER = "@alice:gua.global";
@@ -70,6 +74,10 @@ class LoginFactorEnrollmentServiceTest {
         verify(repository, never()).findByUserId(USER);
     }
 
+    /**
+     * The PIN added from settings, after the enrollment step-up. A passkey on the account is no obstacle
+     * here, and the new PIN starts its fresh-factor hold like any other.
+     */
     @Test
     void anEnrolledPinIsSetOnAnAccountThatHoldsAPasskey() {
         when(passkeyService.hasPasskey(USER)).thenReturn(true);
@@ -137,6 +145,7 @@ class LoginFactorEnrollmentServiceTest {
                 JsonNodeFactory.instance.objectNode()))
                 .isInstanceOf(LoginFlowException.class);
 
+        // Refused before the credential is stored.
         verify(passkeyService, never()).finishRegistration(any(), any(), any());
     }
 
@@ -150,6 +159,10 @@ class LoginFactorEnrollmentServiceTest {
         verify(passkeyService).finishRegistration(any(), any(), any());
     }
 
+    /**
+     * Two sessions for an account with no row both find nothing to lock. The one that loses the
+     * insert gets the same answer as one that found a factor, not a server error, and stores nothing.
+     */
     @Test
     void losingTheRaceToCreateTheRowIsFactorRequired() {
         when(repository.findByUserIdForUpdate(USER)).thenReturn(Optional.empty());

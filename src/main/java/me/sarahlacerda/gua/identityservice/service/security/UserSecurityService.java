@@ -62,7 +62,10 @@ public class UserSecurityService {
         setInitialPin(lockOrCreateUser(userId), newPin);
     }
 
-    /** The caller must already hold the row lock. */
+    /**
+     * Sets the first PIN on a row the caller has already locked. Package-private for the enrollment
+     * step of the login flow, which weighs what else the account holds under the same lock.
+     */
     void setInitialPin(IdentityUser user, String newPin) {
         if (user.hasPin()) {
             throw new InvalidPinOperationException("PIN already set");
@@ -87,6 +90,11 @@ public class UserSecurityService {
         auditLogger.pinUpdated(userId);
     }
 
+    /**
+     * Step 1 of the OTP-protected PIN change, first half: the account has a PIN, the change
+     * cooldown has passed, and the number belongs to the caller. {@link PinChangeService} runs it
+     * before weighing the factor that authorizes the change, so a refusal here spends nothing.
+     */
     void preparePinChange(String userId, String phone) {
         IdentityUser user = requireExistingUser(userId);
         if (!user.hasPin()) {
@@ -96,8 +104,14 @@ public class UserSecurityService {
         ensurePhoneBelongsToUser(userId, phone);
     }
 
-    /** Authorizes nothing: only PinChangeService may call it, after preparePinChange and an accepted factor. */
+    /**
+     * Step 1, second half: sends the PIN change code and records the challenge. It authorizes nothing,
+     * so its only caller is {@link PinChangeService}, after {@link #preparePinChange(String, String)}
+     * and an accepted factor.
+     */
     String issuePinChangeChallenge(String userId, String phone, String requesterIp) {
+        // The challenge id is minted before the send because the code is keyed under it, out of reach of
+        // the unauthenticated public send.
         String challengeId = UUID.randomUUID().toString();
         otpService.sendScopedOtp(OtpScope.PIN_CHANGE, challengeId, phone, requesterIp, null);
 
@@ -107,6 +121,10 @@ public class UserSecurityService {
         return challengeId;
     }
 
+    /**
+     * Step 2 of the OTP-protected PIN change: redeem the challenge with the OTP and
+     * the new PIN.
+     */
     @Transactional
     public void completePinChange(String userId, String challengeId, String otpCode, String newPin) {
         IdentityUser user = requireLockedUser(userId);
@@ -122,6 +140,7 @@ public class UserSecurityService {
         }
         String[] parts = stored.split("\\|", 2);
         if (parts.length != 2 || !parts[0].equals(userId)) {
+            // Mismatched owner: destroy the challenge and the code that belonged to it.
             redisTemplate.delete(key);
             otpService.discardScopedOtp(OtpScope.PIN_CHANGE, challengeId);
             throw new PinChangeChallengeNotFoundException("PIN change challenge does not belong to caller");
@@ -134,6 +153,11 @@ public class UserSecurityService {
         auditLogger.pinChangeCompleted(userId);
     }
 
+    /**
+     * Enforces the per-account phone-change cooldown. No-op for accounts that have
+     * never changed their number. Throws {@link PhoneChangeCooldownException} (425 +
+     * Retry-After) while the cooldown window from the last change is still open.
+     */
     @Transactional(readOnly = true)
     public void enforcePhoneChangeCooldown(String userId) {
         IdentityUser user = requireExistingUser(userId);
@@ -149,8 +173,15 @@ public class UserSecurityService {
         }
     }
 
-    // A freshly set PIN cannot be the phone-change step-up until identity.security.pin-reset-cooldown passes.
-    // Returns 0 when nothing is held.
+    /**
+     * Seconds still to run on the hold that keeps a freshly set PIN from being spent as the
+     * phone-change step-up factor; {@code 0} when nothing is held.
+     *
+     * <p>A login session can create, change or recover a PIN, so without the hold a SIM-swap attacker
+     * who reaches a session could set a PIN and re-point the number at once. The window is
+     * {@code identity.security.pin-reset-cooldown}. {@code pin_set_at} is stamped on every path that
+     * gives the account a new PIN (initial set, update, OTP-protected change, account recovery).
+     */
     @Transactional(readOnly = true)
     public long changePhonePinHoldRemainingSeconds(String userId) {
         return repository.findByUserId(userId)
@@ -158,6 +189,10 @@ public class UserSecurityService {
                 .orElse(0L);
     }
 
+    /**
+     * Refuses a phone change whose step-up PIN is still inside the fresh-2FA hold. In addition to the
+     * per-account phone-change cooldown, which still runs.
+     */
     @Transactional(readOnly = true)
     public void enforcePhoneChangePinHold(String userId) {
         long remaining = changePhonePinHoldRemainingSeconds(userId);
@@ -167,7 +202,13 @@ public class UserSecurityService {
         }
     }
 
-    /** Takes the instant, not the account: this service must not decide anything from what else an account holds. */
+    /**
+     * Refuses a phone change whose accepted step-up factor came into existence inside the fresh-2FA
+     * hold, on the same window and with the same error as the PIN above. Takes the instant, not the
+     * account: this service must not decide anything from what else an account holds.
+     *
+     * @param factorCreatedAt when the factor that was accepted came into being
+     */
     public void enforceFreshFactorHold(Instant factorCreatedAt) {
         long remaining = freshFactorHoldRemainingSeconds(factorCreatedAt);
         if (remaining > 0) {
@@ -183,6 +224,11 @@ public class UserSecurityService {
         return freshFactorHoldRemainingSeconds(user.getPinSetAt());
     }
 
+    /**
+     * How long a factor stamped at {@code factorCreatedAt} is still too new to move the
+     * phone number. One implementation, so two factors held for the same reason cannot drift
+     * into being held for different lengths of time.
+     */
     private long freshFactorHoldRemainingSeconds(Instant factorCreatedAt) {
         if (factorCreatedAt == null) {
             // No stamp: the row predates the column, so the factor is not new.
@@ -201,7 +247,11 @@ public class UserSecurityService {
         return Math.max(hold.minus(since).toSeconds(), 1L);
     }
 
-    /** Runs inside the swap transaction and locks the row like every other writer. */
+    /**
+     * Stamps the time of a successful phone-number change. Called inside the swap transaction so the
+     * cooldown clock starts atomically with the mapping switch. Creates the row when the account has
+     * none, and locks it like every other writer of this row.
+     */
     @Transactional
     public void stampPhoneChange(String userId) {
         IdentityUser user = lockOrCreateUser(userId);
@@ -257,7 +307,8 @@ public class UserSecurityService {
         }
 
         resetFailureTracking(user);
-        // Producing the PIN ends any pending account recovery.
+        // Producing the PIN ends any pending account recovery: somebody who can produce the PIN is not
+        // locked out, and a recovery left running would hand the account to whoever started it.
         user.setPinResetRequestedAt(null);
         auditLogger.pinValidationSucceeded(userId);
     }
@@ -272,43 +323,63 @@ public class UserSecurityService {
         user.setPinResetRequestedAt(null);
     }
 
+    // Row-locked primitives for AccountRecoveryService and the login enrollment step. They hold no
+    // policy of their own: the caller decides inside its own transaction.
+
     /** Reads the account row without locking it, for status answers that write nothing. */
     Optional<IdentityUser> findUser(String userId) {
         return repository.findByUserId(userId);
     }
 
+    /** Locks the account row for the rest of the caller's transaction, if the row exists. */
     Optional<IdentityUser> lockUser(String userId) {
         return repository.findByUserIdForUpdate(userId);
     }
 
-    /** The insert is flushed at once, so two transactions creating the same row meet on the user_id unique index. */
+    /**
+     * Locks the account row, creating it first when the account has never had one. The insert is
+     * flushed at once, so two transactions creating the same row meet on the {@code user_id} unique
+     * index and the second fails with a {@code DataIntegrityViolationException}.
+     */
     IdentityUser lockOrCreateUser(String userId) {
         return repository.findByUserIdForUpdate(userId)
                 .orElseGet(() -> repository.saveAndFlush(IdentityUser.builder().userId(userId).build()));
     }
 
+    /** Locks the row of an account that must already have one. */
     private IdentityUser requireLockedUser(String userId) {
         return repository.findByUserIdForUpdate(userId)
                 .orElseThrow(() -> new UnknownUserException("Unknown user: " + userId));
     }
 
+    /** Opens a recovery episode on a locked row. The stamp is {@code pin_reset_requested_at}. */
     void openRecoveryEpisode(IdentityUser user, Instant requestedAt) {
         user.setPinResetRequestedAt(requestedAt);
     }
 
+    /** Ends a recovery episode on a locked row without touching anything else. */
     void endRecoveryEpisode(IdentityUser user) {
         user.setPinResetRequestedAt(null);
     }
 
+    /** Records account activity that counts against the recovery dormancy period. */
     void recordAccountActivity(IdentityUser user, Instant at) {
         user.setLastLoginAt(at);
     }
 
+    /**
+     * Checks a new PIN against the format and weak-PIN policy without applying it or counting
+     * anything against the account.
+     */
     void validateNewPin(String newPin) {
         validatePinFormat(newPin);
     }
 
-    /** Stamps pin_set_at so the fresh-factor hold applies to a recovered PIN. */
+    /**
+     * Gives a locked row the PIN a completed recovery chose: validated like every other new PIN,
+     * stamped {@code pin_set_at = now} so the fresh-factor hold applies to it, with the episode ended
+     * and any failure count or lock cleared.
+     */
     void applyRecoveredPin(IdentityUser user, String newPin) {
         validatePinFormat(newPin);
         applyNewPin(user, newPin);

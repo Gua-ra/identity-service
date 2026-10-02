@@ -57,6 +57,7 @@ class AccountLocalpartResolverTest {
                 .isEqualTo("alice.s");
     }
 
+    /** Re-keying user_id to a colon-bearing value must not change the localpart. */
     @Test
     void storedUsernameDoesNotDependOnTheUserId() {
         assertThat(resolver.forExistingAccount("ga1abc:x", List.of(row("ga1abc:x", "alice")))).isEqualTo("alice");

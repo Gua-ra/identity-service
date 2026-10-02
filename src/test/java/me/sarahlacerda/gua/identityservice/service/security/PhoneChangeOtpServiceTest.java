@@ -55,9 +55,11 @@ class PhoneChangeOtpServiceTest {
 
         service.send(CHALLENGE, NEW_E164, "1.2.3.4", null);
 
+        // Namespaced per challenge, not otp:code:{e164}, so /otp/send cannot race it.
         verify(valueOperations).set(eq(OTP_KEY), eq("123456"), eq(properties.getOtp().getTtl()));
         verify(smsSender).send(eq(NEW_E164),
                 eq("Your Gua verification code is 123456. Never share this code with anyone. Gua will never ask you for it."));
+        // Send limits keyed on the new number + IP.
         verify(rateLimiter).checkRate(eq("otp:rate:phone:" + NEW_E164),
                 eq(properties.getOtp().getMaxRequestsPerPhonePerHour()), org.mockito.ArgumentMatchers.any());
         verify(rateLimiter).checkRate(eq("otp:rate:ip:1.2.3.4"),

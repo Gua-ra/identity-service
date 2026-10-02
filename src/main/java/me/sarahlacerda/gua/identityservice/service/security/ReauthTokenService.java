@@ -11,6 +11,11 @@ import org.springframework.util.StringUtils;
 import lombok.RequiredArgsConstructor;
 import me.sarahlacerda.gua.identityservice.exception.InvalidReauthTokenException;
 
+/**
+ * Mints and consumes short-lived single-use reauth tokens that bind a fresh phone-OTP verification
+ * to one sensitive account operation. Modeled after the Matrix {@code m.login.msisdn} UIA stage.
+ * The token never grants long-term access: its TTL is short and it is deleted on first use.
+ */
 @Service
 @RequiredArgsConstructor
 public class ReauthTokenService {
@@ -21,6 +26,11 @@ public class ReauthTokenService {
     private final StringRedisTemplate redisTemplate;
     private final SecureRandom secureRandom = new SecureRandom();
 
+    /**
+     * Mints a reauth token bound to {@code userId} and the {@code operation} it may be spent on. The
+     * Redis value is {@code userId|OPERATION}, so consumption can reject a token presented for a
+     * different operation.
+     */
     public String issue(String userId, ReauthOperation operation) {
         byte[] bytes = new byte[32];
         secureRandom.nextBytes(bytes);
@@ -29,6 +39,12 @@ public class ReauthTokenService {
         return token;
     }
 
+    /**
+     * Atomically validates the token, deletes it, and returns the bound user id.
+     * Throws if the token is unknown, expired, does not match
+     * {@code expectedUserId}, or was issued for a different
+     * {@code expectedOperation}.
+     */
     public String consume(String token, String expectedUserId, ReauthOperation expectedOperation) {
         if (!StringUtils.hasText(token)) {
             throw new InvalidReauthTokenException("Reauth token invalid or expired");

@@ -8,8 +8,13 @@ import me.sarahlacerda.gua.identityservice.account.genesis.TestEd25519;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.HomeserverConfig;
 
+/**
+ * Shared scaffolding for the placement tests: a configured homeserver with a throwaway membership key.
+ * Every key is generated in memory for the duration of one test; nothing here reads a secret.
+ */
 final class PlacementTestFixtures {
 
+    /** Reserved documentation domain, so no real host name appears in a test. */
     static final String DOMAIN = "example.test";
     static final String LOCAL_ID = "primary";
     static final String FEDERATION_ID = "fed-primary";
@@ -41,10 +46,15 @@ final class PlacementTestFixtures {
         return homeserver;
     }
 
+    /**
+     * A configured homeserver with no explicit {@code federationId}, so its roster id comes from the
+     * alias map or from its own local id.
+     */
     static HomeserverConfig homeserverWithoutFederationId(String localId, String domain, String signingKey) {
         return homeserver(localId, domain, null, signingKey);
     }
 
+    /** Properties carrying exactly one homeserver this deployment holds the membership key for. */
     static IdentityServiceProperties propertiesWithOneHomeserver(TestEd25519.Pair pair) {
         IdentityServiceProperties properties = new IdentityServiceProperties();
         properties.getRouting().getHomeservers()

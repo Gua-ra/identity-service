@@ -12,13 +12,21 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-// Changing the pepper orphans every phone digest, so a mismatch fails startup.
+/**
+ * Pins {@code IDENTITY_DIRECTORY_PEPPER} against silent rotation. The pepper is the HMAC key for every
+ * phone digest, so changing it orphans every directory row and routes returning users into signup.
+ *
+ * <p>An operator records the pepper's fingerprint in {@code identity.directory.pepper-fingerprint}.
+ * Startup recomputes it and fails fast on a mismatch. The fingerprint is a one-way HMAC over a fixed
+ * label, so it is safe to store in config. With no fingerprint pinned (local dev) the computed value
+ * is logged at WARN. The pepper itself is never logged.
+ */
 @Component
 public class DirectoryPepperPinValidator {
 
     private static final Logger log = LoggerFactory.getLogger(DirectoryPepperPinValidator.class);
 
-    /** Changing this label changes every fingerprint. */
+    /** Fixed, non-secret label HMAC'd with the pepper. Changing it changes every fingerprint. */
     private static final String FINGERPRINT_LABEL = "gua.identity.directory.pepper.fingerprint.v1";
     private static final String HMAC_ALGORITHM = "HmacSHA256";
 

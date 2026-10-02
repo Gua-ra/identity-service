@@ -28,6 +28,12 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+/**
+ * Pins the guess budget against a real Redis under a parallel burst. The cap only
+ * holds if every guess is counted before it is compared and the spent counter is
+ * not reset by the guess that trips it: otherwise callers that fetched the code
+ * before the last allowed guess would each get a full comparison.
+ */
 @SpringBootTest
 @Testcontainers
 class OtpAttemptsConcurrencyTest {
@@ -135,6 +141,8 @@ class OtpAttemptsConcurrencyTest {
         assertThat(unexpected).as("no unexpected outcomes").isEmpty();
         assertThat(invalidReplies.get() + exhaustedReplies.get()).isEqualTo(threads);
 
+        // Every caller that saw the code took one slot; the code is gone and the spent
+        // counter outlives it, so nobody could start a fresh budget at 1.
         String countedValue = redisTemplate.opsForValue().get(ATTEMPTS_KEY);
         assertThat(countedValue).as("spent counter survives the burst").isNotNull();
         long counted = Long.parseLong(countedValue);
@@ -142,6 +150,7 @@ class OtpAttemptsConcurrencyTest {
         assertThat(redisTemplate.hasKey(CODE_KEY)).isFalse();
         assertThat(redisTemplate.getExpire(ATTEMPTS_KEY)).isPositive();
 
+        // The callers that found the code already deleted were neither counted nor compared.
         long absent = threads - counted;
 
         // Slots 1..max-1 answer "invalid"; slot max and every slot past the cap answer
@@ -156,6 +165,7 @@ class OtpAttemptsConcurrencyTest {
         assertThat(count("exhausted") - exhaustedBefore).isEqualTo(counted - max + 1);
         assertThat(count("valid") - validBefore).isZero();
 
+        // After the burst the right code is worthless and nothing more is counted.
         assertThatThrownBy(() -> otpService.verifyOtp(PHONE, code))
                 .isInstanceOf(InvalidOtpException.class)
                 .hasMessage(INVALID_MESSAGE);

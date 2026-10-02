@@ -22,7 +22,13 @@ import org.springframework.core.type.classreading.SimpleMetadataReaderFactory;
 
 import me.sarahlacerda.gua.identityservice.domain.MatrixIds;
 
-/** Fails if main code derives a localpart from a user id anywhere but AccountLocalpartResolver and MatrixIds. */
+/**
+ * Fails if main code derives a localpart from a user id anywhere but {@code AccountLocalpartResolver}
+ * and {@code MatrixIds}: a class declaring its own {@code localpartOf}, code splitting a user id on
+ * its colon, a caller of the parser other than the resolver, or a {@code setPreferredUsername} whose
+ * value comes from anywhere but the resolver or the handle a new user just chose. MAS imports the
+ * localpart with {@code on_conflict: add}, so two accounts sharing one would be merged.
+ */
 class LocalpartDerivationGuardTest {
 
     private static final String SERVICE_CLASSES = "classpath*:me/sarahlacerda/gua/identityservice/**/*.class";
@@ -34,6 +40,7 @@ class LocalpartDerivationGuardTest {
     private static final String RESOLVE_CALL = "accountLocalparts.forExistingAccount(";
     private static final String NEW_HANDLE_CALL = "usernamePolicy.normalizeAndValidate(";
 
+    /** A user-id-like expression followed by string surgery on it. */
     private static final Pattern USER_ID_SURGERY = Pattern.compile(
             "\\b(?:\\w*[uU]serId|\\w*[mM]xid|\\w*[mM]atrixId|subject)(?:\\(\\))?\\s*\\.\\s*"
                     + "(?:indexOf|lastIndexOf|split|substring|replaceFirst|replaceAll|replace)\\s*\\(");
@@ -46,6 +53,11 @@ class LocalpartDerivationGuardTest {
 
     private static final Pattern SET_PREFERRED_USERNAME = Pattern.compile("setPreferredUsername\\(([^;]*)\\);");
 
+    /**
+     * The only argument forms allowed per file, whitespace removed. {@code localpart} is
+     * the handle a brand-new user just chose in {@code /login/profile}; {@code
+     * preferredUsername} must be assigned from the resolver (checked below).
+     */
     private static final Map<String, Set<String>> PREFERRED_USERNAME_ALLOWED = Map.of(
             "LoginFlowController.java", Set.of("localpart", "preferredUsername"),
             "SecurityController.java", Set.of("preferredUsername"));
@@ -146,6 +158,7 @@ class LocalpartDerivationGuardTest {
         assertThat(resolverSourced).as("resolver-sourced preferredUsername assignments").isPositive();
     }
 
+    /** Right-hand sides (whitespace removed) of every plain assignment to {@code variable}. */
     private static List<String> assignedFrom(String code, String variable) {
         Matcher assignment = Pattern.compile("\\b" + variable + "\\s*=(?!=)\\s*([^;]*);").matcher(code);
         List<String> sources = new ArrayList<>();
@@ -164,6 +177,7 @@ class LocalpartDerivationGuardTest {
         }
     }
 
+    /** Trimmed source lines with comment-only lines and trailing line comments removed. */
     private static List<String> codeLines(Path file) throws IOException {
         List<String> lines = new ArrayList<>();
         for (String raw : Files.readAllLines(file)) {

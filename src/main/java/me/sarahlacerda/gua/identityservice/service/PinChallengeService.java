@@ -10,6 +10,12 @@ import org.springframework.util.StringUtils;
 
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinChallengeException;
 
+/**
+ * Issues short-lived single-use tokens that bind a verified phone OTP to a user who has a PIN. The
+ * client redeems the token together with the PIN at {@code POST /signin/verify-pin} to complete
+ * sign-in. Splitting the two steps means the OTP is consumed exactly once and the PIN is never sent
+ * in the same request as the SMS code.
+ */
 @Service
 public class PinChallengeService {
 
@@ -38,6 +44,10 @@ public class PinChallengeService {
         return challenge;
     }
 
+    /**
+     * Returns the challenge bound to {@code token} without deleting it. Callers peek, validate, and
+     * {@link #consume(String)} only on success, so a wrong PIN does not cost the user their verified OTP.
+     */
     public Challenge peek(String token) {
         if (!StringUtils.hasText(token)) {
             throw new InvalidPinChallengeException("PIN challenge invalid or expired");

@@ -1,8 +1,12 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Gua-ra/gua-branding/refs/heads/main/logos/gua-logo-transparent.png" alt="Gua Logo" width="200"/>
+</p>
+
 # Gua Identity Service
 
 A Spring Boot service that handles sign-up, sign-in and account security for Gua. It verifies phone numbers by SMS code, holds each account's PIN and passkeys, and acts as the OpenID Connect provider that the Matrix Authentication Service (MAS) delegates login to.
 
-## Responsibilities
+## ✨ Responsibilities
 
 - Phone verification: one-time codes sent by SMS, with expiry, attempt caps and send limits.
 - Sign-in factors: account PIN and passkeys (WebAuthn). A code alone never completes a sign-in.
@@ -13,7 +17,7 @@ A Spring Boot service that handles sign-up, sign-in and account security for Gua
 - Account IDs: registers each account's genesis object and derives its permanent ID.
 - Per-endpoint rate limiting, Prometheus metrics and health probes.
 
-## Architecture
+## 🏗️ Architecture
 
 ```mermaid
 flowchart LR
@@ -30,7 +34,7 @@ flowchart LR
 - **PostgreSQL** holds durable state: directory entries, PIN and passkey credentials, account genesis. Flyway migrations live in `src/main/resources/db/migration`.
 - **Redis** holds short-lived state: codes, login sessions, challenges, authorization codes and token revocation cutoffs.
 
-## Local development
+## 🧰 Local development
 
 Requires JDK 21, Docker, `curl`, `jq` and `openssl`.
 
@@ -52,7 +56,7 @@ docker compose -f docker-compose.test.yml down   # stop the dependencies
 
 `docker-compose.yml` builds and runs the service image with PostgreSQL and Redis. Supply the variables it lists.
 
-## Tests
+## 🧪 Tests
 
 ```bash
 ./gradlew test
@@ -63,7 +67,7 @@ A running Docker daemon is required: the integration tests start PostgreSQL and 
 
 A new migration needs the same change in `src/test/resources/db/schema-mirror.sql`. `SchemaParityTest` compares the two.
 
-## API
+## 📡 API
 
 The OpenAPI document is generated from the controllers.
 
@@ -71,7 +75,7 @@ The OpenAPI document is generated from the controllers.
 - OpenAPI JSON: `/api-docs`
 - OpenID Connect discovery: `/.well-known/openid-configuration`
 
-## Configuration
+## 🛠️ Configuration
 
 `src/main/resources/application.yml` is the source of truth. It lists the properties with their environment variables and defaults. There are no profile-specific files: a deployment is configured through environment variables. The properties bind to `IdentityServiceProperties`, `OidcProperties` and `LoginFlowProperties`.
 
@@ -94,14 +98,14 @@ For production:
 - `IDP_LOGIN_PASSKEYS_RP_ID` and `IDP_LOGIN_PASSKEYS_ORIGINS` must match the domain and the exact HTTPS origin of the sign-in UI.
 - Keep `/actuator/prometheus` off the public edge. `/actuator/health` serves the probes.
 
-## Deployment
+## 🚀 Deployment
 
 - `.github/workflows/ci-cd.yml` runs the tests on every pull request and every push to `main`. A push to `main` also builds and signs the image `ghcr.io/gua-ra/identity-service` and deploys it to dev. A pull request labelled `deploy:dev` does the same.
 - `.github/workflows/promote-prod.yml` is started by hand with a full commit SHA. It builds nothing: it verifies that CI built the image from that commit, waits for approval on the `production` environment, deploys by digest and prints the rollback command.
 
 Flyway applies migrations at startup. Never edit a migration that has been applied; add a new one.
 
-## Architecture docs
+## 🔭 Architecture docs
 
 Gua's federation and account architecture is documented in gua-resolver. This README describes this service.
 

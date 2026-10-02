@@ -41,6 +41,7 @@ class IdentityMetricsInitializerTest {
 
     @Test
     void everyFlowsVerifyCounterSurvivesOnARegistryThatRefusesAMixedTagSet() {
+        // A meter is keyed by name alone: a later registration with a different tag set records nothing.
         PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
         new IdentityMetricsInitializer(registry, new DummySmsSender());
 
@@ -68,6 +69,8 @@ class IdentityMetricsInitializerTest {
 
         new IdentityMetricsInitializer(registry, new DummySmsSender());
 
+        // What a fresh pod serves on /actuator/prometheus before any traffic: every dashboard metric name
+        // must already be there.
         assertThat(registry.scrape())
                 .contains("gua_identity_signup_total")
                 .contains("gua_identity_login_total")
@@ -80,6 +83,7 @@ class IdentityMetricsInitializerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         new IdentityMetricsInitializer(registry, new DummySmsSender());
 
+        // Same idiom the services use when an event happens, flow tag included.
         registry.counter("gua.identity.otp.verify", "result", "valid", "flow", OtpVerifyFlow.PHONE.tagValue())
                 .increment();
 
@@ -89,6 +93,7 @@ class IdentityMetricsInitializerTest {
                 .counter()
                 .count())
                 .isEqualTo(1.0);
+        // Still exactly the pre-registered series, three results for each flow, no duplicates.
         assertThat(registry.find("gua.identity.otp.verify").counters())
                 .hasSize(3 * OtpVerifyFlow.values().length);
     }

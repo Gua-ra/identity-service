@@ -5,7 +5,14 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.Getter;
 import lombok.Setter;
 
-/** No field may let the caller declare a factor unavailable: that would be a request for a weaker one. */
+/**
+ * Step 1 of a phone-number change. The caller must hold a {@code PHONE_CHANGE}-scoped reauth token
+ * and prove a non-phone factor: a user-verifying passkey assertion, or the account PIN when one is
+ * set. The reauth token alone only proves a current-phone OTP, which a SIM-swap attacker could
+ * control.
+ *
+ * <p>No field may let the caller declare a factor unavailable: that would be a request for a weaker one.
+ */
 @Getter
 @Setter
 @Schema(description = "Start a phone-number change: re-auth proof + step-up factor + the new number")

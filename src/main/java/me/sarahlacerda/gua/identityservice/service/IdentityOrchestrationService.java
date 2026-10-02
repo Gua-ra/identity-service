@@ -69,6 +69,7 @@ public class IdentityOrchestrationService {
         final Optional<DirectoryEntry> existingEntry = directoryService.findByDigest(digest);
 
         if (existingEntry.isEmpty()) {
+            // New user: defer Matrix provisioning until they choose a username and display name.
             String signupToken = signupTokenService.issue(e164PhoneNumber);
             return VerifyOtpResult.newUser(signupToken);
         }
@@ -89,7 +90,8 @@ public class IdentityOrchestrationService {
         }
         if (loginPolicy.pinStepRequired()) {
             if (!StringUtils.hasText(providedPin)) {
-                // The OTP has been consumed. This token is the sole proof that the phone was just verified.
+                // Two-step verification: the client redeems this short-lived token at /signin/verify-pin with
+                // the PIN. The OTP has been consumed, so the token is the sole proof the phone was just verified.
                 String challengeToken = pinChallengeService.issue(userId, e164PhoneNumber);
                 return VerifyOtpResult.pinRequired(challengeToken);
             }
@@ -99,8 +101,14 @@ public class IdentityOrchestrationService {
         return completeSignIn(entry, e164PhoneNumber, deviceMetadata);
     }
 
+    /**
+     * Second leg of the two-step phone sign-in: consumes the pin-challenge token
+     * issued by {@link #verifyOtpAndSignIn} and validates the user's PIN before
+     * minting a Matrix session.
+     */
     public MatrixSession verifySignInPin(String pinChallengeToken, String pin, DeviceMetadata deviceMetadata) {
-        // Peek first so a wrong PIN does not burn the verified-OTP proof.
+        // Peek first so a wrong PIN does not burn the verified-OTP proof. The failure count and lockout
+        // in UserSecurityService prevent brute force on a live token.
         PinChallengeService.Challenge challenge = pinChallengeService.peek(pinChallengeToken);
         userSecurityService.validatePinOrThrow(challenge.userId(), pin);
 
@@ -133,6 +141,7 @@ public class IdentityOrchestrationService {
 
         final String digest = phoneNumberHasher.digest(e164PhoneNumber);
         directoryService.upsertByDigest(digest, phoneNumberMasker.mask(e164PhoneNumber), userId, resolvedDisplayName);
+        // gua_identity_login_total{result}: successful sign-ins of existing accounts.
         metrics.counter("gua.identity.login", "result", "success").increment();
         userSecurityService.recordSuccessfulLogin(userId);
         registerDeviceIfPresent(userId, session, deviceMetadata);
@@ -152,6 +161,8 @@ public class IdentityOrchestrationService {
         final String userId = matrixProvisioningService.buildUserId(localpart);
 
         final String phone = signupTokenService.peek(signupToken);
+        // Invite-only web gate (inert unless enabled). This REST path has no login session, so it is
+        // always treated as web. Checked before the token is consumed, so a refusal provisions nothing.
         registrationGuard.assertAllowedForNewUser(phone);
         final String digest = phoneNumberHasher.digest(phone);
 
@@ -163,6 +174,8 @@ public class IdentityOrchestrationService {
             throw new UsernameTakenException("Username already taken");
         }
 
+        // Every account is created holding a factor, and this path can only give it a PIN. Checked
+        // before the token is consumed, so the client can retry with the same token.
         if (!StringUtils.hasText(providedPin)) {
             throw new LoginFlowException(HttpStatus.BAD_REQUEST, "pin_required",
                     "Choose a PIN to protect your account.");
@@ -198,7 +211,8 @@ public class IdentityOrchestrationService {
             }
         }
 
-        // Never tag with the phone or any per-user value.
+        // gua_identity_signup_total{result,country}: country is the ISO region of the phone (about 200
+        // values). Never tag with the phone or any per-user value.
         metrics.counter("gua.identity.signup", "result", "success", "country", regionOf(phone)).increment();
         userSecurityService.recordSuccessfulLogin(userId);
         registerDeviceIfPresent(userId, session, deviceMetadata);
@@ -206,6 +220,10 @@ public class IdentityOrchestrationService {
         return session;
     }
 
+    /**
+     * Resolves the ISO 3166-1 alpha-2 region of an E.164 phone for the signup metric. Returns
+     * {@code "unknown"} when the number cannot be parsed or has no region.
+     */
     private static String regionOf(String e164PhoneNumber) {
         if (!StringUtils.hasText(e164PhoneNumber)) {
             return "unknown";
@@ -232,6 +250,11 @@ public class IdentityOrchestrationService {
         return usernamePolicy.normalizeAndValidate(rawUsername);
     }
 
+    /**
+     * Availability check used by the signup UI. Runs the same format and reserved-name checks as
+     * {@link #completeSignup} (throwing {@link InvalidUsernameException} on bad input) and returns
+     * {@code true} only when no Matrix account with that localpart exists. Does not mutate state.
+     */
     public boolean isUsernameAvailable(String rawUsername) {
         String localpart = validateUsername(rawUsername);
         String userId = matrixProvisioningService.buildUserId(localpart);

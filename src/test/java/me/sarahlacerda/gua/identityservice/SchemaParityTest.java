@@ -20,7 +20,12 @@ import org.testcontainers.utility.DockerImageName;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-// The migrations are Postgres-only, so this needs Docker.
+/**
+ * The schema mirror (src/test/resources/db/schema-mirror.sql) is written by hand from the Flyway
+ * migrations. This applies the real migrations to one schema, the mirror to another, and compares
+ * the resulting columns. It runs on Postgres because the migrations are Postgres-only, so it needs
+ * a Docker daemon.
+ */
 @Testcontainers
 class SchemaParityTest {
 
@@ -71,6 +76,7 @@ class SchemaParityTest {
         }
     }
 
+    /** table.column to type and nullability, for every table except Flyway's own bookkeeping. */
     private static Map<String, String> columns(DataSource dataSource, String schema) {
         Map<String, String> columns = new LinkedHashMap<>();
         new JdbcTemplate(dataSource).query("""

@@ -4,7 +4,28 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Arrays;
 
-/** Canonical fixed-width encoding. The accountId hashes the exact bytes received. */
+/**
+ * Canonical codec for {@code AccountGenesis}, suite 0x01.
+ *
+ * <pre>
+ * off len field
+ * 0   4   magic "GUAG"
+ * 4   1   genesisVersion = 0x01
+ * 5   1   suite = 0x01
+ * 6   32  authorityPublicKey          raw RFC 8032 Ed25519
+ * 38  1   recoveryFrameworkId = 0x01
+ * 39  32  recoveryAuthorityPublicKey  raw Ed25519, must differ from the authority key
+ * 71  16  entropy                     CSPRNG
+ * 87      end
+ * </pre>
+ *
+ * <p>The layout is fixed width because the accountId is a permanent hash of these bytes: the bytes
+ * hashed must be the bytes received, never a re-encoding.
+ *
+ * <p>The decoder rejects an unknown version, suite or framework, a wrong length, an all-zero key, equal
+ * authority and recovery keys, and a key that fails Ed25519 point decoding. The all-zero rule is
+ * separate because the all-zero encoding decodes to a valid low-order point.
+ */
 public final class AccountGenesisCodec {
 
     private static final byte[] MAGIC = AccountGenesis.MAGIC.getBytes(StandardCharsets.US_ASCII);
@@ -19,6 +40,12 @@ public final class AccountGenesisCodec {
     private AccountGenesisCodec() {
     }
 
+    /**
+     * Strictly decodes canonical bytes. The returned object keeps the bytes exactly as passed in, so the
+     * accountId is derived from what was received.
+     *
+     * @throws InvalidGenesisException on any rule in the class comment
+     */
     public static AccountGenesis decode(byte[] bytes) {
         if (bytes == null || bytes.length != AccountGenesis.LENGTH) {
             throw new InvalidGenesisException("wrong_length",
@@ -60,6 +87,10 @@ public final class AccountGenesisCodec {
         return new AccountGenesis(version, suite, authorityKey, frameworkId, recoveryKey, entropy, bytes);
     }
 
+    /**
+     * Builds canonical bytes. Used by tests and by the golden-vector generator; the server never encodes
+     * a genesis it is about to hash, it hashes what it received.
+     */
     public static byte[] encode(byte[] authorityPublicKey, int recoveryFrameworkId,
             byte[] recoveryAuthorityPublicKey, byte[] entropy) {
         if (authorityPublicKey.length != Ed25519Keys.RAW_PUBLIC_KEY_LENGTH

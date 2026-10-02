@@ -90,6 +90,8 @@ class UserSecurityServiceTest {
         verify(auditLogger).pinLocked(eq("@user:gua.global"), any(Instant.class));
     }
 
+    // -------------------- what ends a pending recovery episode --------------------
+
     @Test
     void provingThePinEndsAPendingRecovery() {
         IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
@@ -100,6 +102,8 @@ class UserSecurityServiceTest {
 
         service.validatePinOrThrow("@user:gua.global", "123456");
 
+        // Somebody who can produce the PIN is not the person locked out of it, and a recovery
+        // left running would hand the account to whoever started it once the wait was over.
         assertThat(user.getPinResetRequestedAt()).isNull();
     }
 
@@ -115,6 +119,8 @@ class UserSecurityServiceTest {
         assertThatThrownBy(() -> service.validatePinOrThrow("@user:gua.global", "000000"))
                 .isInstanceOf(InvalidPinException.class);
 
+        // Guessing at the PIN is not proof of anything, so it must not be able to cancel a
+        // recovery that is in progress.
         assertThat(user.getPinResetRequestedAt()).isEqualTo(openedAt);
     }
 
@@ -128,6 +134,8 @@ class UserSecurityServiceTest {
 
         service.recordSuccessfulLogin("@user:gua.global");
 
+        // Only a finished sign-in reaches here. Read under the lock, so the write cannot put back a PIN
+        // hash or a stamp a concurrent recovery had just committed.
         assertThat(user.getPinResetRequestedAt()).isNull();
         assertThat(user.getLastLoginAt()).isNotNull();
         verify(repository, org.mockito.Mockito.never()).findByUserId("@user:gua.global");
@@ -146,6 +154,10 @@ class UserSecurityServiceTest {
         assertThat(saved.getValue().getLastLoginAt()).isNotNull();
     }
 
+    /**
+     * A phone change stamps the row under the lock like every other writer: read unlocked, it
+     * would write back a recovery stamp that a cancel or completion had just cleared.
+     */
     @Test
     void stampingAPhoneChangeReadsTheRowUnderTheLock() {
         IdentityUser user = IdentityUser.builder().userId("@user:gua.global").build();
@@ -195,6 +207,7 @@ class UserSecurityServiceTest {
         when(valueOps.get("pin:change:chal-1")).thenReturn("@user:gua.global|+12025550123");
 
         service.completePinChange("@user:gua.global", "chal-1", "876543", "284917");
+        // Under the row lock, so it cannot write back a recovery stamp or PIN hash committed meanwhile.
         verify(repository, org.mockito.Mockito.never()).findByUserId("@user:gua.global");
 
         verify(otpService).verifyScopedOtp(OtpScope.PIN_CHANGE, "chal-1", "876543");
@@ -228,8 +241,11 @@ class UserSecurityServiceTest {
         assertThatThrownBy(() -> service.completePinChange("@user:gua.global", "chal-1", "876543", "654321"))
                 .isInstanceOf(PinChangeChallengeNotFoundException.class);
         verify(redisTemplate).delete("pin:change:chal-1");
+        // The code that belonged to the challenge goes with it.
         verify(otpService).discardScopedOtp(OtpScope.PIN_CHANGE, "chal-1");
     }
+
+    // -------------------- fresh-2FA hold on changing the phone number --------------------
 
     @Test
     void aPinMintedMomentsAgoIsHeldFromBeingSpentOnAPhoneChange() {
@@ -278,11 +294,13 @@ class UserSecurityServiceTest {
         service.setInitialPin("@user:gua.global", "284917");
         assertThat(service.changePhonePinHoldRemainingSeconds("@user:gua.global")).isPositive();
 
+        // Changed: the hold reopens rather than carrying the old PIN's age forward.
         user.setPinSetAt(Instant.now().minus(Duration.ofDays(30)));
         assertThat(service.changePhonePinHoldRemainingSeconds("@user:gua.global")).isZero();
         service.updatePin("@user:gua.global", "284917", "391748");
         assertThat(service.changePhonePinHoldRemainingSeconds("@user:gua.global")).isPositive();
 
+        // Recovered: a PIN chosen by an account recovery is exactly as new as any other.
         user.setPinSetAt(Instant.now().minus(Duration.ofDays(30)));
         user.setPinResetRequestedAt(Instant.now().minus(Duration.ofDays(8)));
         service.applyRecoveredPin(user, "509382");

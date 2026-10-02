@@ -65,6 +65,8 @@ class RegistrationGuardTest {
                 .hasFieldOrPropertyWithValue("code", "registration_not_approved");
     }
 
+    // --- Marker handling: only the exact native marker is exempt ------------
+
     @ParameterizedTest
     @NullAndEmptySource
     @ValueSource(strings = { "web", " ", "NATIVE", "Native", " native", "native ", "mobile", "web,native",
@@ -91,6 +93,7 @@ class RegistrationGuardTest {
     @NullAndEmptySource
     @ValueSource(strings = { "web", " ", "NATIVE", "Native", "mobile", "web,native" })
     void otpWithWebAbsentOrUnrecognisedMarkerIsRefusedForUnknownNumber(String marker) {
+        // Unstubbed lookups return Optional.empty(): no account for this number.
         assertNotApproved(() -> guard.assertOtpAllowed(session(marker, null), UNKNOWN_PHONE));
     }
 
@@ -121,6 +124,8 @@ class RegistrationGuardTest {
         assertNotApproved(() -> guard.assertAllowedForNewUser(session("native", UNKNOWN_PHONE)));
     }
 
+    // --- Sessionless REST entry points: always web -------------------------
+
     @Test
     void restNewUserIsRefusedWhenNotAllowlisted() {
         assertNotApproved(() -> guard.assertAllowedForNewUser(UNKNOWN_PHONE));
@@ -135,6 +140,8 @@ class RegistrationGuardTest {
     void restOtpIsRefusedForUnknownNumber() {
         assertNotApproved(() -> guard.assertOtpAllowed(UNKNOWN_PHONE));
     }
+
+    // --- Flag off: nothing changes -----------------------------------------
 
     @ParameterizedTest
     @NullAndEmptySource

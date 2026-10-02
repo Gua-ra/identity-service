@@ -26,6 +26,10 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 
+/**
+ * Every placement path is behind a flag that defaults to false, and with the flags off the service
+ * starts no scheduler, parses no key and registers no meter.
+ */
 class PlacementFlagsOffGuardTest {
 
     private static final Path MAIN_SOURCES = Path.of("src", "main", "java");
@@ -79,6 +83,7 @@ class PlacementFlagsOffGuardTest {
         assertThat(condition.prefix()).isEqualTo("identity.placement.shadow");
         assertThat(condition.name()).containsExactly("enabled");
         assertThat(condition.havingValue()).isEqualTo("true");
+        // Without this, a deployment that set nothing would still get a scheduler it never had before.
         assertThat(condition.matchIfMissing()).isFalse();
     }
 
@@ -162,6 +167,7 @@ class PlacementFlagsOffGuardTest {
         homeserver.setPlacementSigningPrivateKey("this is not a key");
         off.getRouting().getHomeservers().add(homeserver);
 
+        // With every flag off nothing signs, so an unparseable key must not stop startup.
         assertThatCode(() -> new PlacementRecordSigner(off)).doesNotThrowAnyException();
     }
 
@@ -173,6 +179,7 @@ class PlacementFlagsOffGuardTest {
         metrics.runCompleted(99, 1_757_000_000L);
         metrics.failed("error");
 
+        // Every method is gated on the flag, not just the ones that touch a counter.
         assertThat(registry.getMeters()).isEmpty();
     }
 

@@ -40,6 +40,10 @@ import me.sarahlacerda.gua.identityservice.service.security.PhoneChangeService;
 import me.sarahlacerda.gua.identityservice.service.security.ReauthOperation;
 import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
 
+/**
+ * Account management endpoints that require fresh OTP reauthentication in addition to the session
+ * bearer token. Modeled on the Matrix User-Interactive Authentication {@code m.login.msisdn} stage.
+ */
 @RestController
 @RequestMapping("/account")
 @Validated
@@ -126,6 +130,8 @@ public class AccountController {
                                 .map(entry -> entry.getUserId())
                                 .orElse(userId);
                 if (!existingUserId.equals(userId)) {
+                        // Defensive: the authenticated MXID and the directory row disagree. Never
+                        // proceed against the wrong/new identity.
                         throw new IllegalStateException(
                                         "Identity-reset target does not match the stored account; refusing to reset");
                 }

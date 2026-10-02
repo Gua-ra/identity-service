@@ -21,8 +21,16 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.HomeserverConfig;
 import reactor.core.publisher.Mono;
 
-// Off by default: MAS grants urn:mas:admin only to client ids in its admin_clients policy data.
-// The response envelope has not been verified against a live MAS.
+/**
+ * The primary MAS read path: the MAS admin API, with a {@code client_credentials} token.
+ *
+ * <p>Off by default ({@code identity.placement.mas.admin-api.enabled}). The links endpoint requires
+ * the {@code urn:mas:admin} scope, which the MAS policy grants through {@code client_credentials}
+ * only to client ids listed in its {@code admin_clients} policy data.
+ *
+ * <p>The response envelope is written from the MAS admin handler and model definitions, not from a
+ * live call, and tolerates unknown fields. Confirm it against a real MAS once the scope is granted.
+ */
 @Component
 public class MasAdminApiLinkReader implements MasLinkReader {
 
@@ -186,7 +194,10 @@ public class MasAdminApiLinkReader implements MasLinkReader {
                 : response.data().attributes().username();
     }
 
-    /** The admin API's provider model omits claims_imports. */
+    /**
+     * The admin API cannot answer this: its provider model omits {@code claims_imports}, so the
+     * on-conflict gauge needs the SQL path.
+     */
     @Override
     public Map<String, String> localpartOnConflictByHomeserver() {
         return Map.of();

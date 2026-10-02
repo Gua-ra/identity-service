@@ -18,8 +18,14 @@ import me.sarahlacerda.gua.identityservice.service.OtpCodes;
 import me.sarahlacerda.gua.identityservice.service.RateLimiter;
 import me.sarahlacerda.gua.identityservice.service.SmsSender;
 
-// The code is keyed per challenge (otp:code:change:{challengeId}), so the public /otp/send cannot overwrite or
-// pre-seed it.
+/**
+ * Sends and verifies the OTP for the new number in a phone-change flow.
+ *
+ * <p>The code is keyed per challenge ({@code otp:code:change:{challengeId}}) instead of per phone
+ * ({@code otp:code:{e164}}), so the public {@code /otp/send} endpoint can neither overwrite nor
+ * pre-seed it. Send rate limits and SMS metrics mirror
+ * {@link me.sarahlacerda.gua.identityservice.service.OtpService}.
+ */
 @Service
 public class PhoneChangeOtpService {
 
@@ -52,6 +58,11 @@ public class PhoneChangeOtpService {
                 .replace("SmsSender", "").toLowerCase(Locale.ROOT);
     }
 
+    /**
+     * Generates a fresh OTP for {@code challengeId}, stores it under the
+     * challenge-namespaced key, and texts it to {@code newE164}. Applies the same
+     * per-phone/per-IP send limits as the public OTP path.
+     */
     public void send(String challengeId, String newE164, String requesterIp, String language) {
         enforceRateLimits(newE164, requesterIp);
         String code = codeGenerator.generateNumericCode(properties.getOtp().getCodeLength());
@@ -67,7 +78,11 @@ public class PhoneChangeOtpService {
         }
     }
 
-    /** The caller owns the per-challenge attempt cap. */
+    /**
+     * Verifies {@code code} against the challenge-namespaced OTP. Single-use: deletes the key on
+     * success. Throws {@link InvalidOtpException} when the code is missing, expired or wrong. The
+     * comparison is constant-time; the caller owns the per-challenge attempt cap.
+     */
     public void verify(String challengeId, String code) {
         String key = otpKey(challengeId);
         String storedCode = redisTemplate.opsForValue().get(key);
@@ -79,6 +94,7 @@ public class PhoneChangeOtpService {
         metrics.counter("gua.identity.otp.verify", "result", "valid", "flow", OtpVerifyFlow.PHONE_CHANGE.tagValue()).increment();
     }
 
+    /** Destroys the OTP for a challenge (used when the attempt cap is reached or the challenge is abandoned). */
     public void discard(String challengeId) {
         redisTemplate.delete(otpKey(challengeId));
     }

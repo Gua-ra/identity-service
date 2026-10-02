@@ -5,6 +5,11 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.Getter;
 import lombok.Setter;
 
+/**
+ * Step 2 of a phone-number change. The challenge id (issued by /start) is the
+ * proof that re-auth + step-up already succeeded; the OTP confirms possession of
+ * the new number. On success the account's phone mapping is atomically switched.
+ */
 @Getter
 @Setter
 @Schema(description = "Complete a phone-number change with the challenge id and the new-number OTP")

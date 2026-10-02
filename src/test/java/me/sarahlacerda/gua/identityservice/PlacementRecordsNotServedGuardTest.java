@@ -16,12 +16,17 @@ import me.sarahlacerda.gua.identityservice.service.placement.ResolverPlacementCl
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Nothing that decides where an account lives, who it is, or what MAS is told may reach a placement record. */
+/**
+ * Placement records are computed, published and compared, and nothing is served from them. Nothing
+ * that decides where an account lives, who it is, or what MAS is told may reach a placement record,
+ * and there is deliberately no flag that would turn serving on.
+ */
 class PlacementRecordsNotServedGuardTest {
 
     private static final Path MAIN_SOURCES = Path.of("src", "main", "java");
     private static final Path MAIN_RESOURCES = Path.of("src", "main", "resources");
 
+    /** Everything that decides where an account lives, who it is, or what MAS is told about it. */
     private static final Set<String> ROUTING_AND_LOGIN_PATH = Set.of(
             "OidcTokenService.java", "OidcAuthorization.java", "OidcAuthorizationService.java",
             "OidcUserInfoController.java", "OidcAuthorizationController.java", "LoginFlowController.java",
@@ -61,6 +66,7 @@ class PlacementRecordsNotServedGuardTest {
 
     @Test
     void theRoutingAndLoginFilesThisGuardsReallyExist() throws IOException {
+        // A guard that silently matched nothing would pass forever after a rename.
         List<String> present = mainSources().stream()
                 .map(path -> path.getFileName().toString())
                 .filter(ROUTING_AND_LOGIN_PATH::contains)
@@ -94,6 +100,7 @@ class PlacementRecordsNotServedGuardTest {
                 .sorted()
                 .toList();
 
+        // Reading the roster, reading one record back to compare, and publishing one.
         assertThat(methods).containsExactlyInAnyOrder("fetchRoster", "findRecord", "publish", "isConfigured");
     }
 
@@ -123,6 +130,7 @@ class PlacementRecordsNotServedGuardTest {
                 .orElseThrow();
         String body = methodBody(Files.readString(reconciler), "private void maybeHeal(");
 
+        // Healing writes routing state, so it must never read a published record.
         assertThat(body).isNotBlank();
         assertThat(body).doesNotContain("published");
         assertThat(body).doesNotContain("PlacementRecord");
@@ -152,6 +160,8 @@ class PlacementRecordsNotServedGuardTest {
             }
         }
 
+        // The named-file guard above catches a rename or a deletion but cannot catch a routing file
+        // nobody has written yet. This one holds for every file that will ever be added.
         assertThat(offenders).isEmpty();
     }
 
@@ -170,6 +180,8 @@ class PlacementRecordsNotServedGuardTest {
             }
         }
 
+        // The MAS readers must not carry their own copy of the roster-id mapping: a copy that left out the
+        // alias map would make the comparison's lookup miss silently.
         assertThat(offenders).isEmpty();
     }
 

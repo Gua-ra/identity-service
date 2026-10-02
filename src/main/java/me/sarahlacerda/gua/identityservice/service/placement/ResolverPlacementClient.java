@@ -20,6 +20,13 @@ import me.sarahlacerda.gua.identityservice.account.genesis.PlacementRecordCodec;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import reactor.core.publisher.Mono;
 
+/**
+ * The gua-resolver surfaces this service talks to for placement: the public roster and the
+ * placement record endpoints.
+ *
+ * <p>A placement record binds an accountId, which is a hash with no identifier in its preimage. One
+ * accountId has one home, and nothing is served from the records.
+ */
 @Component
 public class ResolverPlacementClient {
 
@@ -28,12 +35,17 @@ public class ResolverPlacementClient {
     private static final String RECORDS_PATH = "/placement/records";
 
     public enum PublishOutcome {
+        /** The resolver stored the record. */
         PUBLISHED,
+        /** A record for this accountId already names another homeserver; never overwritten. */
         CONFLICT,
+        /** The resolver refused the record: bad signature, inactive signer, bad window. */
         REJECTED,
+        /** The resolver could not be reached, or answered an unexpected status. */
         UNAVAILABLE
     }
 
+    /** Only the roster fields the consistency check needs. Everything else is ignored on purpose. */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record RosterView(long version, List<RosterEntryView> entries) {
     }
@@ -69,7 +81,11 @@ public class ResolverPlacementClient {
         return configured;
     }
 
-    /** Returns empty when the resolver is unreachable or the answer is unreadable. */
+    /**
+     * The published roster. Public and unauthenticated by design, so reading it needs no credential.
+     *
+     * @return empty when the resolver is unreachable or answers something unreadable
+     */
     public Optional<RosterView> fetchRoster() {
         if (!configured) {
             return Optional.empty();
@@ -92,7 +108,12 @@ public class ResolverPlacementClient {
         }
     }
 
-    /** For comparison only, never a routing lookup. Empty when there is no record or the resolver is unreachable. */
+    /**
+     * The published record for one account, decoded from the signed envelope. For comparison only,
+     * never a routing lookup.
+     *
+     * @return empty when there is no record, or when the resolver could not be reached
+     */
     public Optional<PlacementRecord> findRecord(String accountId) {
         if (!configured) {
             return Optional.empty();
@@ -126,7 +147,10 @@ public class ResolverPlacementClient {
         }
     }
 
-    /** A conflict is reported, never retried or forced. */
+    /**
+     * Publishes one signed record. A conflict is reported, never retried and never forced: a record
+     * naming another homeserver is evidence of a duplicate identity or a bad signer.
+     */
     public PublishOutcome publish(PlacementRecordSigner.SignedPlacementRecord signed) {
         if (!configured) {
             return PublishOutcome.UNAVAILABLE;

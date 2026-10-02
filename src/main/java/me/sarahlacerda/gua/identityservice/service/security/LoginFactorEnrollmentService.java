@@ -14,8 +14,16 @@ import me.sarahlacerda.gua.identityservice.domain.IdentityUser;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 
-// Whether the account already holds a factor is decided under the row lock at write time,
-// so two sessions for one factorless account cannot both add a factor.
+/**
+ * Creating a factor from inside a login, where the session may not have authenticated with one.
+ *
+ * <p>A sign-in that has only proved the phone number may finish by creating the account's first
+ * factor, and by nothing else. Whether the account already holds a factor is decided under the
+ * account's row lock at write time: two sessions for one factorless account can both be routed to
+ * setup, and the second to finish is refused before anything is stored.
+ *
+ * <p>A session that did authenticate with a factor may add one freely.
+ */
 @Service
 @RequiredArgsConstructor
 public class LoginFactorEnrollmentService {
@@ -23,6 +31,13 @@ public class LoginFactorEnrollmentService {
     private final UserSecurityService userSecurityService;
     private final PasskeyService passkeyService;
 
+    /**
+     * Sets the first PIN of an account that holds no factor. Always the account's first factor
+     * when it returns.
+     *
+     * @throws LoginFlowException {@code 409 factor_required} when the account already holds a PIN
+     *                            or a passkey
+     */
     @Transactional
     public void setUpFirstPin(String userId, String pin) {
         IdentityUser user = lockForEnrollment(userId);
@@ -32,7 +47,14 @@ public class LoginFactorEnrollmentService {
         userSecurityService.setInitialPin(user, pin);
     }
 
-    /** Unlike setUpFirstPin, a held passkey does not block this. */
+    /**
+     * Sets the PIN of an account adding one from settings, after the enrollment session proved the
+     * account at {@code ENROLL_STEP_UP}. Unlike {@link #setUpFirstPin}, a held passkey does not block
+     * this. The row lock stops two enrollment sessions from both writing a PIN.
+     *
+     * @throws LoginFlowException {@code 409 pin_already_set} when the account gained a PIN in the
+     *                            meantime
+     */
     @Transactional
     public void setUpEnrolledPin(String userId, String pin) {
         IdentityUser user = lockForEnrollment(userId);
@@ -43,7 +65,14 @@ public class LoginFactorEnrollmentService {
         userSecurityService.setInitialPin(user, pin);
     }
 
-    /** Returns whether it is the account's first factor. */
+    /**
+     * Stores the passkey from a registration ceremony run in a login session.
+     *
+     * @return whether it is the account's first factor, which is what lets a session that has not
+     *         authenticated with a factor complete its sign-in
+     * @throws LoginFlowException {@code 409 factor_required} when the session has not authenticated
+     *                            with a factor and the account already holds one
+     */
     @Transactional
     public boolean registerPasskey(String sessionId, LoginSession session, JsonNode credential) {
         if (!StringUtils.hasText(session.getUserId())) {
@@ -59,7 +88,10 @@ public class LoginFactorEnrollmentService {
         return !heldAFactor;
     }
 
-    /** A session that loses the row-creation race fails on the unique user_id and rolls back. */
+    /**
+     * Locks the account row, creating it when the account has none. Of two sessions creating it, the
+     * second fails on the unique {@code user_id} once the first commits and its transaction rolls back.
+     */
     private IdentityUser lockForEnrollment(String userId) {
         try {
             return userSecurityService.lockOrCreateUser(userId);

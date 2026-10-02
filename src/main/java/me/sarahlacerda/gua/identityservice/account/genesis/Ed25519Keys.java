@@ -14,6 +14,11 @@ import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
 import java.util.HexFormat;
 
+/**
+ * Raw RFC 8032 Ed25519 public keys on top of the JDK provider. The genesis objects carry the bare
+ * 32-byte key and the JDK KeyFactory wants X.509 {@code SubjectPublicKeyInfo}, so the fixed 12-byte
+ * SPKI prefix is prepended here.
+ */
 public final class Ed25519Keys {
 
     public static final int RAW_PUBLIC_KEY_LENGTH = 32;
@@ -25,7 +30,12 @@ public final class Ed25519Keys {
     private Ed25519Keys() {
     }
 
-    /** KeyFactory only parses the encoding. Initializing a verifier forces the curve-point check. */
+    /**
+     * Turns a raw 32-byte Ed25519 public key into a JDK {@link PublicKey} and checks it is a curve point.
+     * {@link KeyFactory} only parses the encoding, so a verifier is initialized here to force the check.
+     *
+     * @throws InvalidGenesisException with the given reason when the bytes are not a curve point
+     */
     public static PublicKey fromRaw(byte[] rawPublicKey, String reason) {
         if (rawPublicKey == null || rawPublicKey.length != RAW_PUBLIC_KEY_LENGTH) {
             throw new InvalidGenesisException(reason, "Ed25519 public key is not " + RAW_PUBLIC_KEY_LENGTH + " bytes");
@@ -51,6 +61,7 @@ public final class Ed25519Keys {
         return key;
     }
 
+    /** True when the raw bytes decode to an Ed25519 curve point. */
     public static boolean isOnCurve(byte[] rawPublicKey) {
         try {
             fromRaw(rawPublicKey, "invalid_key");
@@ -60,7 +71,10 @@ public final class Ed25519Keys {
         }
     }
 
-    /** Returns false on malformed input, so a bad key and a bad signature look the same to the caller. */
+    /**
+     * Verifies a detached Ed25519 signature over {@code message}. Returns false for any malformed input
+     * rather than throwing, so a caller cannot tell a bad key from a bad signature by the exception type.
+     */
     public static boolean verify(byte[] rawPublicKey, byte[] message, byte[] signature) {
         if (rawPublicKey == null || message == null || signature == null) {
             return false;
@@ -87,7 +101,12 @@ public final class Ed25519Keys {
     }
 
 
-    /** The exception message never includes the value, which is key material. */
+    /**
+     * Loads an Ed25519 private key from base64 PKCS#8.
+     *
+     * @throws IllegalStateException when the value is not a readable Ed25519 private key; the message
+     *                               never includes the value, which is key material
+     */
     public static PrivateKey privateKeyFromPkcs8(String base64Pkcs8) {
         if (base64Pkcs8 == null || base64Pkcs8.isBlank()) {
             throw new IllegalStateException("no Ed25519 private key is configured");
@@ -120,7 +139,12 @@ public final class Ed25519Keys {
         }
     }
 
-    /** Accepts the bare 32-byte key or its X.509 SubjectPublicKeyInfo wrapper. */
+    /**
+     * Reads a raw 32-byte Ed25519 public key from base64, accepting the bare key or its X.509
+     * {@code SubjectPublicKeyInfo} wrapper: the roster publishes both spellings.
+     *
+     * @throws InvalidGenesisException when the value is neither spelling of a curve point
+     */
     public static byte[] rawPublicKeyFromBase64(String base64Key, String reason) {
         if (base64Key == null || base64Key.isBlank()) {
             throw new InvalidGenesisException(reason, "Ed25519 public key is missing");
@@ -145,11 +169,18 @@ public final class Ed25519Keys {
         return raw;
     }
 
-    /** Fixed probe with its own domain prefix. A membership key must never sign caller-chosen bytes. */
+    /**
+     * Fixed probe the key-pair check signs. It is a compile-time constant with its own domain prefix, so it
+     * is neither a placement record nor an admission possession proof. A membership key must never sign
+     * caller-chosen bytes.
+     */
     private static final byte[] KEY_PAIR_PROBE =
             "gua-placement-signing-key-check.v1".getBytes(StandardCharsets.US_ASCII);
 
-    /** Signs the fixed probe and verifies it, because the JDK does not expose Ed25519 public-key derivation. */
+    /**
+     * True when {@code privateKey} is the private half of {@code rawPublicKey}. Checked by signing the
+     * fixed probe and verifying it, because the JDK does not expose Ed25519 public-key derivation.
+     */
     public static boolean publicHalfMatches(PrivateKey privateKey, byte[] rawPublicKey) {
         try {
             return verify(rawPublicKey, KEY_PAIR_PROBE, sign(privateKey, KEY_PAIR_PROBE));
@@ -158,7 +189,7 @@ public final class Ed25519Keys {
         }
     }
 
-    /** The all-zero encoding decodes to a valid low-order point, so it is refused separately. */
+    /** True when every byte is zero. Refused separately: the all-zero encoding decodes to a valid low-order point. */
     public static boolean isAllZero(byte[] value) {
         if (value == null) {
             return true;

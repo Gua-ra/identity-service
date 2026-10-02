@@ -13,11 +13,33 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 
-// The result and reason labels are closed sets that dashboards and alerts match literally.
-// Counters are registered eagerly, and nothing is registered while the feature is off.
+/**
+ * Metrics for the placement shadow comparison. These are the exact names a scrape exposes:
+ *
+ * <ul>
+ *   <li>{@code gua_identity_placement_shadow_total{result}}, one counter per classification;</li>
+ *   <li>{@code gua_identity_placement_shadow_accounts_scanned}, the size of the last run;</li>
+ *   <li>{@code gua_identity_placement_shadow_last_success_timestamp}, so an alert notices the job
+ *       stopped running;</li>
+ *   <li>{@code gua_identity_mas_localpart_on_conflict{homeserver,value}};</li>
+ *   <li>{@code gua_identity_placement_publish_total{result}};</li>
+ *   <li>{@code gua_identity_placement_shadow_failures_total{reason}}, the accounts the run could not
+ *       classify.</li>
+ * </ul>
+ *
+ * <p>Both counters carry a closed label set, because panels and alerts match the literal values.
+ * {@code result} on the publish counter is a {@code PublishOutcome} ({@code published},
+ * {@code conflict}, {@code rejected}, {@code unavailable}) or a skip reason ({@code no_signing_key},
+ * {@code bad_account_id}, {@code origin_mismatch}). {@code reason} on the failures counter is
+ * {@code unknown_homeserver} or {@code error}.
+ *
+ * <p>Counters are registered eagerly so a fresh pod serves zeros, and nothing is registered while
+ * the feature is off. {@code PlacementShadowMetricsTest} pins every name against a real scrape.
+ */
 @Component
 public class PlacementShadowMetrics {
 
+    /** The closed reason vocabulary of {@code gua_identity_placement_shadow_failures_total}. */
     static final List<String> FAILURE_REASONS = List.of("unknown_homeserver", "error");
 
     private final MeterRegistry registry;
@@ -66,12 +88,18 @@ public class PlacementShadowMetrics {
         }
     }
 
+    /**
+     * Counts one account the run could not classify at all.
+     *
+     * @param reason one of {@link #FAILURE_REASONS}
+     */
     public void failed(String reason) {
         if (enabled) {
             registry.counter("gua.identity.placement.shadow.failures", "reason", reason).increment();
         }
     }
 
+    /** Records a completed run. Gated on the feature like every other method here. */
     public void runCompleted(long scanned, long epochSeconds) {
         if (!enabled) {
             return;
@@ -80,7 +108,10 @@ public class PlacementShadowMetrics {
         lastSuccessEpochSeconds.set(epochSeconds);
     }
 
-    /** One gauge per observed value, reading 1 for the value in force. */
+    /**
+     * Publishes each MAS's effective localpart import policy as a gauge that reads 1 for the value in
+     * force. A gauge per observed value is the shape Prometheus can alert on.
+     */
     public void localpartOnConflict(Map<String, String> byHomeserver) {
         if (!enabled || byHomeserver.isEmpty()) {
             return;

@@ -8,6 +8,10 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+/**
+ * Every decoder rule for {@code AccountGenesis}, suite 0x01, and the rule that the accountId covers
+ * the bytes as received.
+ */
 class AccountGenesisCodecTest {
 
     private static final HexFormat HEX = HexFormat.of();
@@ -112,6 +116,7 @@ class AccountGenesisCodecTest {
 
     @Test
     void anAllZeroKeyIsRejectedEvenThoughItDecodesToAPoint() {
+        // The all-zero encoding is a valid low-order point, so the all-zero rule is separate from point decoding.
         assertThat(Ed25519Keys.isOnCurve(new byte[32])).isTrue();
 
         byte[] zeroAuthority = valid();

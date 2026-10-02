@@ -17,6 +17,7 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Home
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+/** The signer: it produces bytes that verify under the homeserver's own roster membership key. */
 class PlacementRecordSignerTest {
 
     private final TestEd25519.Pair pair = PlacementTestFixtures.keyPair();
@@ -109,9 +110,12 @@ class PlacementRecordSignerTest {
         aliased.getPlacement().getFederationIdAliases().put("default", "fed-legacy");
         PlacementRecordSigner aliasSigner = new PlacementRecordSigner(aliased);
 
+        // A legacy directory value maps through the alias.
         assertThat(aliasSigner.federationIdForRegistryId("default")).isEqualTo("fed-legacy");
+        // Anything without an alias is used as-is rather than guessed at.
         assertThat(aliasSigner.federationIdForRegistryId("primary")).isEqualTo("primary");
         assertThat(aliasSigner.federationIdForRegistryId(null)).isNull();
+        // An explicit federation id always wins over the alias map.
         assertThat(aliasSigner.federationIdOf(PlacementTestFixtures.homeserver("default",
                 PlacementTestFixtures.DOMAIN, "fed-explicit", ""))).isEqualTo("fed-explicit");
     }
@@ -123,6 +127,7 @@ class PlacementRecordSignerTest {
                 PlacementTestFixtures.LOCAL_ID, PlacementTestFixtures.DOMAIN,
                 PlacementTestFixtures.FEDERATION_ID, "this is not a key"));
 
+        // The signer is built in every deployment, so a malformed key must not stop startup while publishing is off.
         PlacementRecordSigner lazy = new PlacementRecordSigner(malformed);
 
         assertThat(lazy.canSignFor(PlacementTestFixtures.FEDERATION_ID)).isTrue();
@@ -139,6 +144,7 @@ class PlacementRecordSignerTest {
                 PlacementTestFixtures.DOMAIN, "");
         aliased.getRouting().getHomeservers().add(noExplicitId);
 
+        // The MAS readers resolve the same value through the same collaborator.
         assertThat(new PlacementRecordSigner(aliased).federationIdOf(noExplicitId))
                 .isEqualTo(new FederationIds(aliased).of(noExplicitId))
                 .isEqualTo("fed-legacy");

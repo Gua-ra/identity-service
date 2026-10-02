@@ -8,13 +8,20 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-// An account is any user id in the directory or the security tables. Neither row is guaranteed to exist without
-// the other.
+/**
+ * Reads the set of accounts this deployment knows about, for the bootstrap backfill and the
+ * missing-genesis gauge. An account is any user id in the directory or the security tables: a
+ * directory row exists from signup, an {@code identity_users} row from the first successful login,
+ * and neither is guaranteed to exist without the other.
+ */
 @Component
 @RequiredArgsConstructor
 public class AccountScanner {
 
-    /** Keyset pagination, so the backfill is resumable. */
+    /**
+     * Keyset pagination instead of OFFSET, so the backfill is resumable and rows inserted while it runs
+     * are picked up.
+     */
     private static final String NEXT_BATCH = """
             SELECT user_id FROM (
                 SELECT user_id FROM directory_entries
@@ -39,11 +46,13 @@ public class AccountScanner {
 
     private final JdbcTemplate jdbcTemplate;
 
+    /** The next batch of account user ids in ascending order, after {@code afterUserId}. */
     @Transactional(readOnly = true)
     public List<String> nextBatch(String afterUserId, int limit) {
         return jdbcTemplate.queryForList(NEXT_BATCH, String.class, afterUserId == null ? "" : afterUserId, limit);
     }
 
+    /** How many accounts still hold no genesis row. Alerted on when it stays above zero. */
     @Transactional(readOnly = true)
     public long countAccountsWithoutGenesis() {
         Long count = jdbcTemplate.queryForObject(COUNT_WITHOUT_GENESIS, Long.class);

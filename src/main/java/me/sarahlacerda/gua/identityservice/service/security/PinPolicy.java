@@ -9,15 +9,24 @@ import org.springframework.util.StringUtils;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinException;
 import me.sarahlacerda.gua.identityservice.exception.WeakPinException;
 
+/**
+ * Single source of truth for account-PIN strength rules. A PIN must be exactly six digits and must
+ * not be sequential, repetitive or commonly chosen (NIST SP 800-63B). The clients mirror the checks
+ * for instant feedback; this server-side policy is authoritative.
+ */
 @Component
 public class PinPolicy {
 
-    /** Keep in sync with the client-side checks. */
+    /** Exactly six digits. Keep in sync with the client-side checks. */
     public static final int PIN_LENGTH = 6;
 
     private static final Pattern SIX_DIGITS = Pattern.compile("\\d{" + PIN_LENGTH + "}");
 
-    /** Common PINs not already caught by the sequential and repeated checks. */
+    /**
+     * Curated denylist of the most commonly chosen 6-digit PINs that are NOT
+     * already caught by the structural (sequential / repeated) checks below.
+     * Derived from published breach analyses of numeric PIN frequency.
+     */
     private static final Set<String> COMMON_PINS = Set.of(
             "123123", "121212", "123321", "112233", "123654", "159753",
             "147258", "159357", "753951", "357159", "142536", "789456",
@@ -26,6 +35,12 @@ public class PinPolicy {
             "120120", "110110", "100100", "808080", "520520", "999999",
             "888888");
 
+    /**
+     * Validates a candidate PIN's format and strength.
+     *
+     * @throws InvalidPinException when the PIN is missing, not six digits, or too
+     *                             weak
+     */
     public void validate(String pin) {
         if (!StringUtils.hasText(pin) || !SIX_DIGITS.matcher(pin).matches()) {
             throw new InvalidPinException("PIN must be a 6-digit numeric value");
@@ -41,6 +56,7 @@ public class PinPolicy {
         }
     }
 
+    /** True when every digit is identical (e.g. 000000, 111111). */
     private boolean isRepeated(String pin) {
         char first = pin.charAt(0);
         for (int i = 1; i < pin.length(); i++) {
@@ -51,6 +67,10 @@ public class PinPolicy {
         return true;
     }
 
+    /**
+     * True when the digits form a strictly ascending or descending run with a
+     * constant step of 1 (e.g. 123456, 654321).
+     */
     private boolean isSequential(String pin) {
         boolean ascending = true;
         boolean descending = true;

@@ -11,6 +11,19 @@ import org.springframework.stereotype.Component;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.domain.Homeserver;
 
+/**
+ * Default per-deployment routing choice for a new account. It selects one of this deployment's
+ * configured homeservers by a local rule; the result is recorded in this service's directory.
+ * Strategies ({@code identity.routing.strategy}):
+ *
+ * <ul>
+ *   <li><b>single</b> (default): always the registry's default homeserver.</li>
+ *   <li><b>region</b>: first enabled homeserver whose region matches the context region hint;
+ *       otherwise falls back to weighted selection.</li>
+ *   <li><b>weighted</b>: random pick across enabled homeservers proportional to their configured
+ *       weight.</li>
+ * </ul>
+ */
 @Component
 @RequiredArgsConstructor
 public class DefaultHomeserverRouter implements HomeserverRouter {
@@ -49,6 +62,7 @@ public class DefaultHomeserverRouter implements HomeserverRouter {
     private Homeserver weightedPick(List<Homeserver> candidates) {
         int totalWeight = candidates.stream().mapToInt(hs -> Math.max(0, hs.weight())).sum();
         if (totalWeight <= 0) {
+            // All weights zero/negative: fall back to a uniform pick.
             return candidates.get(ThreadLocalRandom.current().nextInt(candidates.size()));
         }
         int target = ThreadLocalRandom.current().nextInt(totalWeight);

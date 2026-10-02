@@ -23,14 +23,19 @@ public class SecurityConfig {
         private static final List<String> OPEN_POST_ENDPOINTS = List.of(
                         "/otp/send",
                         "/otp/verify",
-                        // Open by design: the body carries a possession proof under the key inside the genesis.
+                        // Genesis registration runs before any OIDC flow exists. It is self-authenticating: the body
+                        // carries a possession proof under the key inside the genesis, and registering attaches
+                        // nothing.
                         "/account/genesis",
                         "/signup/complete",
                         "/signin/verify-pin",
                         "/oauth2/token",
                         "/login/**");
 
-        /** Retired endpoints take no input and answer 410, so they skip the bearer check. */
+        /**
+         * Retired endpoints. Their handlers take no input and answer only 410 endpoint_retired. They skip
+         * the bearer check so an unauthenticated caller is told the path is gone instead of getting a 401.
+         */
         private static final List<String> RETIRED_POST_ENDPOINTS = List.of(
                         "/security/pin/reset",
                         "/security/pin/reset/complete");
@@ -46,14 +51,18 @@ public class SecurityConfig {
                         "/actuator/health",
                         "/actuator/health/**",
                         "/actuator/info",
-                        "/actuator/prometheus", // blocked at the public edge
+                        "/actuator/prometheus",   // scraped by Prometheus in-cluster; blocked at the public edge
                         "/signup/check-username");
 
         @Bean
         public SecurityFilterChain securityFilterChain(HttpSecurity http,
                         OidcAccessTokenAuthenticationFilter oidcAccessTokenAuthenticationFilter) throws Exception {
-                // Bearer endpoints are stateless and /login/** enforces its own double-submit token, so
-                // Spring's session CSRF is exempted.
+                // CSRF posture (deliberate, not a blanket disable):
+                // - Authenticated endpoints are stateless and bearer-token based, so classic CSRF does not apply.
+                // - The only cookie-bearing surface, /login/**, enforces its own double-submit token: GET
+                //   /login/context issues a token bound to the Redis login session and every state-changing
+                //   /login POST must echo it in X-CSRF-Token (see LoginFlowController).
+                // Spring's session CSRF is therefore exempted; enabling it would 403 stateless clients.
                 http.csrf(csrf -> csrf.ignoringRequestMatchers("/**"));
                 http.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
                 http.authorizeHttpRequests(authorize -> authorize

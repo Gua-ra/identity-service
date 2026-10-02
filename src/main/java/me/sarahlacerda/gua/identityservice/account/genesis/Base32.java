@@ -1,10 +1,16 @@
 package me.sarahlacerda.gua.identityservice.account.genesis;
 
-/** RFC 4648 base32, lowercase and unpadded. Decoding is strict so each byte string has exactly one spelling. */
+/**
+ * RFC 4648 base32, lowercase and unpadded: the spelling of an accountId.
+ *
+ * <p>The decoder accepts only the lowercase alphabet, only a character count an unpadded encoding can
+ * produce, and only zero trailing bits, so each byte string has exactly one spelling.
+ */
 public final class Base32 {
 
     private static final String ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 
+    /** Reverse lookup, -1 for every character outside the alphabet. */
     private static final int[] VALUES = new int[128];
 
     static {
@@ -30,11 +36,19 @@ public final class Base32 {
             }
         }
         if (bits > 0) {
+            // Left-over bits are left-aligned and zero-padded on the right.
             out.append(ALPHABET.charAt((buffer << (5 - bits)) & 0x1F));
         }
         return out.toString();
     }
 
+    /**
+     * Decodes lowercase unpadded base32.
+     *
+     * @throws InvalidGenesisException with reason {@code bad_base32} on any character outside the
+     *                                 alphabet, a character count no unpadded encoding produces, or
+     *                                 non-zero trailing bits
+     */
     public static byte[] decode(String encoded) {
         if (encoded == null) {
             throw new InvalidGenesisException("bad_base32", "base32 value is missing");
@@ -63,6 +77,7 @@ public final class Base32 {
                 bits -= 8;
             }
         }
+        // Whatever is left over is padding and must be zero, or one byte string has several spellings.
         if (bits > 0 && (buffer & ((1 << bits) - 1)) != 0) {
             throw new InvalidGenesisException("bad_base32", "base32 value has non-zero trailing bits");
         }

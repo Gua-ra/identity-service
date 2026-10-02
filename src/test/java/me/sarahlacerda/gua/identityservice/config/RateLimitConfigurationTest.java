@@ -15,7 +15,11 @@ import org.springframework.mock.web.MockHttpServletRequest;
 
 import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 
-/** Each credential-checking endpoint must have its own rule in application.yml, never default-config. */
+/**
+ * Pins the shipped {@code identity.rate-limits} rules of {@code application.yml} for the endpoints
+ * that check a credential. Each must resolve to its own per-address rule, never to
+ * {@code default-config}: 120 a minute is a throughput guard, not a guess budget.
+ */
 class RateLimitConfigurationTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
@@ -37,12 +41,17 @@ class RateLimitConfigurationTest {
             "/login/pin, 10, PT1M",
             "/login/passkey/auth/options, 20, PT1M",
             "/login/passkey/auth/verify, 20, PT1M",
+            // Mints a WebAuthn challenge that can be spent as a step-up factor, so it needs
+            // its own rule for the same reason the credential checks above do.
             "/security/passkey/stepup/options, 20, PT5M",
+            // The enrollment step-up, which is a credential check in front of storing a factor.
             "/login/enroll/stepup/pin, 10, PT1M",
             "/login/enroll/stepup/otp/send, 5, PT1M",
             "/login/enroll/stepup/otp/verify, 10, PT1M",
             "/login/enroll/stepup/passkey/options, 20, PT1M",
             "/login/enroll/stepup/passkey/verify, 20, PT1M",
+            // Re-authentication: both check the submitted number against the account's own binding, and
+            // verify checks a code on top.
             "/account/reauth/start, 5, PT1M",
             "/account/reauth/verify, 10, PT1M"
     })

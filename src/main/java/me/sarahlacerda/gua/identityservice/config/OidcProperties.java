@@ -40,12 +40,14 @@ public class OidcProperties {
     @Getter
     @Setter
     public static class Signing {
+        /** Key identifier published in the JWKS document. */
         @NotBlank
         private String keyId = "oidc-signing-key";
 
-        /** If blank, an ephemeral key is generated on boot (dev only). */
+        /** PEM-encoded RSA PKCS#8 private key. If blank, an ephemeral key is generated on boot (dev only). */
         private String privateKey;
 
+        /** Optional PEM-encoded RSA public key (X.509 SubjectPublicKeyInfo). Derived from the private key when absent. */
         private String publicKey;
     }
 
@@ -55,7 +57,7 @@ public class OidcProperties {
         @NotBlank
         private String clientId;
 
-        /** When blank the client is public and must use PKCE. */
+        /** Plain-text client secret. When blank the client is treated as public and MUST use PKCE. */
         private String clientSecret;
 
         @NotNull
@@ -64,6 +66,7 @@ public class OidcProperties {
         @NotNull
         private List<String> allowedScopes = List.of("openid");
 
+        /** When true, PKCE is mandatory even if a secret is configured. Always true for public clients. */
         private boolean requirePkce;
     }
 }

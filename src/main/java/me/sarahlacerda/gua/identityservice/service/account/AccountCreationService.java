@@ -10,6 +10,14 @@ import org.springframework.util.StringUtils;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 
+/**
+ * Creates the local records of a new account as one transaction: the directory row, this
+ * deployment's routing choice, and the account's genesis row.
+ *
+ * <p>The attach-proof verification runs inside that transaction, so a handle that was presented and
+ * fails to attach fails the whole signup: no directory row is left behind and nothing falls back to
+ * a bootstrap id. A signup that presents no handle takes the bootstrap branch, which is not a failure.
+ */
 @Service
 @RequiredArgsConstructor
 public class AccountCreationService {
@@ -24,12 +32,18 @@ public class AccountCreationService {
             return StringUtils.hasText(attachHandle);
         }
 
+        /** A signup with no genesis in play at all, for callers that have no login session. */
         public static GenesisAttachment none(boolean nativeClient) {
             return new GenesisAttachment(null, null, null, nativeClient);
         }
     }
 
-    /** A null attachment means the feature is off and no genesis row is written. */
+    /**
+     * Writes the directory row, records the routing choice, and settles the account's accountId.
+     *
+     * @param attachment the session's genesis state; {@code null} when the feature is off, in which
+     *                   case no genesis row is written
+     */
     @Transactional
     public void createAccount(String phoneDigest, String maskedPhone, String userId, String displayName,
             String homeserverId, String localpart, GenesisAttachment attachment) {

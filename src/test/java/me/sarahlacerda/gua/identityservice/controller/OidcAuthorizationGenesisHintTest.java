@@ -29,6 +29,11 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+/**
+ * The {@code gua:} login-hint grammar. Strict: an unparsable hint, an unknown or duplicated key and
+ * a malformed {@code genesis} value are refused, not ignored. It applies only to prefixed hints and
+ * only while the feature is on.
+ */
 @WebMvcTest(OidcAuthorizationController.class)
 @AutoConfigureMockMvc(addFilters = false)
 class OidcAuthorizationGenesisHintTest {
@@ -39,6 +44,7 @@ class OidcAuthorizationGenesisHintTest {
     @Autowired
     private MockMvc mockMvc;
 
+    /** The real bound properties bean the slice already provides; each test sets the flag it needs. */
     @Autowired
     private IdentityServiceProperties identityServiceProperties;
 
@@ -151,6 +157,7 @@ class OidcAuthorizationGenesisHintTest {
 
         authorize("gua:phone=+15551234567;genesis=" + HANDLE).andExpect(status().isFound());
 
+        // The "gua" prefix is not one of the phone prefixes, so there is no prefill and no handle.
         LoginSession session = parkedSession();
         assertThat(session.getPhoneHint()).isNull();
         assertThat(session.getGenesisAttachHandle()).isNull();

@@ -27,7 +27,12 @@ public class AuthenticatedUserAccessor {
         return Optional.empty();
     }
 
-    /** From the token's verified audience. Empty for a homeserver-issued token. */
+    /**
+     * The registered OIDC client the caller's access token was issued to, when it is one of
+     * ours. Empty for a homeserver-issued token, which names no client of ours, and for any
+     * caller that is not authenticated by a token at all. The value comes from the token's
+     * verified audience, never from anything the caller sends alongside it.
+     */
     public Optional<String> currentClientId() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null || !authentication.isAuthenticated()) {

@@ -50,6 +50,8 @@ class PhoneDirectorySwapServiceTest {
 
     @Test
     void rejectsWhenNewNumberOwnedByAnotherAccountWithoutMutating() {
+        // The target digest already belongs to Bob: upsertByDigest would reassign it
+        // via an UPDATE (digest unchanged -> UNIQUE never fires), hijacking Bob's row.
         when(directoryService.findByDigest(NEW_DIGEST)).thenReturn(Optional.of(
                 DirectoryEntry.builder().phoneDigest(NEW_DIGEST).userId(OTHER).build()));
 
@@ -63,6 +65,7 @@ class PhoneDirectorySwapServiceTest {
 
     @Test
     void allowsWhenNewDigestAlreadyOwnedByCaller() {
+        // Idempotent re-run: the new digest is already the caller's, so it is not a conflict.
         when(directoryService.findByDigest(NEW_DIGEST)).thenReturn(Optional.of(
                 DirectoryEntry.builder().phoneDigest(NEW_DIGEST).userId(USER).build()));
         when(directoryService.findByUserId(USER)).thenReturn(List.of(
@@ -91,6 +94,7 @@ class PhoneDirectorySwapServiceTest {
         verify(directoryService).deleteByDigest(OLD_DIGEST);
         verify(directoryService).upsertByDigest(eq(NEW_DIGEST), anyString(), eq(USER), eq("Alice"));
         verify(directoryService).assignRouting(NEW_DIGEST, "hs-1", "alice");
+        // The builder drops discoverable; the opt-out must survive.
         verify(directoryService).setDiscoverable(NEW_DIGEST, false);
         verify(userSecurityService).stampPhoneChange(USER);
     }

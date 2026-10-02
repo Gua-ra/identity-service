@@ -7,7 +7,13 @@ import org.springframework.stereotype.Service;
 
 import lombok.RequiredArgsConstructor;
 
-/** A per-user cutoff in Redis: an access token whose iat predates it is revoked. */
+/**
+ * Per-user revoke-before cutoff that invalidates every outstanding stateless RS256 access token for
+ * a user before its natural expiry. Used when an account is deactivated or its credentials are reset.
+ *
+ * <p>The cutoff is a Unix-second timestamp in Redis. An access token is revoked when its {@code iat}
+ * predates the cutoff, which keeps verification stateless apart from one Redis read.
+ */
 @Service
 @RequiredArgsConstructor
 public class TokenRevocationService {
@@ -16,11 +22,16 @@ public class TokenRevocationService {
 
     private final StringRedisTemplate redisTemplate;
 
+    /** Invalidate every access token issued to {@code userId} up to now. */
     public void revokeAllTokens(String userId) {
         long cutoff = Instant.now().getEpochSecond();
         redisTemplate.opsForValue().set(KEY_PREFIX + userId, Long.toString(cutoff));
     }
 
+    /**
+     * Returns {@code true} when a token with the given {@code issuedAt} should be rejected for
+     * {@code userId}. A missing {@code issuedAt} is treated as revoked.
+     */
     public boolean isRevoked(String userId, Instant issuedAt) {
         if (issuedAt == null) {
             return true;

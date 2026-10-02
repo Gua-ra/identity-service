@@ -8,8 +8,17 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-// No phone column is selected.
-// A phone change can leave several directory rows briefly, so the most recently updated one is read.
+/**
+ * Reads the accounts the shadow comparison walks: an accountId, the account it is attached to, its
+ * origin, and this service's local routing choice for it.
+ *
+ * <p><b>No phone column is selected here.</b> The comparison works on accountIds, Matrix user ids
+ * and homeserver ids only.
+ *
+ * <p>A phone change can leave several directory rows for one account briefly, so the routing choice
+ * is read with a scalar subquery that takes the most recently updated row. Keyset pagination instead
+ * of OFFSET, so a long run is resumable.
+ */
 @Component
 @RequiredArgsConstructor
 public class PlacementAccountScanner {
@@ -40,9 +49,20 @@ public class PlacementAccountScanner {
 
     private final JdbcTemplate jdbcTemplate;
 
+    /**
+     * One account as the comparison sees it.
+     *
+     * @param accountId            the permanent accountId
+     * @param userId               the account's Matrix user id
+     * @param origin               {@code GENESIS} or {@code BOOTSTRAP}, the audit marker the record's
+     *                             origin byte is taken from
+     * @param directoryHomeserverId this service's local routing choice, null for rows written before
+     *                             routing existed
+     */
     public record AccountRow(String accountId, String userId, String origin, String directoryHomeserverId) {
     }
 
+    /** The next batch of accounts in user-id order, after {@code afterUserId}. */
     @Transactional(readOnly = true)
     public List<AccountRow> nextBatch(String afterUserId, int limit) {
         return jdbcTemplate.query(NEXT_BATCH,
@@ -51,7 +71,13 @@ public class PlacementAccountScanner {
                 afterUserId == null ? "" : afterUserId, limit);
     }
 
-    /** Writes this deployment's registry id, not the roster id. */
+    /**
+     * Writes the local routing choice back from the evidence. Only reached behind
+     * {@code identity.placement.shadow.heal-directory}, which is off by default.
+     *
+     * @param registryHomeserverId this deployment's own registry id, not the roster id
+     * @return rows updated
+     */
     @Transactional
     public int healDirectoryHomeserver(String userId, String registryHomeserverId) {
         return jdbcTemplate.update(HEAL_DIRECTORY, registryHomeserverId, userId);

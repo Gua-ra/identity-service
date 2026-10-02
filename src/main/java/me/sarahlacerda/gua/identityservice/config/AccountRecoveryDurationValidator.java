@@ -8,11 +8,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+/**
+ * Refuses to start when the delayed account recovery dormancy or wait is shorter than {@link #FLOOR}.
+ * Both come from the environment, so a mistyped variable would otherwise weaken recovery silently.
+ * {@code identity.security.account-recovery-allow-short-for-testing} lifts the floor for dev deployments.
+ */
 @Component
 public class AccountRecoveryDurationValidator {
 
     private static final Logger log = LoggerFactory.getLogger(AccountRecoveryDurationValidator.class);
 
+    /** The shortest dormancy or wait a deployment may run without the testing switch. */
     static final Duration FLOOR = Duration.ofHours(24);
 
     private final IdentityServiceProperties properties;

@@ -15,6 +15,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 
+/**
+ * Redis-backed store for {@link LoginSession}s. Sessions are keyed by an opaque, high-entropy
+ * identifier delivered to the browser as an HttpOnly cookie, and expire after
+ * {@link LoginFlowProperties#getSessionTtl()}.
+ */
 @Service
 @RequiredArgsConstructor
 public class LoginSessionService {
@@ -66,14 +71,18 @@ public class LoginSessionService {
         }
     }
 
-    // The API POST's cookie is not present in the web view, so the web view redeems this one-time token for a
-    // session cookie.
+    /**
+     * Issues a one-time token mapping to a login session id, for the in-app enrollment handoff. The
+     * cookie set on the API POST is not present in the web view, so the web view opens this token and
+     * the GET handler turns it into a first-party session cookie. Short TTL, consumed on first read.
+     */
     public String createEnrollToken(String sessionId, Duration ttl) {
         String token = newToken();
         redisTemplate.opsForValue().set(enrollTokenKey(token), sessionId, ttl);
         return token;
     }
 
+    /** Atomically reads and removes a one-time enroll token, returning its session id. */
     public Optional<String> consumeEnrollToken(String token) {
         if (token == null || token.isBlank()) {
             return Optional.empty();
@@ -81,6 +90,7 @@ public class LoginSessionService {
         return Optional.ofNullable(redisTemplate.opsForValue().getAndDelete(enrollTokenKey(token)));
     }
 
+    /** Generates an opaque token suitable for a session id or a CSRF token. */
     public String newToken() {
         byte[] bytes = new byte[32];
         RANDOM.nextBytes(bytes);

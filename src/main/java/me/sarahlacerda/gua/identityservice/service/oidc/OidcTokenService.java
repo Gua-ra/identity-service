@@ -34,7 +34,10 @@ public class OidcTokenService {
 
     private static final String TOKEN_TYPE = "Bearer";
 
-    /** The authentication service ends every other session of the account when it sees this claim. */
+    /**
+     * ID token claim marking a sign-in that completed a delayed account recovery. The
+     * authentication service ends every other session of the account when it sees it.
+     */
     static final String END_OTHER_SESSIONS_CLAIM = "gua_end_other_sessions";
 
     private final OidcProperties properties;
@@ -102,7 +105,12 @@ public class OidcTokenService {
         }
     }
 
-    /** The hint must be an ID token this service signed. Expiry is ignored so a stale session can still re-verify. */
+    /**
+     * Extracts the subject from an OIDC {@code id_token_hint} on a re-authentication request. The hint
+     * must be one of our own RS256-signed ID tokens (signature and issuer verified); expiry is ignored
+     * so a stale but genuine session can still re-verify. Returns the {@code sub}, or empty when the
+     * hint is missing, malformed or not issued by us.
+     */
     public Optional<String> subjectFromIdTokenHint(String idTokenHint) {
         if (idTokenHint == null || idTokenHint.isBlank()) {
             return Optional.empty();
@@ -125,7 +133,13 @@ public class OidcTokenService {
         }
     }
 
-    /** RFC 9068: accept a token only when its audience includes a registered client. */
+    /**
+     * Per RFC 9068 a resource server must reject access tokens not issued for it. Every token minted
+     * here carries the requesting client id as its audience, so a token is accepted only when its
+     * audience includes a currently registered client.
+     *
+     * @return the registered client id the token was accepted on, or empty when the token is refused
+     */
     private Optional<String> knownAudience(List<String> audience) {
         if (audience == null || audience.isEmpty()) {
             return Optional.empty();
@@ -159,10 +173,13 @@ public class OidcTokenService {
         if (authorization.preferredUsername() != null) {
             builder.claim("preferred_username", authorization.preferredUsername());
         }
-        // The nonce belongs only in the ID token (OIDC core 3.1.3.7).
+        // The nonce binds an ID token to the client's authorization request (OIDC core 3.1.3.7). It
+        // belongs only in the ID token, never the access token.
         if (includeNonce && authorization.nonce() != null) {
             builder.claim("nonce", authorization.nonce());
         }
+        // ID token only, which is where the authentication service reads upstream claims, and
+        // only for a recovery. Every other sign-in leaves the claim out entirely.
         if (includeNonce && authorization.endOtherSessions()) {
             builder.claim(END_OTHER_SESSIONS_CLAIM, true);
         }

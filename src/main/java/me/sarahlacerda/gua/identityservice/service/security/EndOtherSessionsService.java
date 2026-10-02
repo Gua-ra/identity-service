@@ -13,8 +13,26 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 
-// Marks the sign-out a completed recovery owes; while owed, every completed sign-in carries the claim.
-// Known limit: settling records the hand-over, not the sign-out, because MAS does not confirm it back.
+/**
+ * The "sign out every other session" a completed account recovery still owes the account.
+ *
+ * <p>A recovery commits before the login that carries {@code gua_end_other_sessions} has been
+ * issued. Anything that fails in between would otherwise lose the sign-out, so the mark has three
+ * states:
+ * <ul>
+ * <li><b>owed</b>: written by the recovery transaction just before it commits;</li>
+ * <li><b>re-issued</b>: while it is owed, every completed sign-in of the account carries the claim,
+ * whatever factor it used;</li>
+ * <li><b>settled</b>: deleted when the token endpoint issues an ID token carrying the claim.</li>
+ * </ul>
+ *
+ * <p>Known limit: settling records the hand-over, not the sign-out. MAS acts on the claim only when
+ * it finishes the upstream link page for that login and does not confirm back, so a claim spent on
+ * a login MAS never finishes signs nothing out.
+ *
+ * <p>Only a completed recovery marks an account. Carrying the claim on a later sign-in can only
+ * sign out sessions once more, never let anyone in.
+ */
 @Service
 @RequiredArgsConstructor
 public class EndOtherSessionsService {
@@ -26,7 +44,11 @@ public class EndOtherSessionsService {
     private final StringRedisTemplate redisTemplate;
     private final IdentityServiceProperties properties;
 
-    /** Written just before commit, so a Redis failure rolls the recovery back. */
+    /**
+     * Records that the account is owed the sign-out. Inside a transaction the write happens just
+     * before commit, so a Redis failure rolls the recovery back, and a commit that fails afterwards
+     * takes the mark back out.
+     */
     public void markOwed(String userId) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             write(userId);
@@ -55,10 +77,12 @@ public class EndOtherSessionsService {
         });
     }
 
+    /** Whether a completed sign-in of this account must still carry the sign-out. */
     public boolean isOwed(String userId) {
         return Boolean.TRUE.equals(redisTemplate.hasKey(key(userId)));
     }
 
+    /** The sign-out has been handed over in an issued ID token. */
     public void settle(String userId) {
         redisTemplate.delete(key(userId));
     }

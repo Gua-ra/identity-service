@@ -15,8 +15,12 @@ import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 
-// A separate bean so the swap runs in one transaction: a self-invocation from PhoneChangeService would bypass
-// the proxy.
+/**
+ * The single atomic directory mapping switch for a phone-number change.
+ *
+ * <p>A separate bean on purpose: a self-invocation from {@link PhoneChangeService} would bypass
+ * Spring's transactional proxy and split the swap into several auto-commit transactions.
+ */
 @Service
 @RequiredArgsConstructor
 public class PhoneDirectorySwapService {
@@ -26,6 +30,12 @@ public class PhoneDirectorySwapService {
     private final PhoneNumberHasher phoneNumberHasher;
     private final PhoneNumberMasker phoneNumberMasker;
 
+    /**
+     * Atomically switches the caller's directory mapping to {@code newE164}, carrying displayName,
+     * username, homeserverId and discoverable forward onto the new digest and stamping the
+     * change-cooldown clock. Rejects with {@link PhoneAlreadyLinkedException} (409) when the target
+     * number is owned by another account. All mutations commit together or not at all.
+     */
     @Transactional
     public void swap(String userId, String newE164) {
         String newDigest = phoneNumberHasher.digest(newE164);
@@ -50,6 +60,7 @@ public class PhoneDirectorySwapService {
                 .map(DirectoryEntry::isDiscoverable)
                 .orElse(true);
 
+        // Delete every old row except the (possibly already-present) new digest.
         currentEntries.stream()
                 .map(DirectoryEntry::getPhoneDigest)
                 .filter(digest -> !digest.equals(newDigest))
@@ -58,13 +69,14 @@ public class PhoneDirectorySwapService {
         try {
             directoryService.upsertByDigest(newDigest, phoneNumberMasker.mask(newE164), userId, displayName);
         } catch (DataIntegrityViolationException ex) {
-            // A concurrent insert of the same digest trips the UNIQUE constraint.
+            // A concurrent insert of the same digest by another account trips the UNIQUE constraint. Surfaced as a 409.
             throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
         }
 
         directoryService.assignRouting(newDigest, homeserverId, username);
         directoryService.setDiscoverable(newDigest, discoverable);
 
+        // Start the cooldown clock atomically with the swap.
         userSecurityService.stampPhoneChange(userId);
     }
 

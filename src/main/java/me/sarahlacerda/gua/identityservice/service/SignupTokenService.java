@@ -37,6 +37,10 @@ public class SignupTokenService {
         return phone;
     }
 
+    /**
+     * Returns the phone associated with the token without deleting it, so callers can validate the rest
+     * of the signup payload and call {@link #consume(String)} only on the success path.
+     */
     public String peek(String token) {
         if (!StringUtils.hasText(token)) {
             throw new InvalidSignupTokenException("Signup session invalid or expired");

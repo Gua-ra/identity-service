@@ -32,6 +32,13 @@ import me.sarahlacerda.gua.identityservice.repository.IdentityUserRepository;
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryService;
 import me.sarahlacerda.gua.identityservice.service.security.UserSecurityService;
 
+/**
+ * The recovery writers against real row locks. Cancel and complete race for the same ready episode,
+ * and a finished sign-in races a completion. The account must end in one consistent state: never
+ * both cancelled and completed, and a recovered PIN hash is never overwritten.
+ *
+ * <p>Needs Docker for Postgres and Redis, and is skipped where Docker is not available.
+ */
 @SpringBootTest
 @Testcontainers(disabledWithoutDocker = true)
 class AccountRecoveryConcurrencyTest {
@@ -82,6 +89,7 @@ class AccountRecoveryConcurrencyTest {
     @Autowired
     PasswordEncoder passwordEncoder;
 
+    /** A PIN account whose recovery was requested long enough ago to be ready now. */
     private String accountWithAReadyRecovery() {
         String userId = "@" + UUID.randomUUID() + ":example.com";
         userSecurityService.setInitialPin(userId, OLD_PIN);

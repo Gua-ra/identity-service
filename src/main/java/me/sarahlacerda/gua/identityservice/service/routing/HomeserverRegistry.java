@@ -15,8 +15,14 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.HomeserverConfig;
 import me.sarahlacerda.gua.identityservice.domain.Homeserver;
 
-// Built from local configuration; this is not the federation roster.
-// Without identity.routing.homeservers, one homeserver is synthesised from identity.matrix.*.
+/**
+ * In-memory registry of the homeservers this deployment provisions accounts to, built from local
+ * configuration. It is not the federation membership, which is the resolver's roster.
+ *
+ * <p>When {@code identity.routing.homeservers} is not configured, the registry synthesises a single
+ * homeserver from the legacy {@code identity.matrix.*} properties (id {@value #LEGACY_ID}), so
+ * single-homeserver deployments behave as before.
+ */
 @Component
 @RequiredArgsConstructor
 public class HomeserverRegistry {
@@ -68,6 +74,7 @@ public class HomeserverRegistry {
             }
             return configuredDefault;
         }
+        // Fall back to the first enabled homeserver in declaration order.
         return configured.stream()
                 .filter(HomeserverConfig::isEnabled)
                 .map(HomeserverConfig::getId)
@@ -79,6 +86,7 @@ public class HomeserverRegistry {
         return List.copyOf(byId.values());
     }
 
+    /** Homeservers eligible to receive new accounts. */
     public List<Homeserver> enabled() {
         return byId.values().stream().filter(Homeserver::enabled).toList();
     }

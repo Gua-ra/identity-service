@@ -26,6 +26,7 @@ public class MatrixProvisioningService {
         return homeserver.userId(localpart);
     }
 
+    /** Back-compatible overload: builds the MXID on the default homeserver. */
     public String buildUserId(String localpart) {
         return buildUserId(localpart, homeserverRegistry.getDefault());
     }
@@ -49,6 +50,10 @@ public class MatrixProvisioningService {
                 .forEach(existing -> matrixAdminClient.unlinkPhone(userId, existing));
     }
 
+    /**
+     * Returns the E.164 numbers currently linked to {@code userId} on the homeserver, excluding
+     * {@code keep}. Read-only.
+     */
     public List<String> getLinkedPhonesExcluding(String userId, String keep) {
         return matrixAdminClient.getLinkedPhones(userId).stream()
                 .filter(existing -> !existing.equals(keep))

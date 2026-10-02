@@ -5,7 +5,12 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.Getter;
 import lombok.Setter;
 
-/** Both fields are base64url without padding. */
+/**
+ * Registration of an account genesis the client generated on device.
+ *
+ * <p>Both fields are base64url without padding. The proof is not part of the genesis: it shows the
+ * registrant holds the authority key committed inside it.
+ */
 @Getter
 @Setter
 @Schema(description = "An AccountGenesis and the client's proof that it holds the committed authority key")

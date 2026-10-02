@@ -14,20 +14,32 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/** Local to identity-service and never replicated. The accountId is permanent and origin is never updated. */
+/**
+ * One account's genesis row: the object its accountId is derived from and the account it is
+ * attached to.
+ *
+ * <p>The row is local to identity-service and never replicated, so the MXID to accountId link stays
+ * private. An accountId is permanent: deactivating an account leaves this row in place, and no code
+ * path updates {@link #origin}.
+ */
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Entity
 @Table(name = "account_genesis")
 public class AccountGenesisRecord {
 
+    /** Where the account's identity is rooted. An audit marker. */
     public enum Origin {
+        /** Rooted in an {@code AccountGenesis} the client registered and proved possession of. */
         GENESIS,
+        /** No committed authority key; root class byte 0x00 inside the id. */
         BOOTSTRAP
     }
 
     public enum State {
+        /** Registered, not yet attached to an account. Carries an attach handle and an expiry. */
         PENDING,
+        /** Attached to the account named by {@link #userId}. */
         ATTACHED
     }
 
@@ -35,7 +47,7 @@ public class AccountGenesisRecord {
     @Column(name = "account_id", nullable = false, length = 64)
     private String accountId;
 
-    /** Null while PENDING. */
+    /** The MXID once attached; null while PENDING. Unique, so one account holds one genesis. */
     @Column(name = "user_id", unique = true)
     private String userId;
 
@@ -53,18 +65,24 @@ public class AccountGenesisRecord {
     @Column(name = "genesis_suite", nullable = false)
     private short genesisSuite;
 
+    /** The exact canonical bytes as received, base64url. The accountId is the hash of these. */
     @Column(name = "genesis_b64", nullable = false)
     private String genesisB64;
 
-    /** Null for BOOTSTRAP. */
+    /** Raw 32-byte Ed25519 authority key, base64url. Null for BOOTSTRAP, which commits no key. */
     @Column(name = "authority_key_b64")
     private String authorityKeyB64;
 
-    /** SHA-256 hex of the single-use attach handle. The handle itself is never stored. */
+    /**
+     * SHA-256 hex of the single-use attach handle; the handle itself is never stored. Settable together
+     * with {@link #expiresAt}: re-registering the same genesis while pending rotates both. Every other
+     * field is fixed at construction, and {@link #origin} has no mutator.
+     */
     @Setter
     @Column(name = "attach_handle_hash", length = 64)
     private String attachHandleHash;
 
+    /** When a pending registration stops being attachable. Rotated with the handle. */
     @Setter
     @Column(name = "expires_at")
     private Instant expiresAt;
@@ -97,12 +115,17 @@ public class AccountGenesisRecord {
                 authorityKeyB64, attachHandleHash, expiresAt, null);
     }
 
+    /**
+     * A genesis row after its attach: the shape {@code AccountGenesisRepository.attach} leaves behind,
+     * with the handle and the window burned and the account named.
+     */
     public static AccountGenesisRecord attachedGenesis(String accountId, String userId, short version, short suite,
             String genesisB64, String authorityKeyB64, Instant attachedAt) {
         return new AccountGenesisRecord(accountId, userId, Origin.GENESIS, State.ATTACHED, version, suite,
                 genesisB64, authorityKeyB64, null, null, attachedAt);
     }
 
+    /** A bootstrap accountId, attached to its account the moment it is minted. */
     public static AccountGenesisRecord attachedBootstrap(String accountId, String userId, short version, short suite,
             String genesisB64, Instant attachedAt) {
         return new AccountGenesisRecord(accountId, userId, Origin.BOOTSTRAP, State.ATTACHED, version, suite,

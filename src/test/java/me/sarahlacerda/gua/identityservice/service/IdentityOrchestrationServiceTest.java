@@ -53,12 +53,17 @@ class IdentityOrchestrationServiceTest {
         private PhoneNumberHasher phoneNumberHasher;
         @Mock
         private UserSecurityService userSecurityService;
+        /**
+         * The mock answers hasPasskey()=false unless a test says otherwise, so an account holds a
+         * passkey on this path only where a test stubs one.
+         */
         @Mock
         private me.sarahlacerda.gua.identityservice.service.security.PasskeyService passkeyService;
         @Mock
         private TrustedDeviceService trustedDeviceService;
         @Mock
         private DeviceNotificationService deviceNotificationService;
+        /** Account genesis is off by default here (the mock answers false). */
         @Mock
         private me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService accountGenesisService;
 
@@ -66,6 +71,8 @@ class IdentityOrchestrationServiceTest {
         private final io.micrometer.core.instrument.MeterRegistry meterRegistry =
                         new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
 
+        // Real guard (gate off by default) so the /signup/complete rule is exercised
+        // for real; tests switch it on through these properties.
         private final LoginFlowProperties loginFlowProperties = new LoginFlowProperties();
 
         private IdentityOrchestrationService service;
@@ -82,6 +89,8 @@ class IdentityOrchestrationServiceTest {
                                 phoneNumberHasher,
                                 new PhoneNumberMasker(),
                                 userSecurityService,
+                                // Real policy over the mocked collaborators, so the existing hasPin
+                                // stubs still drive the PIN step and the delegation is exercised.
                                 new me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy(
                                                 userSecurityService, passkeyService),
                                 trustedDeviceService,
@@ -248,6 +257,8 @@ class IdentityOrchestrationServiceTest {
                 verify(signupTokenService, never()).consume(any());
         }
 
+        // --- Web registration gate on the REST signup path ----------------------
+
         private void enableGate(String... allowlist) {
                 loginFlowProperties.getRegistration().setWebAllowlistEnabled(true);
                 loginFlowProperties.getRegistration().setWebAllowlist(List.of(allowlist));
@@ -293,6 +304,7 @@ class IdentityOrchestrationServiceTest {
 
         @Test
         void completeSignupProvisionsAnyNewNumberWhenGateDisabled() {
+                // Gate off (the default): a populated allowlist is ignored.
                 loginFlowProperties.getRegistration().setWebAllowlist(List.of("+12025550199"));
                 MatrixSession session = stubSuccessfulSignup("+12025550123");
 
@@ -425,6 +437,8 @@ class IdentityOrchestrationServiceTest {
                 org.mockito.Mockito.doThrow(new org.springframework.dao.DataIntegrityViolationException("blip"))
                                 .when(accountGenesisService).bootstrap(userId);
 
+                // The account already exists by the time the id is minted, so a failure there must not turn a
+                // completed signup into a 500. The backfill picks the account up.
                 MatrixSession result = service.completeSignup("signup-abc", "Alice", "Alice L.", "284917", null);
 
                 assertThat(result).isEqualTo(session);
@@ -451,9 +465,13 @@ class IdentityOrchestrationServiceTest {
 
                 service.completeSignup("signup-abc", "Alice", "Alice L.", "284917", null);
 
+                // This path has no login session, so there is nowhere to hold the challenge an attach proof
+                // must cover: it always takes the bootstrap branch, never an attach.
                 verify(accountGenesisService).bootstrap(userId);
                 verify(accountGenesisService, never()).attach(any(), any(), any(), any());
         }
+
+        // --- Factor gate on the legacy REST sign-in and signup ----------------------------
 
         private DirectoryEntry returningAccount(String phone, String digest) {
                 DirectoryEntry entry = DirectoryEntry.builder()
