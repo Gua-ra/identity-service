@@ -17,6 +17,7 @@ import me.sarahlacerda.gua.identityservice.service.OtpCodeGenerator;
 import me.sarahlacerda.gua.identityservice.service.OtpCodes;
 import me.sarahlacerda.gua.identityservice.service.RateLimiter;
 import me.sarahlacerda.gua.identityservice.service.SmsSender;
+import me.sarahlacerda.gua.identityservice.service.SmsTemplates;
 
 /**
  * Sends and verifies the OTP for the <em>new</em> number in a phone-change flow.
@@ -72,7 +73,7 @@ public class PhoneChangeOtpService {
     public void send(String challengeId, String newE164, String requesterIp, String language) {
         enforceRateLimits(newE164, requesterIp);
         String code = codeGenerator.generateNumericCode(properties.getOtp().getCodeLength());
-        String messageBody = resolveTemplate(language).formatted(code);
+        String messageBody = SmsTemplates.forLanguage(properties.getOtp(), language).formatted(code);
 
         redisTemplate.opsForValue().set(otpKey(challengeId), code, properties.getOtp().getTtl());
         try {
@@ -118,20 +119,6 @@ public class PhoneChangeOtpService {
         } catch (RateLimiterException ex) {
             throw new OtpRateLimitedException("Too many OTP requests", ex);
         }
-    }
-
-    private String resolveTemplate(String requestedLanguage) {
-        String defaultTemplate = properties.getOtp().getSmsTemplate();
-        if (!StringUtils.hasText(requestedLanguage)) {
-            return defaultTemplate;
-        }
-        String normalized = requestedLanguage.trim().toLowerCase(Locale.ROOT);
-        String template = properties.getOtp().getLocalizedSmsTemplates().get(normalized);
-        if (template == null && normalized.contains("-")) {
-            String primaryTag = normalized.substring(0, normalized.indexOf('-'));
-            template = properties.getOtp().getLocalizedSmsTemplates().get(primaryTag);
-        }
-        return template != null ? template : defaultTemplate;
     }
 
     private String otpKey(String challengeId) {
