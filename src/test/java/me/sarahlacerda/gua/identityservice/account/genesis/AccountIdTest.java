@@ -9,8 +9,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * ADM-008 decision 2: an accountId is {@code "ga1" || base32(0x01 || class || SHA-256(bytes))} and has
- * exactly one canonical spelling.
+ * An accountId is {@code "ga1" || base32(0x01 || class || SHA-256(bytes))} and has exactly one
+ * canonical spelling.
  */
 class AccountIdTest {
 

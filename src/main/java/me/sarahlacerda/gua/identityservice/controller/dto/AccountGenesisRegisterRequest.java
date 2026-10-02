@@ -6,10 +6,10 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * Registration of an {@code AccountGenesis} the client generated on device (ADM-008 decision 3).
+ * Registration of an account genesis the client generated on device.
  *
- * <p>Both fields are base64url without padding. The proof is not part of the genesis: it shows that
- * whoever is registering these bytes holds the authority key committed inside them.
+ * <p>Both fields are base64url without padding. The proof is not part of the genesis: it shows the
+ * registrant holds the authority key committed inside it.
  */
 @Getter
 @Setter

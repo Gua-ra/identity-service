@@ -1,15 +1,11 @@
 package me.sarahlacerda.gua.identityservice.account.genesis;
 
 /**
- * A decoded {@code BootstrapGenesis} (ADM-008 suite 0x00), together with the exact bytes it was decoded
- * from.
+ * A decoded bootstrap genesis (suite 0x00) together with the exact bytes it was decoded from.
  *
- * <p>It commits nothing and makes no ADM-001 L4 claim. Its whole job is to give an account that predates
- * account authority, or one created on the web where no genesis design exists yet, an accountId that is
- * re-derivable and auditable, with the root class byte 0x00 marking it as a bootstrap account (L5 path
- * B1). The entropy is random and is never derived from the MXID or the phone: a preimage containing
- * either would put an identifier, and with it the homeserver, inside the id, which L4 forbids and which
- * would turn replicated state into a linkage oracle.
+ * <p>It commits nothing. It gives an account without an authority key a re-derivable, auditable
+ * accountId whose root class byte 0x00 marks it as bootstrap. The entropy is random and never derived
+ * from the MXID or the phone, which would put an identifier inside the id.
  */
 public final class BootstrapGenesis {
 
@@ -55,7 +51,6 @@ public final class BootstrapGenesis {
         return canonicalBytes.clone();
     }
 
-    /** Bootstrap-class accountId over those bytes. */
     public AccountId accountId() {
         return AccountId.derive(AccountId.CLASS_BOOTSTRAP, canonicalBytes);
     }

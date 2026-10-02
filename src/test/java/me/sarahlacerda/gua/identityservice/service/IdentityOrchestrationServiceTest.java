@@ -63,10 +63,7 @@ class IdentityOrchestrationServiceTest {
         private TrustedDeviceService trustedDeviceService;
         @Mock
         private DeviceNotificationService deviceNotificationService;
-        /**
-         * Account genesis is off by default here (a mock answers false), so these tests assert the
-         * behaviour of the REST signup path exactly as it was before the feature existed.
-         */
+        /** Account genesis is off by default here (the mock answers false). */
         @Mock
         private me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService accountGenesisService;
 
@@ -440,10 +437,8 @@ class IdentityOrchestrationServiceTest {
                 org.mockito.Mockito.doThrow(new org.springframework.dao.DataIntegrityViolationException("blip"))
                                 .when(accountGenesisService).bootstrap(userId);
 
-                // The account already exists by the time the id is minted: the Matrix user is provisioned
-                // and the directory row is committed. A failure in that separate transaction must not turn
-                // a completed signup into a 500 (ADM-008 decision 6 makes the bootstrap branch not a
-                // failure); the backfill picks the account up instead.
+                // The account already exists by the time the id is minted, so a failure there must not turn a
+                // completed signup into a 500. The backfill picks the account up.
                 MatrixSession result = service.completeSignup("signup-abc", "Alice", "Alice L.", "284917", null);
 
                 assertThat(result).isEqualTo(session);
@@ -476,7 +471,7 @@ class IdentityOrchestrationServiceTest {
                 verify(accountGenesisService, never()).attach(any(), any(), any(), any());
         }
 
-        // --- D1 on the legacy REST sign-in and signup ----------------------------
+        // --- Factor gate on the legacy REST sign-in and signup ----------------------------
 
         private DirectoryEntry returningAccount(String phone, String digest) {
                 DirectoryEntry entry = DirectoryEntry.builder()

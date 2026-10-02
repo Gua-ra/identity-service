@@ -134,9 +134,8 @@ class UserSecurityServiceTest {
 
         service.recordSuccessfulLogin("@user:gua.global");
 
-        // Only a finished sign-in reaches here, so the person produced a factor and is not the
-        // one locked out. Read under the lock, so the write cannot put back a PIN hash or a
-        // stamp a concurrent recovery completion or cancel had just committed.
+        // Only a finished sign-in reaches here. Read under the lock, so the write cannot put back a PIN
+        // hash or a stamp a concurrent recovery had just committed.
         assertThat(user.getPinResetRequestedAt()).isNull();
         assertThat(user.getLastLoginAt()).isNotNull();
         verify(repository, org.mockito.Mockito.never()).findByUserId("@user:gua.global");
@@ -292,7 +291,6 @@ class UserSecurityServiceTest {
         when(repository.findByUserId("@user:gua.global")).thenReturn(Optional.of(user));
         when(repository.findByUserIdForUpdate("@user:gua.global")).thenReturn(Optional.of(user));
 
-        // Created.
         service.setInitialPin("@user:gua.global", "284917");
         assertThat(service.changePhonePinHoldRemainingSeconds("@user:gua.global")).isPositive();
 

@@ -6,7 +6,7 @@ import java.security.SecureRandom;
 import java.util.Arrays;
 
 /**
- * The canonical codec for {@code BootstrapGenesis}, suite 0x00 (ADM-008 encoding tables).
+ * Canonical codec for {@code BootstrapGenesis}, suite 0x00.
  *
  * <pre>
  * off len field
@@ -16,8 +16,6 @@ import java.util.Arrays;
  * 6   16  entropy   CSPRNG, never derived from the MXID or the phone
  * 22      end
  * </pre>
- *
- * <p>The fixed-layout rationale is the one {@link AccountGenesisCodec} documents.
  */
 public final class BootstrapGenesisCodec {
 
@@ -56,7 +54,6 @@ public final class BootstrapGenesisCodec {
         return new BootstrapGenesis(version, suite, entropy, bytes);
     }
 
-    /** Builds canonical bytes over the given entropy. */
     public static byte[] encode(byte[] entropy) {
         if (entropy.length != BootstrapGenesis.ENTROPY_LENGTH) {
             throw new IllegalArgumentException("entropy is " + BootstrapGenesis.ENTROPY_LENGTH + " bytes");

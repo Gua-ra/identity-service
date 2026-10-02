@@ -44,8 +44,6 @@ public class OtpService {
         this.smsSender = smsSender;
         this.rateLimiter = rateLimiter;
         this.metrics = metrics;
-        // e.g. TwilioSmsSender -> "twilio", LoggingSmsSender -> "logging". Lets the SMS-usage metric
-        // distinguish the real provider from the dev logger once real SMS is wired.
         this.smsProvider = SmsSender.providerTag(smsSender);
     }
 
@@ -54,12 +52,9 @@ public class OtpService {
     }
 
     /**
-     * Sends an OTP that belongs to one flow instead of to a phone number: the code is
-     * written under {@code otp:code:{scope}:{scopeId}}, which the unauthenticated
-     * {@code POST /otp/send} cannot write, so it can neither plant a code there ahead of
-     * the flow nor have one of its own codes accepted by it. Everything else is the same
-     * as {@link #sendOtp}: the same per-phone and per-IP send limits, the same code
-     * length and TTL, the same SMS metrics, and the same fresh guess budget per code.
+     * Sends an OTP that belongs to one flow instead of a phone number: the code is written under
+     * {@code otp:code:{scope}:{scopeId}}, which the unauthenticated {@code POST /otp/send} cannot write.
+     * Send limits, code length, TTL, metrics and the per-code guess budget are the same as {@link #sendOtp}.
      */
     public void sendScopedOtp(OtpScope scope, String scopeId, String e164PhoneNumber, String requesterIp,
             String language) {
@@ -92,7 +87,7 @@ public class OtpService {
         redisTemplate.opsForValue().set(codeKey, code, ttl);
         try {
             smsSender.send(e164PhoneNumber, messageBody);
-            // gua_identity_sms_send_total{provider,result} — SMS usage + delivery failures.
+            // gua_identity_sms_send_total{provider,result}: SMS usage and delivery failures.
             metrics.counter("gua.identity.sms.send", "provider", smsProvider, "result", "sent").increment();
         } catch (RuntimeException ex) {
             metrics.counter("gua.identity.sms.send", "provider", smsProvider, "result", "failed").increment();
@@ -101,15 +96,11 @@ public class OtpService {
     }
 
     /**
-     * Redeems {@code code} for the phone's live OTP. Every guess is counted per code
-     * in Redis before it is compared, so at most {@code identity.otp.max-verify-attempts}
-     * guesses are ever compared against one code, however they are spread across
-     * addresses and paths or fired in parallel: the count is an atomic INCR, the last
-     * allowed guess deletes the code when it is wrong, and a guess whose count overtook
-     * the cap is refused without being looked at. The spent counter is left to expire
-     * with the code's TTL so a late guess cannot reopen the budget; only a new send,
-     * which resets the counter, restores the code. The endpoint limiters bound how
-     * fast one address can guess, this bounds how many guesses a code can absorb at all.
+     * Redeems {@code code} for the phone's live OTP. Every guess is counted per code with an atomic
+     * INCR before it is compared, so one code absorbs at most {@code identity.otp.max-verify-attempts}
+     * guesses however they are spread or parallelized. The last allowed wrong guess deletes the code,
+     * and a guess over the cap is refused without being compared. The counter expires with the code's
+     * TTL; only a new send resets it.
      */
     public void verifyOtp(String e164PhoneNumber, String code) {
         verify(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), code, OtpVerifyFlow.PHONE);
@@ -118,7 +109,7 @@ public class OtpService {
     private void verify(String codeKey, String attemptsKey, String code, OtpVerifyFlow flow) {
         String storedCode = redisTemplate.opsForValue().get(codeKey);
         if (!StringUtils.hasText(storedCode)) {
-            // gua_identity_otp_verify_total{result} — wrong/expired codes (auth friction / abuse signal).
+            // gua_identity_otp_verify_total{result}: wrong or expired codes.
             metrics.counter("gua.identity.otp.verify", "result", "invalid", "flow", flow.tagValue()).increment();
             throw new InvalidOtpException("Invalid or expired verification code");
         }
@@ -148,8 +139,7 @@ public class OtpService {
     }
 
     private InvalidOtpException exhausted(String codeKey, OtpVerifyFlow flow) {
-        // Only the code goes. Deleting the counter too would hand a guess that fetched the
-        // code before the cap tripped a fresh budget starting at 1.
+        // Only the code is deleted. Deleting the counter would give a racing guess a fresh budget.
         redisTemplate.delete(codeKey);
         // gua_identity_otp_verify_total{result="exhausted"}: guesses refused by the cap (brute-force signal).
         metrics.counter("gua.identity.otp.verify", "result", "exhausted", "flow", flow.tagValue()).increment();
@@ -190,16 +180,9 @@ public class OtpService {
     }
 
     /**
-     * Picks the SMS template for the language the caller asked for, keyed by BCP-47 tag.
-     *
-     * <p>
-     * The underscore is folded to a hyphen first because the platform locale APIs the apps reach
-     * for hand out the ICU identifier, {@code pt_BR}, rather than the language tag, {@code pt-BR}.
-     * Without the fold that value matches no key and carries no hyphen either, so the
-     * primary-tag fallback below never runs and a Brazilian caller is texted in English. The
-     * clients send a proper tag now, but the cost of accepting the other spelling is one
-     * replacement and what it buys is that no app can silently drop a user back to English by
-     * reaching for the wrong locale property.
+     * Picks the SMS template for the requested language, keyed by BCP-47 tag. The underscore is folded
+     * to a hyphen first because platform locale APIs hand out the ICU identifier ({@code pt_BR}) instead
+     * of the language tag ({@code pt-BR}); without the fold a Brazilian caller would be texted in English.
      */
     private String resolveTemplate(String requestedLanguage) {
         String defaultTemplate = properties.getOtp().getSmsTemplate();

@@ -91,12 +91,7 @@ class AccountRecoveryServiceTest {
                 new AccountRecoveryState(Status.AVAILABLE, null, null, null, DORMANCY.toSeconds(), WAIT.toSeconds()));
     }
 
-    /**
-     * The two waits ride along at every status, because the screen that explains them has to say
-     * what this deployment enforces and not what the defaults happen to be. They are read through
-     * the getters, so a deployment that configures neither reports the pin-reset-cooldown
-     * fallback rather than nothing.
-     */
+    /** The two waits are reported at every status, read through the getters so the configured fallback applies. */
     @Test
     void everyStatusCarriesTheConfiguredWaits() {
         user.setLastLoginAt(T0.minus(DORMANCY).plusSeconds(60));
@@ -135,9 +130,8 @@ class AccountRecoveryServiceTest {
     }
 
     /**
-     * The published time is rounded up to the start of the next UTC day: the clients say "try
-     * again after Sep 14" and never a clock time, so nothing about the account's last sign-in is
-     * readable from it.
+     * The published time is rounded up to the start of the next UTC day, so nothing about the
+     * account's last sign-in is readable from it.
      */
     @Test
     void tooSoonPublishesTheStartOfTheNextDayAfterTheDormancyEnds() {
@@ -161,10 +155,7 @@ class AccountRecoveryServiceTest {
                 .isEqualTo(Instant.parse("2026-09-08T00:00:00Z").getEpochSecond());
     }
 
-    /**
-     * With short testing durations a whole day would dwarf a dormancy of minutes, leaving dev QA
-     * with nothing to watch, so the published time is rounded up to the next whole minute instead.
-     */
+    /** With short testing durations the published time is rounded up to the next whole minute instead. */
     @Test
     void underShortTestingDurationsTooSoonPublishesTheNextWholeMinute() {
         useShortTestingDurations();
@@ -359,8 +350,8 @@ class AccountRecoveryServiceTest {
     }
 
     /**
-     * D5 must survive a login that cannot be finished after the commit, and the account must not
-     * look dormant because the sign-in record after the commit never ran.
+     * The owed sign-out must survive a login that cannot be finished after the commit, and the account
+     * must not look dormant because the sign-in record after the commit never ran.
      */
     @Test
     void completingARecoveryRecordsTheOwedSignOutAndCountsAsActivity() {
@@ -435,7 +426,7 @@ class AccountRecoveryServiceTest {
         assertThat(user.getPinResetRequestedAt()).isNull();
         assertThat(user.getLastLoginAt()).isEqualTo(T0);
         verify(auditLogger).accountRecoveryCancelled(USER, "198.51.100.4");
-        // E4: whoever started it cannot start another one the next minute.
+        // Whoever started it cannot start another one the next minute.
         clock.set(T0.plusSeconds(60));
         assertThat(service.stateFor(USER).status()).isEqualTo(Status.TOO_SOON);
     }

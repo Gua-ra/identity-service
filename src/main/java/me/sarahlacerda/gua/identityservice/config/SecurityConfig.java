@@ -23,9 +23,9 @@ public class SecurityConfig {
         private static final List<String> OPEN_POST_ENDPOINTS = List.of(
                         "/otp/send",
                         "/otp/verify",
-                        // Registration of an AccountGenesis, before any OIDC flow exists to authenticate
-                        // against. It is self-authenticating: the body carries a possession proof under the
-                        // key committed inside the genesis, and registering one attaches nothing on its own.
+                        // Genesis registration runs before any OIDC flow exists. It is self-authenticating: the body
+                        // carries a possession proof under the key inside the genesis, and registering attaches
+                        // nothing.
                         "/account/genesis",
                         "/signup/complete",
                         "/signin/verify-pin",
@@ -33,10 +33,8 @@ public class SecurityConfig {
                         "/login/**");
 
         /**
-         * Retired endpoints. Not open endpoints: their handlers take no input, touch nothing and
-         * answer only 410 endpoint_retired. They are let past the bearer check so a client that
-         * still calls them unauthenticated, as it always did, is told the path is gone rather than
-         * being sent a 401 that reads like a session problem.
+         * Retired endpoints. Their handlers take no input and answer only 410 endpoint_retired. They skip
+         * the bearer check so an unauthenticated caller is told the path is gone instead of getting a 401.
          */
         private static final List<String> RETIRED_POST_ENDPOINTS = List.of(
                         "/security/pin/reset",
@@ -60,17 +58,11 @@ public class SecurityConfig {
         public SecurityFilterChain securityFilterChain(HttpSecurity http,
                         OidcAccessTokenAuthenticationFilter oidcAccessTokenAuthenticationFilter) throws Exception {
                 // CSRF posture (deliberate, not a blanket disable):
-                // - Every authenticated endpoint is STATELESS and bearer-token based
-                //   (OidcAccessTokenAuthenticationFilter reads the Authorization header,
-                //   not an ambient session cookie), so a browser cannot be tricked into
-                //   forging them — classic CSRF does not apply.
-                // - The only cookie-bearing surface, /login/**, enforces its OWN
-                //   double-submit token: GET /login/context issues a CSRF token bound to
-                //   the Redis login session and every state-changing /login POST must echo
-                //   it back in the X-CSRF-Token header (see LoginFlowController).
-                // We therefore exempt the API from Spring's session-based CSRF rather than
-                // calling disable(): turning Spring CSRF ON for the bearer endpoints would
-                // 403 stateless clients (iOS / web) that hold no server CSRF token.
+                // - Authenticated endpoints are stateless and bearer-token based, so classic CSRF does not apply.
+                // - The only cookie-bearing surface, /login/**, enforces its own double-submit token: GET
+                //   /login/context issues a token bound to the Redis login session and every state-changing
+                //   /login POST must echo it in X-CSRF-Token (see LoginFlowController).
+                // Spring's session CSRF is therefore exempted; enabling it would 403 stateless clients.
                 http.csrf(csrf -> csrf.ignoringRequestMatchers("/**"));
                 http.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
                 http.authorizeHttpRequests(authorize -> authorize

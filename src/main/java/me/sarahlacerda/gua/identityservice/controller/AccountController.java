@@ -41,13 +41,8 @@ import me.sarahlacerda.gua.identityservice.service.security.ReauthOperation;
 import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
 
 /**
- * Account management endpoints that require fresh OTP reauthentication. Modeled
- * on the Matrix
- * User-Interactive Authentication {@code m.login.msisdn} stage so the long-term
- * migration to a
- * full MAS deployment can map directly: every privileged operation here demands
- * a phone-OTP proof
- * of possession in addition to the existing session bearer token.
+ * Account management endpoints that require fresh OTP reauthentication in addition to the session
+ * bearer token. Modeled on the Matrix User-Interactive Authentication {@code m.login.msisdn} stage.
  */
 @RestController
 @RequestMapping("/account")
@@ -128,10 +123,8 @@ public class AccountController {
                 String userId = authenticatedUserAccessor.requireCurrentUserId();
                 reauthService.requireValidReauth(userId, request.getReauthToken(), ReauthOperation.IDENTITY_RESET);
 
-                // Reset rotates the homeserver credential for the SAME existing account; it
-                // must never mint a new MXID or a new directory row. Pin the operation to the
-                // stable MXID already on file for this user so a credential reset can never be
-                // turned into a fresh identity (the other half of the identity-reset loop).
+                // Reset rotates the credential of the existing account. It must never mint a new MXID or
+                // directory row.
                 String existingUserId = directoryService.findByUserId(userId).stream()
                                 .findFirst()
                                 .map(entry -> entry.getUserId())

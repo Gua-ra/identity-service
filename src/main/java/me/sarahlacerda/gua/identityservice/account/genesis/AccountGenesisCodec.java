@@ -5,7 +5,7 @@ import java.security.MessageDigest;
 import java.util.Arrays;
 
 /**
- * The canonical codec for {@code AccountGenesis}, suite 0x01 (ADM-008 encoding tables).
+ * Canonical codec for {@code AccountGenesis}, suite 0x01.
  *
  * <pre>
  * off len field
@@ -19,25 +19,12 @@ import java.util.Arrays;
  * 87      end
  * </pre>
  *
- * <h2>Why a fixed layout instead of ADM-007's {@code gua-lp.v1}</h2>
- * <p>ADM-007 fixes {@code gua-lp.v1} for the roster, member and governance objects: a u32 length before
- * every field and a schema tag opening every object. Where it already defines a primitive this package
- * follows it rather than inventing a second rule, which is why the placement timestamps these objects
- * will later travel with are epoch milliseconds in 8 big-endian bytes, and why an object hash is SHA-256
- * over the canonical bytes.
- *
- * <p>The account objects themselves keep fixed layouts, for the reason ADM-008 gives in its
- * "Relationship to ADM-007" section. They have no optional fields, no sets and no free strings, so
- * length prefixes would describe nothing that is not already constant. More importantly the accountId is
- * a permanent hash of these bytes, so the bytes that are hashed must be the bytes that crossed the wire;
- * a framing with a parse-then-re-serialize step invites exactly the re-encoding this must never do.
- * Both families still obey the same two ADM-001 L4 rules: one canonical byte representation, and
- * signatures over those bytes. They cannot be confused either, because a {@code gua-lp.v1} object opens
- * with a u32 length whose first byte is 0x00 while an account object opens with ASCII {@code GUA}.
+ * <p>The layout is fixed width because the accountId is a permanent hash of these bytes: the bytes
+ * hashed must be the bytes received, never a re-encoding.
  *
  * <p>The decoder rejects an unknown version, suite or framework, a wrong length, an all-zero key, equal
- * authority and recovery keys, and a key that fails Ed25519 point decoding. The all-zero rule is separate
- * from point decoding on purpose: the all-zero encoding decodes to a valid low-order point.
+ * authority and recovery keys, and a key that fails Ed25519 point decoding. The all-zero rule is
+ * separate because the all-zero encoding decodes to a valid low-order point.
  */
 public final class AccountGenesisCodec {
 
@@ -57,7 +44,7 @@ public final class AccountGenesisCodec {
      * Strictly decodes canonical bytes. The returned object keeps the bytes exactly as passed in, so the
      * accountId is derived from what was received.
      *
-     * @throws InvalidGenesisException on any rule ADM-008 decision 1 states
+     * @throws InvalidGenesisException on any rule in the class comment
      */
     public static AccountGenesis decode(byte[] bytes) {
         if (bytes == null || bytes.length != AccountGenesis.LENGTH) {

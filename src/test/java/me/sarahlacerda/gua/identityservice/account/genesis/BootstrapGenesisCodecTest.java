@@ -9,7 +9,6 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** ADM-008 suite 0x00: the object that gives a bootstrap account a re-derivable, auditable accountId. */
 class BootstrapGenesisCodecTest {
 
     private static byte[] valid() {
@@ -67,7 +66,7 @@ class BootstrapGenesisCodecTest {
         version[4] = 0x02;
         refusedWith(version, "unknown_version");
 
-        // 0x01 is the AccountGenesis suite; a bootstrap object committing a key is a contradiction.
+        // 0x01 is the AccountGenesis suite.
         byte[] suite = valid();
         suite[5] = 0x01;
         refusedWith(suite, "unknown_suite");

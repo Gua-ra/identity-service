@@ -92,11 +92,7 @@ class OidcTokenServiceTest {
         assertClaims(SignedJWT.parse(tokens.idToken()), authorization);
     }
 
-    /**
-     * ADM-001 S6: the subject stays the account's full Matrix user id and
-     * preferred_username is carried verbatim from the authorization. The token service
-     * derives neither.
-     */
+    /** The subject stays the full Matrix user id and preferred_username is carried verbatim from the authorization. */
     @Test
     void subjectStaysTheMatrixUserIdAndPreferredUsernameIsCarriedVerbatim() throws ParseException {
         OidcAuthorization authorization = new OidcAuthorization(
@@ -111,10 +107,7 @@ class OidcTokenServiceTest {
         }
     }
 
-    /**
-     * E2: only a completed account recovery asks the authentication service to end every other
-     * session, and it asks in the ID token, which is where upstream claims are read.
-     */
+    /** Only a completed account recovery asks for other sessions to end, and it asks in the ID token. */
     @Test
     void onlyARecoverySignInCarriesTheEndOtherSessionsClaimAndOnlyInTheIdToken() throws ParseException {
         OidcAuthorization recovery = new OidcAuthorization("@alice:gua.global", "+15551234567", "Alice", "alice",
@@ -209,7 +202,7 @@ class OidcTokenServiceTest {
 
     @Test
     void parseAccessTokenRejectsHs256Algorithm() throws Exception {
-        // Token signed by a different RSA key — verifier should reject.
+        // Token signed by a different RSA key: the verifier must reject it.
         KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
         gen.initialize(2048);
         KeyPair other = gen.generateKeyPair();

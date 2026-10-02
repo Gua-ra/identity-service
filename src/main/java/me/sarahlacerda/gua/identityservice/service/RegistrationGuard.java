@@ -15,44 +15,22 @@ import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 
 /**
- * Beta-rollout gate that keeps an internet-exposed deployment from being used to
- * burn SMS credits or self-register open accounts, while leaving the beta
- * mobile apps and every returning user unaffected.
- *
- * <p>
- * It has two enforcement points, both driven by the SAME master switch
- * {@code idp.login.registration.web-allowlist-enabled} and both no-ops when it is
- * off, so the whole gate is a single flag flip away from the fully-open behaviour
- * (nothing here is baked into the normal code path):
+ * Web registration gate. Keeps an internet-exposed deployment from being used to burn SMS credits or
+ * self-register accounts, while leaving the mobile apps and every returning user unaffected. Driven
+ * by {@code idp.login.registration.web-allowlist-enabled}; a no-op when it is off.
  *
  * <ol>
- * <li><b>OTP send</b> ({@link #assertOtpAllowed}): the earliest point, before any
- * SMS is dispatched. A web flow may only trigger an OTP for a phone that is
- * already a known account or is explicitly allowlisted; an unknown web number is
- * refused with {@code 403 registration_not_approved} and no SMS is sent.</li>
- * <li><b>New-account creation</b> ({@link #assertAllowedForNewUser}): before the
- * account is provisioned, on both signup paths (the interactive
- * {@code /login/profile} step and the REST {@code /signup/complete}). A brand-new
- * web signup whose phone is not allowlisted is refused even if it obtained an OTP
- * some other way, for example through an exempt session.</li>
+ * <li><b>OTP send</b> ({@link #assertOtpAllowed}): a web flow may trigger an OTP only for a phone
+ * that is a known account or is allowlisted; otherwise {@code 403 registration_not_approved}, before
+ * any SMS is sent.</li>
+ * <li><b>New-account creation</b> ({@link #assertAllowedForNewUser}): before the account is
+ * provisioned, on both signup paths ({@code /login/profile} and REST {@code /signup/complete}).</li>
  * </ol>
  *
- * <p>
- * A phone is "known" when it already resolves to an account (directory digest, or
- * the homeserver phone binding as a pepper-drift fallback) OR is on the configured
- * allowlist. Because any account registered through the mobile apps lands in the
- * directory, an app-registered number is automatically recognised here and can log
- * in on the web with no extra plumbing.
- *
- * <p>
- * Web versus native comes from the {@code gua_downstream} marker MAS appends to the
- * upstream authorize request. That marker is a query parameter on a browser
- * redirect, so whoever drives the browser can edit it: the native exemption is a
- * convenience for the beta apps, not a security boundary. The gate therefore fails
- * closed. Only a marker exactly equal to the configured native marker is exempt; the
- * web marker, an absent or empty marker, and any unrecognised value are all treated
- * as web. Requests with no login session (the REST {@code /otp/send} and
- * {@code /signup/complete} endpoints) carry no marker and are always treated as web.
+ * <p>Web versus native comes from the {@code gua_downstream} marker MAS appends to the authorize
+ * request. The marker is client-editable, so the exemption is a convenience, not a security
+ * boundary, and the gate fails closed: only the exact native marker is exempt. Requests with no login
+ * session are always treated as web.
  */
 @Component
 @RequiredArgsConstructor
@@ -65,18 +43,13 @@ public class RegistrationGuard {
     private final MatrixAdminClient matrixAdminClient;
 
     /**
-     * Rejects an OTP dispatch for a web flow whose phone is neither a known account
-     * nor allowlisted. No-op when the gate is disabled or the session carries the
-     * exact native marker. Called before the SMS is sent, so a blocked number never
-     * consumes an SMS credit.
+     * Rejects an OTP dispatch for a web flow whose phone is neither a known account nor allowlisted.
+     * No-op when the gate is disabled or the session carries the exact native marker.
      *
-     * @param session       the interactive login session (its downstream marker
-     *                      decides web-vs-native); may be {@code null} for the REST
-     *                      endpoint, which is then treated as a web flow
-     * @param phoneNumber   the phone the OTP would be sent to (any form; normalized
-     *                      here)
-     * @throws LoginFlowException {@code 403 registration_not_approved} when a web
-     *                            flow's phone is unknown and not allowlisted
+     * @param session     the login session; {@code null} for the REST endpoint, which is treated as web
+     * @param phoneNumber the phone the OTP would be sent to (any form; normalized here)
+     * @throws LoginFlowException {@code 403 registration_not_approved} when a web flow's phone is
+     *                            unknown and not allowlisted
      */
     public void assertOtpAllowed(LoginSession session, String phoneNumber) {
         if (!isEnabled() || isNativeFlow(session)) {
@@ -94,24 +67,20 @@ public class RegistrationGuard {
     }
 
     /**
-     * Rejects a new-account signup from an interactive session whose phone is not on
-     * the web allowlist. No-op when the gate is disabled or the session carries the
-     * exact native marker.
+     * Rejects a new-account signup from an interactive session whose phone is not on the web allowlist.
+     * No-op when the gate is disabled or the session carries the exact native marker.
      *
-     * @throws LoginFlowException {@code 403 registration_not_approved} when a web
-     *                            signup's phone is not allowlisted
+     * @throws LoginFlowException {@code 403 registration_not_approved} when a web signup's phone is
+     *                            not allowlisted
      */
     public void assertAllowedForNewUser(LoginSession session) {
         assertAllowedForNewUser(session, session.getPhoneNumber());
     }
 
     /**
-     * REST signup entry point ({@code /signup/complete}): no login session, always
-     * treated as web, so a new account is created only for an allowlisted phone.
-     * No-op when the gate is disabled.
+     * REST signup entry point ({@code /signup/complete}): no login session, always treated as web.
      *
-     * @throws LoginFlowException {@code 403 registration_not_approved} when the phone
-     *                            is not allowlisted
+     * @throws LoginFlowException {@code 403 registration_not_approved} when the phone is not allowlisted
      */
     public void assertAllowedForNewUser(String phoneNumber) {
         assertAllowedForNewUser(null, phoneNumber);
@@ -126,17 +95,12 @@ public class RegistrationGuard {
         }
     }
 
-    /** Whether the beta gate is switched on. */
     public boolean isEnabled() {
         LoginFlowProperties.Registration registration = properties.getRegistration();
         return registration != null && registration.isWebAllowlistEnabled();
     }
 
-    /**
-     * Only a session whose downstream marker is exactly the configured native marker
-     * is exempt. No session, no marker, an empty marker, a differently cased or
-     * otherwise unrecognised value, and the web marker all count as web.
-     */
+    /** Only a session whose marker is exactly the configured native marker is exempt. Everything else counts as web. */
     private boolean isNativeFlow(LoginSession session) {
         if (session == null) {
             return false;
@@ -179,7 +143,7 @@ public class RegistrationGuard {
             try {
                 normalizedAllowlist.add(phoneNumberNormalizer.toE164(entry));
             } catch (RuntimeException ex) {
-                // Ignore: an invalid allowlist entry contributes no match.
+                // An invalid allowlist entry matches nobody.
             }
         }
         return normalizedAllowlist.contains(normalizedPhone);

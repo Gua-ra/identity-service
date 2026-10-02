@@ -11,15 +11,11 @@ public interface MatrixAdminClient {
     List<String> getLinkedPhones(String userId);
 
     /**
-     * Reverse lookup: resolves a phone number (E.164) to the Matrix user id it is
-     * bound to on the homeserver, via the {@code msisdn} third-party identifier
-     * binding ({@code GET /_synapse/admin/v1/threepid/msisdn/users/{address}}).
-     * <p>
-     * This binding is stored by the homeserver and is independent of the identity
-     * directory's peppered phone digest, which makes it the authoritative fallback
-     * for deciding whether a phone belongs to an existing account when the local
-     * directory row is missing (e.g. a rotated/drifted directory pepper). Returns
-     * empty when no account is bound to the number.
+     * Reverse lookup: resolves an E.164 phone number to the Matrix user id it is bound to through the
+     * {@code msisdn} third-party identifier
+     * ({@code GET /_synapse/admin/v1/threepid/msisdn/users/{address}}). The homeserver stores this
+     * binding independently of the directory's peppered digest, so it is the fallback when the local
+     * directory row is missing. Returns empty when no account is bound to the number.
      */
     java.util.Optional<String> findUserIdByPhone(String phone);
 
@@ -32,21 +28,15 @@ public interface MatrixAdminClient {
     boolean userExists(String userId);
 
     /**
-     * Deactivates the Matrix user account on the homeserver. When {@code erase} is
-     * true the
-     * homeserver also wipes the user's profile and outbound encryption keys (GDPR
-     * erase).
+     * Deactivates the Matrix account on the homeserver. When {@code erase} is true the homeserver also
+     * wipes the user's profile and outbound encryption keys (GDPR erase).
      */
     void deactivateUser(String userId, boolean erase);
 
     /**
-     * Replaces the user's password on the homeserver via the admin API. Returns the
-     * freshly
-     * generated password so callers can hand it back to the client for a single
-     * User-Interactive
-     * Authentication challenge ({@code m.login.password}). Existing access tokens
-     * are kept alive
-     * ({@code logout_devices=false}) so the active session is not interrupted.
+     * Replaces the user's password through the admin API and returns the freshly generated one, so the
+     * caller can hand it to the client for a single User-Interactive Authentication challenge
+     * ({@code m.login.password}). Existing access tokens stay valid ({@code logout_devices=false}).
      */
     String rotatePassword(String userId);
 

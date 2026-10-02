@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.lang.reflect.RecordComponent;
@@ -283,8 +282,6 @@ class PlacementShadowReconcilerTest {
         account(USER_ID, "some-other-local-id");
         reader.link(USER_ID, PlacementTestFixtures.FEDERATION_ID, "alice");
 
-        // It stays in the bucket, so the exit criterion can read "none except the listed ones", but it
-        // does not raise noise every night.
         assertThat(run()).containsExactly(Map.entry(PlacementShadowResult.DIRECTORY_STALE, 1));
         assertThat(messagesAt(Level.INFO)).anyMatch(line -> line.contains("known=true"));
         assertThat(messagesAt(Level.WARN)).noneMatch(line -> line.contains("result=directory_stale"));
@@ -366,10 +363,8 @@ class PlacementShadowReconcilerTest {
 
     @Test
     void noRecordIsSignedForAHomeserverThisDeploymentHoldsNoKeyFor() {
-        // The other homeserver is configured, so the comparison resolves it, but carries no membership
-        // key: this deployment is not the party entitled to assert where the account lives. It has to be
-        // configured for this test to mean what its name says, because an unconfigured homeserver is a
-        // different branch now and would pass this assertion for the wrong reason.
+        // The other homeserver must be configured here: an unconfigured one takes a different branch
+        // and would pass for the wrong reason.
         String otherDomain = "other.example.test";
         String otherUser = "@alice:" + otherDomain;
         properties.getRouting().getHomeservers().add(PlacementTestFixtures.homeserver("other", otherDomain,
@@ -446,8 +441,8 @@ class PlacementShadowReconcilerTest {
         reconciler = build();
         account(USER_ID, "some-other-local-id");
         reader.link(USER_ID, PlacementTestFixtures.FEDERATION_ID, "alice");
-        // A record exists and agrees; the heal still reads the evidence, and writes the LOCAL registry
-        // id, because the directory column has always held that namespace.
+        // The heal reads the evidence and writes the local registry id, because the directory column
+        // holds that namespace.
         when(resolver.findRecord(accountId))
                 .thenReturn(Optional.of(publishedRecord(PlacementTestFixtures.FEDERATION_ID, Instant.now())));
 
@@ -522,10 +517,7 @@ class PlacementShadowReconcilerTest {
 
     @Test
     void aHomeserverWithNoExplicitFederationIdIsTheSameRosterIdToTheReaderAndToTheComparison() {
-        // No explicit federationId, so the roster id comes from the alias map. This is the shape where
-        // the mapping used to be computed two different ways: the readers ignored the alias map and
-        // returned the local id while the comparison indexed by the aliased one, so the lookup missed,
-        // both cross-checks were skipped, and the account was reported as a benign directory_stale.
+        // No explicit federationId, so the roster id comes from the alias map.
         properties = new IdentityServiceProperties();
         properties.getPlacement().setResolverBaseUrl("http://resolver.invalid");
         properties.getPlacement().getShadow().setEnabled(true);
@@ -538,7 +530,7 @@ class PlacementShadowReconcilerTest {
         metrics = new PlacementShadowMetrics(registry, properties);
         reconciler = build();
 
-        // The id a real reader reports, resolved through the one shared implementation it now uses.
+        // The id a real reader reports, resolved through the shared implementation.
         String readerId = new FederationIds(properties)
                 .of(properties.getRouting().getHomeservers().get(0));
         account(USER_ID, PlacementTestFixtures.LOCAL_ID);
@@ -555,8 +547,7 @@ class PlacementShadowReconcilerTest {
 
         Map<PlacementShadowResult, Integer> counts = run();
 
-        // Both cross-checks need this homeserver's domain. Skipping them used to leave the account with
-        // a clean result, which is a fail-open in exactly the counts the phase exit is read from.
+        // Both cross-checks need this homeserver's domain, so an unresolvable one must not yield a clean result.
         assertThat(counts).isEmpty();
         assertThat(registry.counter("gua.identity.placement.shadow.failures", "reason",
                 "unknown_homeserver").count()).isEqualTo(1d);
@@ -578,8 +569,7 @@ class PlacementShadowReconcilerTest {
 
         Map<PlacementShadowResult, Integer> counts = run();
 
-        // The scan used to die on the first such row, which stopped the success timestamp advancing and
-        // read as "the job is not running" rather than "this account could not be compared".
+        // One unreadable row is counted as a failure and the scan continues.
         assertThat(counts).containsExactly(Map.entry(PlacementShadowResult.RECORD_MISSING, 1));
         assertThat(registry.counter("gua.identity.placement.shadow.failures", "reason", "error").count())
                 .isEqualTo(1d);

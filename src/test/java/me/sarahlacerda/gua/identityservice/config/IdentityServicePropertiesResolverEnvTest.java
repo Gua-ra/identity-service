@@ -10,16 +10,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.SystemEnvironmentPropertySource;
 
-/**
- * The deployed manifests still export {@code IDENTITY_RESOLVER_BASEURL},
- * {@code IDENTITY_RESOLVER_HOMESERVERID} and {@code IDENTITY_RESOLVER_SIGNINGPRIVATEKEY} until
- * the deployment repo drops them. Nothing maps those names any more (the resolver publishing
- * client and its properties are removed, ADM-001 L1b), and {@code @ConfigurationProperties}
- * ignores unknown keys by default, so startup must not care that they are set.
- *
- * <p>This pins that through the same binder the application uses, with the variables presented
- * the way the OS environment presents them.
- */
+/** Deployed manifests may still export the removed IDENTITY_RESOLVER_* variables. Startup must ignore them. */
 class IdentityServicePropertiesResolverEnvTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()

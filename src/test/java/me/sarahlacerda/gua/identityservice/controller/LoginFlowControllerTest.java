@@ -71,7 +71,7 @@ import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 
 @WebMvcTest(LoginFlowController.class)
 @AutoConfigureMockMvc(addFilters = false)
-@AutoConfigureObservability   // provide a MeterRegistry in the slice (micrometer-prometheus is on the classpath)
+@AutoConfigureObservability // provides a MeterRegistry in the slice
 @org.springframework.context.annotation.Import(LoginFlowControllerTest.GuardConfig.class)
 class LoginFlowControllerTest {
 
@@ -79,9 +79,7 @@ class LoginFlowControllerTest {
     // step-up does. An established credential keeps that out of the way of these tests.
     private static final Instant REGISTERED_LONG_AGO = Instant.now().minus(Duration.ofDays(400));
 
-    // Use the real RegistrationGuard so the gate behaviour is exercised end-to-end;
-    // it is driven through the mocked LoginFlowProperties / PhoneNumberNormalizer /
-    // DirectoryService / PhoneNumberHasher / MatrixAdminClient beans in the slice.
+    // The real RegistrationGuard, so the gate is exercised end to end through the mocked beans in the slice.
     @org.springframework.boot.test.context.TestConfiguration
     static class GuardConfig {
         @org.springframework.context.annotation.Bean
@@ -98,9 +96,7 @@ class LoginFlowControllerTest {
             return new AccountLocalpartResolver(directoryService);
         }
 
-        // The real factor policy over the mocked UserSecurityService / PasskeyService, so the
-        // PIN step and the "already has a passkey" question are decided by the component the
-        // application uses. The existing hasPin / hasPasskey stubs below drive it unchanged.
+        // The real factor policy over the mocked UserSecurityService and PasskeyService.
         @org.springframework.context.annotation.Bean
         me.sarahlacerda.gua.identityservice.service.security.AuthFactorPolicy authFactorPolicy(
                 UserSecurityService userSecurityService, PasskeyService passkeyService) {
@@ -108,9 +104,8 @@ class LoginFlowControllerTest {
                     userSecurityService, passkeyService);
         }
 
-        // The real account-creation service, so the directory writes these tests assert on are the ones
-        // the signup path actually performs. Account genesis is mocked and off, so it contributes
-        // nothing here: that is the "flag off changes nothing" case, exercised by every test below.
+        // The real account-creation service, so the directory writes asserted on are the ones signup
+        // performs. Account genesis is mocked and off.
         @org.springframework.context.annotation.Bean
         AccountCreationService accountCreationService(DirectoryService directoryService,
                 AccountGenesisService accountGenesisService) {
@@ -378,10 +373,7 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.code").value("reauth_user_mismatch"));
     }
 
-    /**
-     * D1/D2 for an older account that holds no factor: the OTP proves the number and nothing
-     * more, so the account is offered the passkey and never completed.
-     */
+    /** An older account that holds no factor is offered the passkey and never completed on the OTP. */
     @Test
     void submitOtpForAReturningAccountHoldingNoFactorOffersThePasskeyInsteadOfCompleting() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
@@ -459,10 +451,8 @@ class LoginFlowControllerTest {
 
     @Test
     void submitOtpRecoversExistingUserViaHomeserverBindingWhenDigestMisses() throws Exception {
-        // Directory digest misses (e.g. rotated/drifted pepper) but the phone is
-        // still bound to an existing MXID on the homeserver. The user must be routed
-        // as an EXISTING user (no signup, no duplicate account) and the directory row
-        // must be healed.
+        // The directory digest misses (pepper drift) but the phone is still bound to an existing MXID on
+        // the homeserver. The user must be routed as an existing user and the directory row healed.
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
         when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
         when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
@@ -548,10 +538,7 @@ class LoginFlowControllerTest {
         verify(loginSessionService, org.mockito.Mockito.never()).save(eq(SID), any());
     }
 
-    /**
-     * D5 survives a recovery whose own login could not be finished: while its sign-out is still
-     * owed, the account's next completed sign-in carries the claim.
-     */
+    /** While a recovery's sign-out is still owed, the account's next completed sign-in carries the claim. */
     @Test
     void aSignInWhileARecoveryStillOwesItsSignOutCarriesTheClaim() throws Exception {
         LoginSession session = session(Phase.PIN_REQUIRED);
@@ -593,11 +580,7 @@ class LoginFlowControllerTest {
         verify(directoryService).upsertByDigest(any(), any(), eq("@alice:gua.local"), eq("Alice A"));
     }
 
-    /**
-     * The PIN step is now the tail of signup rather than its middle: the passkey was offered
-     * before it, so nothing follows it. Routing back to the passkey offer here would be a loop,
-     * since declining that offer is the only way into this step.
-     */
+    /** The passkey was offered before the PIN step, so nothing follows it. */
     @Test
     void submitPinSetupWithPinSetsItAndCompletesLogin() throws Exception {
         LoginSession session = session(Phase.PIN_SETUP);
@@ -620,7 +603,7 @@ class LoginFlowControllerTest {
         assertEquals(false, issuedAuthorization().endOtherSessions());
     }
 
-    /** D2: the PIN step is where a factorless account gets its factor, so it cannot be left without one. */
+    /** The PIN step is where a factorless account gets its factor, so it cannot be skipped. */
     @Test
     void pinSetupCannotBeSkippedOrLeftBlankAndNeverCompletes() throws Exception {
         LoginSession session = session(Phase.PIN_SETUP);
@@ -702,10 +685,9 @@ class LoginFlowControllerTest {
     }
 
     /**
-     * An in-app passkey enrollment (already-signed-in user adding a passkey from settings) has
-     * no OIDC authorization in flight, so its session carries no client id. Completing it must
-     * redirect the web view back to the app scheme WITHOUT issuing an authorization code —
-     * previously this ran the login completion and threw {@code clientId must not be null}.
+     * An in-app passkey enrollment has no OIDC authorization in flight, so its session carries no
+     * client id. Completing it must redirect the web view back to the app scheme without issuing an
+     * authorization code.
      */
     @Test
     void passkeyEnrollmentVerifyRedirectsToAppSchemeAndIssuesNoCode() throws Exception {
@@ -912,7 +894,7 @@ class LoginFlowControllerTest {
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
-    // --- Existing-account localpart (ADM-001 S6) --------------------------
+    // --- Existing-account localpart --------------------------
 
     /**
      * The account holds only a passkey, so the OTP routes it to PASSKEY_REQUIRED and the session
@@ -969,7 +951,7 @@ class LoginFlowControllerTest {
         assertEquals("alice.s", saved.getValue().getPreferredUsername());
     }
 
-    /** The S6 trap: a re-keyed, colon-bearing user_id must not change what MAS is told. */
+    /** A re-keyed, colon-bearing user_id must not change what MAS is told. */
     @Test
     void returningUserWithReKeyedUserIdStillEmitsTheStoredUsername() throws Exception {
         stubReturningDigest(DirectoryEntry.builder().phoneDigest("digest").userId("ga1abc:x")
@@ -1171,9 +1153,8 @@ class LoginFlowControllerTest {
 
     @Test
     void existingWebUserNotAllowlistedStillLogsIn() throws Exception {
-        // The guard must never touch an existing user: even with the allowlist on and
-        // this user's phone absent from it, a returning web login succeeds because it
-        // resolves in submitOtp (routeExistingUser), never reaching the profile branch.
+        // The guard must never touch an existing user: a returning web login resolves in submitOtp and
+        // never reaches the profile branch, even when its phone is not on the allowlist.
         when(properties.getRegistration()).thenReturn(enabledAllowlist("+15559999999"));
         LoginSession session = session(Phase.OTP_SENT);
         session.setDownstreamClient("web");
@@ -1196,9 +1177,8 @@ class LoginFlowControllerTest {
 
     @Test
     void reauthUnregisteredWebPhoneGivesReauthMismatchNotRegistrationNotApproved() throws Exception {
-        // A re-auth on an unregistered phone must be rejected as a reauth mismatch in
-        // submitOtp, before (and instead of) the signup/profile branch, even with the
-        // web allowlist enabled and this phone absent from it.
+        // A re-auth on an unregistered phone is rejected as a reauth mismatch in submitOtp, before the
+        // signup branch.
         when(properties.getRegistration()).thenReturn(enabledAllowlist("+15559999999"));
         LoginSession session = session(Phase.OTP_SENT);
         session.setDownstreamClient("web");
@@ -1255,9 +1235,8 @@ class LoginFlowControllerTest {
 
     @Test
     void otpSendAllowedForExistingAccountEvenWhenNotAllowlisted() throws Exception {
-        // The "app registers, then the web works too" case: a number already in the
-        // directory (e.g. registered via the mobile app) is recognised automatically
-        // and may receive a login OTP on the web, without being on the allowlist.
+        // A number already in the directory (for example registered through the mobile app) may receive
+        // a login OTP on the web without being on the allowlist.
         when(properties.getRegistration()).thenReturn(enabledAllowlist("+15559999999"));
         LoginSession session = session(Phase.PHONE);
         session.setDownstreamClient("web");
@@ -1319,8 +1298,7 @@ class LoginFlowControllerTest {
 
     @Test
     void otpSendAllowedForUnknownWebNumberWhenGateDisabled() throws Exception {
-        // Default registration (disabled) from setUp(): unknown web numbers still get
-        // an OTP, i.e. flipping the flag off restores the fully-open flow.
+        // With the gate disabled, unknown web numbers still get an OTP.
         LoginSession session = session(Phase.PHONE);
         session.setDownstreamClient("web");
 
@@ -1356,7 +1334,7 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.code").value("unexpected_step"));
     }
 
-    // --- Account genesis attach (ADM-008 decision 6) ---------------------------
+    // --- Account genesis attach ---------------------------
 
     /** Drives a brand-new user to the profile step: no directory row, no homeserver phone binding. */
     private void newUserAtOtpStep() {
@@ -1534,10 +1512,7 @@ class LoginFlowControllerTest {
         assertEquals(null, saved.getValue().getGenesisAttachChallenge());
     }
 
-    /**
-     * The heal path is the one runtime path that surfaces an account the startup backfill never saw, so
-     * it is the one that can push the missing-genesis gauge back above zero between restarts.
-     */
+    /** The heal path surfaces an account the startup backfill never saw. */
     private void recoveredAccountAtOtpStep() {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
         when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
@@ -1564,8 +1539,7 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.newUser").value(false));
 
-        // Healing the directory row makes this account visible to a later scan; without an id of its own
-        // it would sit in gua_identity_accounts_without_genesis until the next restart.
+        // Without an id of its own the healed account would count in gua_identity_accounts_without_genesis.
         verify(accountGenesisService).bootstrap("@alice:dev.local");
     }
 
@@ -1595,12 +1569,7 @@ class LoginFlowControllerTest {
 
     // --- Publishing the factor inventory on the login state --------------
 
-    /**
-     * A session that has been asked for its PIN has already had its subject resolved by an OTP,
-     * so it can be told what the account holds. That is the whole point: the step where the
-     * server decides to ask for the weaker factor is the step where the client most needs to
-     * know the stronger one exists.
-     */
+    /** A session asked for its PIN has had its subject resolved by an OTP, so it can be told what the account holds. */
     @Test
     void loginStateReportsTheAccountFactorsOnceTheSubjectIsResolved() throws Exception {
         LoginSession session = session(Phase.PIN_REQUIRED);
@@ -1618,11 +1587,9 @@ class LoginFlowControllerTest {
     }
 
     /**
-     * The enumeration oracle, and the reason the report is allow-listed by phase rather than
-     * merely conditioned on a subject being present. If the phone step could answer "does this
-     * account hold a passkey", it would answer for any number anyone submits, for the price of
-     * one unverified request. The session here is given a subject it has not earned, and the
-     * report must still be absent, and no factor may even be looked up.
+     * The report is allow-listed by phase, not merely conditioned on a subject being present. The
+     * session here is given a subject it has not earned: the report must still be absent and no factor
+     * may be looked up.
      */
     @Test
     void loginStateReportsNothingAtThePhoneStepEvenWhenTheSessionCarriesASubject() throws Exception {
@@ -1661,10 +1628,7 @@ class LoginFlowControllerTest {
         verify(passkeyService, org.mockito.Mockito.never()).hasPasskey(any());
     }
 
-    /**
-     * The oracle stated as the attack rather than as the state: submitting somebody else's
-     * number must not come back with what that account holds.
-     */
+    /** Submitting somebody else's number must not come back with what that account holds. */
     @Test
     void submittingAPhoneNumberNeverReportsWhatThatAccountHolds() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
@@ -1684,10 +1648,7 @@ class LoginFlowControllerTest {
         verify(passkeyService, org.mockito.Mockito.never()).hasPasskey(any());
     }
 
-    /**
-     * The report arrives on the same response that routes the user to the PIN step, so the UI can
-     * offer the passkey at the moment it is asked for the PIN without a second round trip.
-     */
+    /** The report arrives on the same response that routes the user to the PIN step. */
     @Test
     void routingToThePinStepCarriesTheFactorReport() throws Exception {
         DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("u1").username("alice")
@@ -1728,12 +1689,7 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.publicKey.challenge").value("abc"));
     }
 
-    /**
-     * The population this is for: an account with a PIN, which is precisely the one the flow
-     * routes to the PIN step and, until now, the one the conflict shut out. Nothing is weakened
-     * by letting it in, because the same assertion already completes this same login one step
-     * earlier from the phone step.
-     */
+    /** An account with a PIN may present its passkey at the PIN step. */
     @Test
     void passkeyAuthFromThePinStepCompletesWithoutSpendingThePin() throws Exception {
         LoginSession session = session(Phase.PIN_REQUIRED);
@@ -1762,9 +1718,8 @@ class LoginFlowControllerTest {
     }
 
     /**
-     * A session at the PIN step already knows whose it is, because an OTP proved it. An
-     * assertion resolving to somebody else is a different login wearing this session's state, so
-     * it is refused before anything is accepted and before the directory is read.
+     * A session at the PIN step already knows whose it is. An assertion resolving to somebody else is
+     * refused before anything is accepted and before the directory is read.
      */
     @Test
     void passkeyAuthFromThePinStepRefusesAnAssertionForAnotherAccount() throws Exception {
@@ -1786,7 +1741,7 @@ class LoginFlowControllerTest {
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
-    /** The phone-keyed directory row stays required from the newly admitted step too. */
+    /** The phone-keyed directory row is required from the PIN step too. */
     @Test
     void passkeyAuthFromThePinStepStillRequiresAPhoneKeyedDirectoryRow() throws Exception {
         LoginSession session = session(Phase.PIN_REQUIRED);
@@ -1809,10 +1764,7 @@ class LoginFlowControllerTest {
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
-    /**
-     * Widening the phase set must not reach the step that belongs to an account which does not
-     * exist yet, or an assertion would be a route into account creation.
-     */
+    /** An assertion at the profile step would be a route into account creation, so it is refused. */
     @Test
     void passkeyAuthIsNotReachableFromTheProfileStep() throws Exception {
         LoginSession session = session(Phase.PROFILE_REQUIRED);
@@ -1841,11 +1793,7 @@ class LoginFlowControllerTest {
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
-    /**
-     * An enrollment session carries no OIDC request, so it has no authorization code to issue and
-     * must never enter the sign-in ceremony. Refused by name rather than by step, so a later
-     * widening of the phase set cannot turn an enrollment into a login.
-     */
+    /** An enrollment session must never enter the sign-in ceremony. It is refused by name, not by step. */
     @Test
     void passkeyAuthIsNotReachableFromAnEnrollmentSession() throws Exception {
         LoginSession session = enrollSession();
@@ -1872,7 +1820,6 @@ class LoginFlowControllerTest {
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
-    /** The double-submit check still runs first on the newly reachable step. */
     @Test
     void passkeyAuthFromThePinStepStillRequiresTheCsrfToken() throws Exception {
         LoginSession session = session(Phase.PIN_REQUIRED);
@@ -1912,12 +1859,7 @@ class LoginFlowControllerTest {
         verify(userSecurityService, org.mockito.Mockito.never()).setInitialPin(any(), any());
     }
 
-    /**
-     * The one kind of unavailability the server establishes on its own, from configuration
-     * rather than from anything a caller says: this deployment cannot run a passkey ceremony at
-     * all, so the account is asked for the fallback directly instead of being shown an offer
-     * that would only fail.
-     */
+    /** A deployment that cannot run a passkey ceremony asks for the PIN directly. */
     @Test
     void submitProfileFallsStraightToPinSetupWhenTheDeploymentHasNoPasskeys() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PROFILE_REQUIRED)));
@@ -1937,9 +1879,8 @@ class LoginFlowControllerTest {
     }
 
     /**
-     * Declined, failed, or impossible on this device all arrive at the same endpoint, and all of
-     * them must land on the PIN step. Completing here instead would finish onboarding with no
-     * second factor at all, which is the outcome the PIN exists to prevent.
+     * Declined, failed or impossible on this device all arrive at the same endpoint and all land on
+     * the PIN step. Completing here would finish onboarding with no second factor.
      */
     @Test
     void decliningThePasskeyDuringSignupRoutesToPinSetupAndNeverToCompletion() throws Exception {
@@ -1957,10 +1898,7 @@ class LoginFlowControllerTest {
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
-    /**
-     * A ceremony that fails leaves the session where it was, so the same door is still open: the
-     * client retries or gives up, and giving up reaches the PIN step rather than the end.
-     */
+    /** A failed ceremony leaves the session where it was, so giving up still reaches the PIN step. */
     @Test
     void aFailedPasskeyCeremonyDuringSignupStillReachesPinSetup() throws Exception {
         LoginSession session = newAccountAtPasskeySetup();
@@ -1988,10 +1926,7 @@ class LoginFlowControllerTest {
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
-    /**
-     * The product rule in one test: a new account that registers a passkey is finished. It is
-     * never asked for a PIN, because the PIN is the fallback for whoever could not do this.
-     */
+    /** A new account that registers a passkey is finished and is never asked for a PIN. */
     @Test
     void registeringThePasskeyDuringSignupCompletesWithNoPinDemanded() throws Exception {
         LoginSession session = newAccountAtPasskeySetup();
@@ -2010,10 +1945,7 @@ class LoginFlowControllerTest {
         verify(userSecurityService, org.mockito.Mockito.never()).setInitialPin(any(), any());
     }
 
-    /**
-     * A returning account reaches the offer at the end of a PIN sign-in, and is done when it
-     * declines, exactly as before.
-     */
+    /** A returning account reaches the offer at the end of a PIN sign-in and is done when it declines. */
     @Test
     void decliningThePasskeyAsAReturningUserStillCompletes() throws Exception {
         LoginSession session = session(Phase.PASSKEY_SETUP);
@@ -2032,7 +1964,6 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.phase").value("COMPLETED"));
     }
 
-    /** The PIN step keeps its own double-submit check, which is the only way into it. */
     @Test
     void pinSetupStillRequiresTheCsrfToken() throws Exception {
         LoginSession session = session(Phase.PIN_SETUP);
@@ -2049,7 +1980,7 @@ class LoginFlowControllerTest {
         verify(loginFactorEnrollmentService, org.mockito.Mockito.never()).setUpFirstPin(any(), any());
     }
 
-    /** A brand-new account sitting at the passkey offer, which is where signup now goes first. */
+    /** A brand-new account sitting at the passkey offer. */
     private LoginSession newAccountAtPasskeySetup() {
         LoginSession session = session(Phase.PASSKEY_SETUP);
         session.setUserId("@alice:gua.local");
@@ -2058,7 +1989,7 @@ class LoginFlowControllerTest {
         return session;
     }
 
-    // --- D1: PASSKEY_REQUIRED ---------------------------------------------
+    // --- PASSKEY_REQUIRED ---------------------------------------------
 
     /** An account holding a passkey and no PIN, at the OTP step. */
     private void passkeyOnlyAccountAtOtpStep(boolean deploymentHasPasskeys) {
@@ -2103,9 +2034,9 @@ class LoginFlowControllerTest {
     }
 
     /**
-     * The stored-credential predicate. With passkeys switched off the account cannot present its
-     * passkey, and it must still not be finished by the SMS code or routed to a PIN it would get
-     * to choose. The UI is told the deployment cannot run the ceremony, so it leads with recovery.
+     * With passkeys switched off the account cannot present its passkey, and it must still not be
+     * finished by the SMS code or routed to a PIN it would get to choose. The UI is told the deployment
+     * cannot run the ceremony, so it leads with recovery.
      */
     @Test
     void aStoredPasskeyStillGatesTheSignInWhenTheDeploymentHasPasskeysSwitchedOff() throws Exception {
@@ -2178,10 +2109,7 @@ class LoginFlowControllerTest {
 
     // --- complete() guard and the ENROLLED race ----------------------------
 
-    /**
-     * The backstop. Every route sets the factor before completing; this proves the completion
-     * itself refuses when one does not, whatever the route claimed.
-     */
+    /** Completion itself refuses a session without a factor, whatever the route claimed. */
     @Test
     void completionIsRefusedForASessionThatHasNotAuthenticatedWithAFactor() throws Exception {
         LoginSession session = session(Phase.PASSKEY_SETUP);
@@ -2199,7 +2127,7 @@ class LoginFlowControllerTest {
         verify(loginSessionService, org.mockito.Mockito.never()).delete(any());
     }
 
-    /** A session persisted before the factor field existed carries none, and gets factor_required. */
+    /** A session that carries no factor gets factor_required. */
     @Test
     void aSessionFromBeforeTheRolloutCannotFinishFromPasskeySetup() throws Exception {
         LoginSession session = session(Phase.PASSKEY_SETUP);
@@ -2372,7 +2300,7 @@ class LoginFlowControllerTest {
                         .string("Retry-After", "3600"));
     }
 
-    /** E1, E2: a completed recovery revokes this service's tokens and marks the ID token. */
+    /** A completed recovery revokes this service's tokens and marks the ID token. */
     @Test
     void completingRecoveryIssuesACodeWhoseTokensEndEveryOtherSession() throws Exception {
         LoginSession session = passkeyRequiredSession();
@@ -2426,12 +2354,11 @@ class LoginFlowControllerTest {
         org.mockito.Mockito.verifyNoInteractions(accountRecoveryService, tokenRevocationService);
     }
 
-    // --- R2: adding a factor from settings needs a step-up ------------------------------
+    // --- Adding a factor from settings needs a step-up ------------------------------
 
     /**
-     * A bearer session alone cannot add a passkey. The session the enroll endpoint hands out
-     * starts before the setup step, and arriving at the setup step without having proved the
-     * account is refused, so neither the ceremony nor the credential storage is reachable.
+     * A bearer session alone cannot add a passkey. The enrollment session starts before the setup step,
+     * and arriving at the setup step without having proved the account is refused.
      */
     @Test
     void aBearerSessionAloneCannotAddAPasskey() throws Exception {
@@ -2477,9 +2404,8 @@ class LoginFlowControllerTest {
     }
 
     /**
-     * An account that holds a passkey adds a PIN by producing the passkey, and is never also
-     * asked for a PIN it does not have. The assertion is the step-up ceremony, which demands
-     * user verification, not the sign-in one.
+     * An account that holds a passkey adds a PIN by producing the passkey, and is never asked for a
+     * PIN it does not have. The assertion is the step-up ceremony, which demands user verification.
      */
     @Test
     void anExistingPasskeyAuthorizesAddingAPin() throws Exception {
@@ -2500,7 +2426,7 @@ class LoginFlowControllerTest {
         // Nothing asked for the PIN on the way, which is the point of producing the stronger factor.
         verify(userSecurityService, org.mockito.Mockito.never()).validatePinOrThrow(any(), any());
 
-        // And the PIN step now stores the new PIN and ends the enrollment without a code.
+        // The PIN step stores the new PIN and ends the enrollment without a code.
         when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
         mockMvc.perform(post("/login/pin-setup")
                 .cookie(cookie()).header("X-CSRF-Token", CSRF)
@@ -2543,10 +2469,7 @@ class LoginFlowControllerTest {
         verify(userSecurityService, org.mockito.Mockito.never()).validatePinOrThrow(any(), any());
     }
 
-    /**
-     * An account that holds no factor proves itself with its own number and a code sent to it,
-     * which is the fresh reauthentication the owner asked for before a first strong factor.
-     */
+    /** An account that holds no factor proves itself with its own number and a code sent to it. */
     @Test
     void anAccountWithNoFactorReauthenticatesWithItsNumberAndACode() throws Exception {
         LoginSession session = enrollSession();
@@ -2574,9 +2497,8 @@ class LoginFlowControllerTest {
     }
 
     /**
-     * The SMS proof is only for an account with nothing stronger. An account holding a passkey
-     * or a PIN must produce it, so a code sent to the number can never stand in for the factor
-     * the account already has.
+     * The SMS proof is only for an account with nothing stronger. An account holding a passkey or a
+     * PIN must produce it.
      */
     @Test
     void theOtpStepUpIsRefusedForAnAccountThatHoldsAFactor() throws Exception {
@@ -2652,11 +2574,7 @@ class LoginFlowControllerTest {
         verify(passkeyService, org.mockito.Mockito.never()).finishStepUpAssertion(any(), any());
     }
 
-    /**
-     * The enrollment step-up publishes what the account can produce, so the web knows which
-     * proof to offer, and publishes no recovery: recovery belongs to a sign-in that cannot get
-     * in, not to a signed-in user adding a factor.
-     */
+    /** The enrollment step-up publishes what the account can produce and publishes no recovery. */
     @Test
     void theStepUpStatePublishesTheAccountsFactorsAndNoRecovery() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(enrollSession()));
@@ -2675,11 +2593,7 @@ class LoginFlowControllerTest {
         org.mockito.Mockito.verifyNoInteractions(accountRecoveryService);
     }
 
-    /**
-     * The step-up says whether the account holds a PIN as well, so the web offers "Use my PIN
-     * instead" beside the passkey only to an account that has one. Without it a passkey-only
-     * holder was offered the switch, typed a PIN and was refused with pin_not_set.
-     */
+    /** The step-up says whether the account holds a PIN, so the web offers the PIN only to an account that has one. */
     @Test
     void theStepUpStateSaysWhetherTheAccountHoldsAPin() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(enrollSession()));
@@ -2691,8 +2605,7 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phase").value("ENROLL_STEP_UP"))
                 .andExpect(jsonPath("$.passkeyRegistered").value(true))
-                // The account the finding was about: a passkey and no PIN, where preferredFactor
-                // alone says PASSKEY and cannot tell the web whether a PIN sits behind it.
+                // A passkey and no PIN: preferredFactor alone cannot tell the web whether a PIN sits behind it.
                 .andExpect(jsonPath("$.pinRegistered").value(false));
 
         when(userSecurityService.hasPin("@alice:gua.local")).thenReturn(true);
@@ -2702,12 +2615,7 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.pinRegistered").value(true));
     }
 
-    /**
-     * And nowhere else. An enrollment session was minted from the caller's own bearer token, so
-     * it repeats an answer GET /security/pin/status already gives that caller. A sign-in session
-     * has proved a phone number and nothing more, and preferredFactor deliberately answers
-     * PASSKEY there without saying whether a PIN sits behind it.
-     */
+    /** pinRegistered is published at the enrollment step-up and nowhere else. */
     @Test
     void theSignInStepsStillSayNothingAboutAPinBehindAPasskey() throws Exception {
         LoginSession session = session(Phase.PASSKEY_REQUIRED);
@@ -2727,11 +2635,7 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.pinRegistered").doesNotExist());
     }
 
-    /**
-     * The two waits travel with the recovery state, because the screen that explains them has to
-     * say what this deployment enforces. The dev target runs them in minutes and the web used to
-     * assert seven days there.
-     */
+    /** The two waits travel with the recovery state, so the UI states what this deployment enforces. */
     @Test
     void theRecoveryStateCarriesTheConfiguredWaits() throws Exception {
         LoginSession session = pinRequiredSessionAfterOtp();

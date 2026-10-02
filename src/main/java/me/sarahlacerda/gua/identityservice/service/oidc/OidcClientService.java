@@ -84,9 +84,7 @@ public class OidcClientService {
         }
     }
 
-    /**
-     * Validates code_challenge_method and challenge format. Returns true when PKCE is in use for this request.
-     */
+    /** Validates code_challenge_method and the challenge format. Returns true when PKCE is in use for this request. */
     public boolean validateChallenge(RegisteredClient client, String codeChallenge, String codeChallengeMethod) {
         if (codeChallenge == null || codeChallenge.isBlank()) {
             if (client.requirePkce()) {

@@ -107,10 +107,8 @@ class AccountReauthServiceTest {
     }
 
     /**
-     * The reservation is taken before the number is compared, not after. A read-then-increment
-     * cap bounds a sequential attacker only: parallel requests would all read the same value,
-     * all pass the gate, and all get a number of the attacker's choosing compared against the
-     * account, which is the whole of what the budget exists to stop.
+     * The reservation is taken before the number is compared, not after: a read-then-increment cap
+     * would let a parallel burst all pass the gate.
      */
     @Test
     void theAttemptIsReservedBeforeTheNumberIsCompared() {
@@ -168,9 +166,8 @@ class AccountReauthServiceTest {
     }
 
     /**
-     * The pepper-drift fallback the OTP step of the interactive login uses: a directory row
-     * digested under a rotated pepper no longer matches, and the homeserver's phone binding,
-     * which does not depend on the pepper, still resolves the account.
+     * Pepper-drift fallback: a directory row digested under a rotated pepper no longer matches, and the
+     * homeserver's phone binding still resolves the account.
      */
     @Test
     void aDriftedDigestFallsBackToTheHomeserverPhoneBinding() {
@@ -182,7 +179,7 @@ class AccountReauthServiceTest {
         verify(otpService).sendOtp(PHONE, "1.2.3.4", null);
     }
 
-    /** The admin API is not reliably reachable under MAS; a failure there is a miss, not a pass. */
+    /** A failed homeserver lookup is a miss, not a pass. */
     @Test
     void anUnavailableFallbackRefusesRatherThanAccepts() {
         directoryHolds("digest-under-the-old-pepper");
@@ -256,9 +253,8 @@ class AccountReauthServiceTest {
     }
 
     /**
-     * The window is re-armed on every attempt still inside the budget, so a counter left without
-     * one, because the expire after the first increment failed, picks one up instead of refusing
-     * the account for good.
+     * The window is re-armed on every attempt inside the budget, so a counter left without an expiry
+     * picks one up instead of refusing the account for good.
      */
     @Test
     void aLaterAttemptInsideTheBudgetArmsTheWindowToo() {
@@ -272,10 +268,7 @@ class AccountReauthServiceTest {
         verify(redisTemplate).expire(MISMATCH_KEY, Duration.ofHours(1));
     }
 
-    /**
-     * And not re-armed once the budget is spent: a flood of refused attempts would otherwise
-     * push the window out for as long as it lasted and hold the account holder out with it.
-     */
+    /** Not re-armed once the budget is spent, so a flood of refused attempts cannot extend the window. */
     @Test
     void aRefusedAttemptDoesNotPushTheWindowOut() {
         when(valueOperations.increment(MISMATCH_KEY)).thenReturn(9L);

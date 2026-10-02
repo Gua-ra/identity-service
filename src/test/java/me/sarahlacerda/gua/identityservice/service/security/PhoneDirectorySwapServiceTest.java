@@ -58,7 +58,6 @@ class PhoneDirectorySwapServiceTest {
         assertThatThrownBy(() -> swapService.swap(USER, NEW_E164))
                 .isInstanceOf(PhoneAlreadyLinkedException.class);
 
-        // Nothing destructive happened (transaction would roll back regardless).
         verify(directoryService, never()).deleteByDigest(anyString());
         verify(directoryService, never()).upsertByDigest(anyString(), anyString(), anyString(), anyString());
         verify(userSecurityService, never()).stampPhoneChange(anyString());
@@ -66,7 +65,7 @@ class PhoneDirectorySwapServiceTest {
 
     @Test
     void allowsWhenNewDigestAlreadyOwnedByCaller() {
-        // Idempotent re-run: the new digest is already the caller's — not a conflict.
+        // Idempotent re-run: the new digest is already the caller's, so it is not a conflict.
         when(directoryService.findByDigest(NEW_DIGEST)).thenReturn(Optional.of(
                 DirectoryEntry.builder().phoneDigest(NEW_DIGEST).userId(USER).build()));
         when(directoryService.findByUserId(USER)).thenReturn(List.of(
@@ -87,7 +86,7 @@ class PhoneDirectorySwapServiceTest {
                 .homeserverId("hs-1")
                 .displayName("Alice")
                 .build();
-        old.setDiscoverable(false); // user opted OUT of discovery
+        old.setDiscoverable(false);
         when(directoryService.findByUserId(USER)).thenReturn(List.of(old));
 
         swapService.swap(USER, NEW_E164);
@@ -95,7 +94,7 @@ class PhoneDirectorySwapServiceTest {
         verify(directoryService).deleteByDigest(OLD_DIGEST);
         verify(directoryService).upsertByDigest(eq(NEW_DIGEST), anyString(), eq(USER), eq("Alice"));
         verify(directoryService).assignRouting(NEW_DIGEST, "hs-1", "alice");
-        // Regression guard: the @Builder drops discoverable; the opt-out must survive.
+        // The builder drops discoverable; the opt-out must survive.
         verify(directoryService).setDiscoverable(NEW_DIGEST, false);
         verify(userSecurityService).stampPhoneChange(USER);
     }

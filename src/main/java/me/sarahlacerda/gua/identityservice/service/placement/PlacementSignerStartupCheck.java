@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.security.PrivateKey;
@@ -20,28 +19,16 @@ import me.sarahlacerda.gua.identityservice.service.placement.ResolverPlacementCl
 /**
  * Refuses to start a deployment that would publish placement records under the wrong identity.
  *
- * <p>A generation-1 record is trusted because it is signed by the roster membership key of the
- * homeserver it names, and the resolver verifies it against the key in that homeserver's ACTIVE roster
- * entry. So three things have to line up before this service signs anything: the roster entry has to
- * exist and be ACTIVE, the roster id this deployment is configured to write into records has to be that
- * entry's id, and the private key in the deployment Secret has to be the private half of that entry's
- * published key. Any of them being wrong produces records the resolver silently rejects, or worse,
- * records naming a homeserver this deployment is not.
+ * <p>The resolver verifies a record against the key in the named homeserver's ACTIVE roster entry.
+ * So before this service signs anything: the roster entry must exist and be ACTIVE, the roster id
+ * this deployment writes into records must be that entry's id, and the private key in the deployment
+ * Secret must be the private half of that entry's published key.
  *
- * <p>Checked once at startup and failed fast, in the pattern the directory pepper pin already uses: a
- * misconfiguration that only shows up as a rejection rate on a nightly job is a misconfiguration nobody
- * notices for a week.
+ * <p>The local registry id and the roster id are joined on the Matrix domain, which is unique in the
+ * roster. The legacy synthesised homeserver has no roster identity, so publishing requires an
+ * explicit {@code identity.routing.homeservers} list.
  *
- * <p>Two namespaces meet here, which is the trap this guards. The local registry id is what
- * {@code directory_entries.homeserver_id} holds; the roster id is what a record carries. They are joined
- * on the Matrix domain, which is unique in the roster. The legacy synthesised homeserver has no roster
- * identity at all, so publishing requires an explicit {@code identity.routing.homeservers} list rather
- * than silently inventing one; the alias map exists only so that comparisons can read legacy directory
- * values, never so that a record can be signed for a guessed homeserver.
- *
- * <p>Inert unless {@code identity.placement.publish.enabled} is on. A deployment that only runs the
- * comparison never reaches this check, and one that has turned the feature off entirely never reads the
- * roster at all.
+ * <p>Inert unless {@code identity.placement.publish.enabled} is on.
  */
 @Component
 public class PlacementSignerStartupCheck {
@@ -101,13 +88,9 @@ public class PlacementSignerStartupCheck {
     }
 
     /**
-     * The configured window has to be one the codec will actually encode.
-     *
-     * <p>{@code recordValidity} is a freely configurable {@code Duration} while ADM-008 decision 7 fixes
-     * validity at 400 days and {@link PlacementRecordCodec} refuses anything longer. Without this check a
-     * value of, say, {@code P401D} is accepted at boot and then throws on every single signature, which
-     * surfaces at 03:20 as a job that failed rather than as the misconfiguration it is. Refusing here
-     * costs a restart; the alternative costs a night of the 14-day exit window.
+     * The configured window must be one the codec will encode. {@code recordValidity} is freely
+     * configurable while {@link PlacementRecordCodec} refuses anything over its maximum, so a longer
+     * value fails startup here instead of throwing on every signature.
      */
     private void verifyValidityWindow() {
         Duration validity = properties.getPlacement().getRecordValidity();

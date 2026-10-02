@@ -19,10 +19,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * Which branch a new account takes: attach, bootstrap, or refuse (ADM-008 decision 6).
- *
- * <p>The rule being pinned down is that a handle that was presented and fails to attach fails the whole
- * signup, while a signup presenting no handle at all takes the bootstrap branch and is not a failure.
+ * Which branch a new account takes: attach, bootstrap or refuse. A handle that was presented and
+ * fails to attach fails the whole signup; a signup presenting no handle takes the bootstrap branch.
  */
 class AccountCreationServiceTest {
 
@@ -123,8 +121,7 @@ class AccountCreationServiceTest {
 
     @Test
     void withNoAttachmentAtAllTheAccountIsWrittenExactlyAsBefore() {
-        // What the login flow passes when the feature is off: the creation path is then byte for byte
-        // the two directory writes it has always made.
+        // What the login flow passes when the feature is off: only the two directory writes happen.
         service.createAccount(DIGEST, MASKED, USER_ID, "Alice", "default", "alice", null);
 
         assertTheAccountWasWritten();

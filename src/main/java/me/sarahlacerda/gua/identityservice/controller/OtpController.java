@@ -52,9 +52,8 @@ public class OtpController {
     public ResponseEntity<Void> sendOtp(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Phone number to receive the OTP and optional language preference", required = true, content = @Content(schema = @Schema(implementation = OtpSendRequest.class))) @RequestBody @Valid OtpSendRequest request,
             @Parameter(hidden = true) HttpServletRequest servletRequest) {
-        // Beta gate (inert unless enabled): this legacy REST endpoint has no login
-        // session, so it is always treated as a web flow — an OTP is dispatched only
-        // for a known or allowlisted number, before any SMS is sent.
+        // Web gate (inert unless enabled): this endpoint has no login session, so it is always treated
+        // as a web flow. An OTP is sent only for a known or allowlisted number.
         registrationGuard.assertOtpAllowed(request.getPhone());
         orchestrationService.sendOtp(request.getPhone(), servletRequest.getRemoteAddr(), request.getLanguage());
         return ResponseEntity.accepted().build();

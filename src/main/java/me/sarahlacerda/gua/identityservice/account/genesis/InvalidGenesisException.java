@@ -1,12 +1,8 @@
 package me.sarahlacerda.gua.identityservice.account.genesis;
 
 /**
- * Raised by every strict decoder in this package. Carries a stable {@link #reason()} code so the
- * published golden vectors can name the rule that refuses each rejection case, and so the REST layer
- * can log which rule fired without echoing the bytes back to the caller.
- *
- * <p>The message never contains key material or the offending bytes: a decoder failure is reported to
- * the client as one opaque error code.
+ * Raised by every strict decoder in this package. Carries a stable {@link #reason()} code naming the
+ * rule that fired. The message never contains key material or the offending bytes.
  */
 public class InvalidGenesisException extends RuntimeException {
 

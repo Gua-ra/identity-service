@@ -22,7 +22,6 @@ public class MatrixProvisioningService {
     private final HomeserverRegistry homeserverRegistry;
     private final SecureRandom secureRandom = new SecureRandom();
 
-    /** Builds the full MXID for a localpart on a specific homeserver. */
     public String buildUserId(String localpart, Homeserver homeserver) {
         return homeserver.userId(localpart);
     }
@@ -52,10 +51,8 @@ public class MatrixProvisioningService {
     }
 
     /**
-     * Returns the E.164 numbers currently linked to {@code userId} on the homeserver,
-     * excluding {@code keep}. Read-only. The phone-change path no longer calls it:
-     * the old numbers were only read so they could be unpublished from the resolver
-     * directory, and that publishing client is gone (ADM-001 L1b).
+     * Returns the E.164 numbers currently linked to {@code userId} on the homeserver, excluding
+     * {@code keep}. Read-only.
      */
     public List<String> getLinkedPhonesExcluding(String userId, String keep) {
         return matrixAdminClient.getLinkedPhones(userId).stream()

@@ -27,10 +27,9 @@ public class AccountReauthVerifyRequest {
     private String code;
 
     /**
-     * Operation the issued token may be spent on. Binding the token to a single
-     * operation closes a confused-deputy hole (a deactivate token must not be
-     * spendable on a phone change). Defaults to {@code DEACTIVATE} to keep existing
-     * deactivate/reset clients working while new flows request {@code PHONE_CHANGE}.
+     * Operation the issued token may be spent on. Binding the token to one operation means a
+     * deactivate token cannot be spent on a phone change. Defaults to {@code DEACTIVATE} so older
+     * clients keep working.
      */
     @Schema(description = "Privileged operation the token will authorize", example = "PHONE_CHANGE",
             defaultValue = "DEACTIVATE")

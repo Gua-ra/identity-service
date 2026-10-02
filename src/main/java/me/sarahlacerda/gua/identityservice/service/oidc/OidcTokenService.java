@@ -49,8 +49,7 @@ public class OidcTokenService {
         SignedJWT accessToken = buildJwt(authorization, properties.getAccessTokenTtl().toSeconds(), false);
         SignedJWT idToken = buildJwt(authorization, properties.getIdTokenTtl().toSeconds(), true);
         if (authorization.endOtherSessions()) {
-            // The claim leaves this service in this ID token, so the sign-out a recovery owed the
-            // account has been handed over. Until here a failed or abandoned login keeps it owed.
+            // Settled only once the claim has left in an ID token. A failed or abandoned login keeps it owed.
             endOtherSessionsService.settle(authorization.userId());
         }
 
@@ -107,11 +106,10 @@ public class OidcTokenService {
     }
 
     /**
-     * Extracts the authenticated subject from an OIDC {@code id_token_hint} supplied
-     * on a re-authentication authorize request. The hint must be one of our own
-     * RS256-signed ID tokens (verified signature + issuer); we ignore expiry here so
-     * a stale-but-genuine session can still re-verify. Returns the {@code sub}, or
-     * empty when the hint is missing, malformed, or not issued by us.
+     * Extracts the subject from an OIDC {@code id_token_hint} on a re-authentication request. The hint
+     * must be one of our own RS256-signed ID tokens (signature and issuer verified); expiry is ignored
+     * so a stale but genuine session can still re-verify. Returns the {@code sub}, or empty when the
+     * hint is missing, malformed or not issued by us.
      */
     public Optional<String> subjectFromIdTokenHint(String idTokenHint) {
         if (idTokenHint == null || idTokenHint.isBlank()) {
@@ -136,13 +134,11 @@ public class OidcTokenService {
     }
 
     /**
-     * Per RFC 9068 a resource server must reject access tokens that were not issued
-     * for it. Every token we mint carries the requesting client id as its audience,
-     * so we accept a token only when its audience includes a currently-registered
-     * client, and the client it matched on is the client behind the caller.
+     * Per RFC 9068 a resource server must reject access tokens not issued for it. Every token minted
+     * here carries the requesting client id as its audience, so a token is accepted only when its
+     * audience includes a currently registered client.
      *
-     * @return the registered client id the token was accepted on, or empty when its
-     *         audience names none, which is the token being refused
+     * @return the registered client id the token was accepted on, or empty when the token is refused
      */
     private Optional<String> knownAudience(List<String> audience) {
         if (audience == null || audience.isEmpty()) {
@@ -177,8 +173,8 @@ public class OidcTokenService {
         if (authorization.preferredUsername() != null) {
             builder.claim("preferred_username", authorization.preferredUsername());
         }
-        // The nonce binds an ID token to the client's authorization request (OIDC core
-        // 3.1.3.7). It belongs only in the ID token, never the access token.
+        // The nonce binds an ID token to the client's authorization request (OIDC core 3.1.3.7). It
+        // belongs only in the ID token, never the access token.
         if (includeNonce && authorization.nonce() != null) {
             builder.claim("nonce", authorization.nonce());
         }

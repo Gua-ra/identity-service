@@ -19,18 +19,12 @@ import me.sarahlacerda.gua.identityservice.service.RateLimiter;
 import me.sarahlacerda.gua.identityservice.service.SmsSender;
 
 /**
- * Sends and verifies the OTP for the <em>new</em> number in a phone-change flow.
+ * Sends and verifies the OTP for the new number in a phone-change flow.
  *
- * <p>
- * Deliberately a sibling of {@link me.sarahlacerda.gua.identityservice.service.OtpService}
- * rather than a reuse of it: the code is namespaced per <b>challenge</b>
- * ({@code otp:code:change:{challengeId}}) instead of per phone
- * ({@code otp:code:{e164}}). That isolation means the public {@code /otp/send}
- * endpoint — which writes {@code otp:code:{e164}} — can neither overwrite nor race
- * the change OTP, and an attacker cannot pre-seed a code for the target number.
- * The per-phone / per-IP send rate limits and SMS metrics mirror OtpService so
- * abuse accounting stays consistent.
- * </p>
+ * <p>The code is keyed per challenge ({@code otp:code:change:{challengeId}}) instead of per phone
+ * ({@code otp:code:{e164}}), so the public {@code /otp/send} endpoint can neither overwrite nor
+ * pre-seed it. Send rate limits and SMS metrics mirror
+ * {@link me.sarahlacerda.gua.identityservice.service.OtpService}.
  */
 @Service
 public class PhoneChangeOtpService {
@@ -85,10 +79,9 @@ public class PhoneChangeOtpService {
     }
 
     /**
-     * Verifies {@code code} against the challenge-namespaced OTP. Single-use:
-     * deletes the key on success. Throws {@link InvalidOtpException} when the code
-     * is missing, expired, or wrong. The comparison is constant-time; the caller
-     * ({@code PhoneChangeService}) owns the per-challenge attempt cap.
+     * Verifies {@code code} against the challenge-namespaced OTP. Single-use: deletes the key on
+     * success. Throws {@link InvalidOtpException} when the code is missing, expired or wrong. The
+     * comparison is constant-time; the caller owns the per-challenge attempt cap.
      */
     public void verify(String challengeId, String code) {
         String key = otpKey(challengeId);

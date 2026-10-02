@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.time.Instant;
@@ -24,45 +23,31 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Shad
 import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRegistry;
 
 /**
- * Compares, for every account, where this service thinks it lives against where it actually lives, and
- * publishes a generation-1 placement record for the accounts whose evidence is unambiguous (ADM-008
- * decision 9, Phase 4).
+ * Compares, for every account, where this service thinks it lives against where it actually lives,
+ * and publishes a generation-1 placement record for the accounts whose evidence is unambiguous.
+ * Shadow mode: compute, publish, compare, serve nothing.
  *
- * <p>This runs here because identity-service is the only component holding both halves of the join: the
- * phone digest to Matrix user id to accountId mapping, and its own homeserver choice. Neither the
- * resolver nor any MAS can make this comparison alone.
- *
- * <h2>What is compared</h2>
+ * <p>What is compared:
  * <ul>
- *   <li><b>D</b>, this service's local routing choice, from the account's most recent directory row. A
- *       null or {@code default} value means the legacy homeserver, and the alias map says which roster
- *       id that is.</li>
+ *   <li><b>D</b>, this service's local routing choice, from the account's most recent directory row.
+ *       A null or {@code default} value means the legacy homeserver.</li>
  *   <li><b>M</b>, the homeservers whose MAS holds a link for this account. Links with no MAS user are
  *       unfinished logins and are dropped. This is the only committed evidence of placement.</li>
- *   <li><b>U</b>, the MAS username behind that link, checked by composing the Matrix user id it implies
- *       and comparing, which also cross-checks the server name the account's own id carries.</li>
+ *   <li><b>U</b>, the MAS username behind that link, checked by composing the Matrix user id it
+ *       implies and comparing.</li>
  *   <li><b>R</b>, the published record, read back and decoded.</li>
  * </ul>
  *
- * <h2>Two things this must never do</h2>
- * <p>It never logs a phone number. The scan selects no phone column, nothing downstream carries one, and
- * the structured line below names an accountId, a Matrix user id and homeserver ids only. It also never
- * reads the MAS column that holds a phone in the deployed configuration; see {@link MasSqlLinkReader}.
- *
- * <p>Nothing here feeds the resolution path. A published record is read for comparison and for the
- * re-issue decision, and for nothing else; the directory heal, when it is switched on, takes its value
- * from the MAS link and never from a record, so no routing decision can be traced back to placement
- * state. That is the explicit non-goal of this phase, and the guard test holds it.
+ * <p>It never logs or reads a phone number (see {@link MasSqlLinkReader}), and nothing here feeds the
+ * resolution path: a published record is read for comparison and for the re-issue decision only, and
+ * the directory heal takes its value from the MAS link, never from a record.
  */
 @Component
 public class PlacementShadowReconciler {
 
     private static final Logger log = LoggerFactory.getLogger(PlacementShadowReconciler.class);
 
-    /**
-     * What an operator has to do to make this job runnable. Printed in full rather than as a code,
-     * because the job cannot run at all until one of the two paths is granted.
-     */
+    /** What an operator has to do to make this job runnable. Printed in full when neither MAS read path is granted. */
     static final String NO_MAS_ACCESS = """
             Placement shadow reconciliation is enabled but this deployment has no way to read the MAS \
             links that are the only committed evidence of where an account lives, so the comparison did \
@@ -95,8 +80,8 @@ public class PlacementShadowReconciler {
     }
 
     /**
-     * Daily, and only when the scheduler is on at all: {@code PlacementSchedulingConfig} gates
-     * {@code @EnableScheduling} on the same flag, so with the feature off this method is never invoked.
+     * Daily. {@code PlacementSchedulingConfig} gates {@code @EnableScheduling} on the same flag, so with
+     * the feature off this method is never invoked.
      */
     @Scheduled(cron = "${identity.placement.shadow.cron:0 20 3 * * *}")
     public void reconcileOnSchedule() {
@@ -142,19 +127,15 @@ public class PlacementShadowReconciler {
                 try {
                     result = examine(row, reader, byFederationId, shadow, now);
                 } catch (UnknownHomeserverException ex) {
-                    // Fails closed and loudly. A homeserver the comparison cannot resolve used to skip
-                    // both cross-checks and still hand the account a clean classification, which is a
-                    // fail-open in exactly the counts the phase exit is read from.
+                    // An unresolvable homeserver counts as a failure, never as agreement.
                     failures++;
                     metrics.failed("unknown_homeserver");
                     log.error("placement_shadow_failed accountId={} userId={} reason=unknown_homeserver "
                             + "masHomeserver={}", row.accountId(), row.userId(), ex.homeserverId());
                     continue;
                 } catch (RuntimeException ex) {
-                    // One unreadable row must not end the run. The scan continues, the account is counted
-                    // as a failure rather than as agreement, and the completion gauge still advances so
-                    // the alert fires on the failure counter rather than on a job that appears to have
-                    // stopped.
+                    // One unreadable row must not end the run. The account is counted as a failure and the
+                    // completion gauge still advances, so the alert fires on the failure counter.
                     failures++;
                     metrics.failed("error");
                     log.error("placement_shadow_failed accountId={} userId={} reason=error type={}",
@@ -184,8 +165,7 @@ public class PlacementShadowReconciler {
         }
 
         if (homes.isEmpty()) {
-            // Never completed a delegated login. Publishing nothing is deliberate: the MAS link is the
-            // only committed evidence, and the Matrix user id is a name rather than a proof.
+            // Never completed a delegated login. Nothing is published: the MAS link is the only committed evidence.
             return report(row, PlacementShadowResult.MAS_NONE, null, null, "no_mas_link", false);
         }
         if (homes.size() > 1) {
@@ -197,22 +177,19 @@ public class PlacementShadowReconciler {
         MasLink link = links.get(0);
 
         if (homeserver == null) {
-            // Both cross-checks below need this homeserver's domain, so an unresolvable one cannot be
-            // waved through: skipping them silently would let the account be reported as agreeing when
-            // in fact nothing was compared. The caller counts this as a failure, never as a result.
+            // Both cross-checks below need this homeserver's domain. Skipping them would report the account
+            // as agreeing when nothing was compared, so the caller counts this as a failure.
             throw new UnknownHomeserverException(masHome);
         }
         if (!row.userId().endsWith(":" + homeserver.getDomain())) {
-            // The account's own id names one homeserver and its link lives on another: the same "one
-            // subject, two homeservers" finding, and equally not something to publish a record for.
+            // The account's own id names one homeserver and its link lives on another.
             return report(row, PlacementShadowResult.MAS_MULTIPLE, masHome, null, "subject_home_mismatch",
                     false);
         }
         if (link.masUsername() != null && !link.masUsername().isBlank()
                 && !composeUserId(homeserver, link.masUsername()).equals(row.userId())) {
-            // Composed forward, from the MAS username to the Matrix user id it implies, rather than by
-            // taking a localpart out of the id: this service derives localparts in exactly one place and
-            // a comparison job is not it.
+            // Composed forward from the MAS username: localparts are derived in exactly one place and this is
+            // not it.
             return report(row, PlacementShadowResult.MAS_USERNAME_MISMATCH, masHome, null, "username_merge",
                     false);
         }
@@ -242,7 +219,7 @@ public class PlacementShadowReconciler {
         }
 
         // Publishing is decided from the evidence, not from the classification, so a stale local routing
-        // row does not stop a record being written for an account whose evidence is otherwise clean.
+        // row does not stop a record being written for an account whose evidence is clean.
         maybePublish(row, masHome, published, now);
         maybeHeal(row, masHome, homeserver, shadow, result, known);
 
@@ -305,8 +282,7 @@ public class PlacementShadowReconciler {
                 resolver.publish(signer.sign(accountId, origin, masHome, now));
         metrics.published(outcome.name().toLowerCase(java.util.Locale.ROOT));
         if (outcome == ResolverPlacementClient.PublishOutcome.CONFLICT) {
-            // One accountId has one home. A conflict is never retried and never forced; it is a person's
-            // problem to explain, and moving an account between homeservers is refused outright.
+            // One accountId has one home. A conflict is never retried and never forced.
             log.error("placement_conflict accountId={} userId={} masHomeserver={}", row.accountId(),
                     row.userId(), masHome);
         }
@@ -318,9 +294,7 @@ public class PlacementShadowReconciler {
         if (!shadow.isHealDirectory() || result != PlacementShadowResult.DIRECTORY_STALE || known) {
             return;
         }
-        // The value written is this deployment's own registry id for the homeserver the MAS link named,
-        // which the caller already resolved from masHome. No published record is consulted: routing state
-        // must never be derived from placement records in this phase.
+        // The value comes from the MAS link. Routing state must never be derived from a published record.
         int updated = scanner.healDirectoryHomeserver(row.userId(), homeserver.getId());
         log.info("placement_directory_healed userId={} homeserver={} masHomeserver={} rows={}",
                 row.userId(), homeserver.getId(), masHome, updated);
@@ -356,7 +330,6 @@ public class PlacementShadowReconciler {
         return resolver.findRecord(accountId);
     }
 
-    /** Composition, from a localpart to the Matrix user id it implies. */
     private static String composeUserId(HomeserverConfig homeserver, String localpart) {
         return "@" + localpart + ":" + homeserver.getDomain();
     }

@@ -30,12 +30,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The {@code gua:} login-hint grammar (ADM-008 decision 6, step 2).
- *
- * <p>The grammar is strict on purpose. An unparsable hint, an unknown or duplicated key and a malformed
- * {@code genesis} value are refused rather than ignored, because quietly dropping a handle is the silent
- * downgrade the decision forbids. It applies only to prefixed hints and only while the feature is on, so
- * the reserved value {@code passkey} and every other hint keep the behaviour they had before it existed.
+ * The {@code gua:} login-hint grammar. Strict: an unparsable hint, an unknown or duplicated key and
+ * a malformed {@code genesis} value are refused, not ignored. It applies only to prefixed hints and
+ * only while the feature is on.
  */
 @WebMvcTest(OidcAuthorizationController.class)
 @AutoConfigureMockMvc(addFilters = false)
@@ -160,8 +157,7 @@ class OidcAuthorizationGenesisHintTest {
 
         authorize("gua:phone=+15551234567;genesis=" + HANDLE).andExpect(status().isFound());
 
-        // Exactly what an identity-service without this grammar does: the "gua" prefix is not one of
-        // the phone prefixes, so there is no prefill, no handle, and nothing else changes.
+        // The "gua" prefix is not one of the phone prefixes, so there is no prefill and no handle.
         LoginSession session = parkedSession();
         assertThat(session.getPhoneHint()).isNull();
         assertThat(session.getGenesisAttachHandle()).isNull();

@@ -16,11 +16,9 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 
 /**
- * Pins the shipped {@code identity.rate-limits} rules of {@code application.yml} for
- * the endpoints that check a credential. Each must resolve to its own per-address
- * rule, never to {@code default-config}: 120 a minute is a throughput guard, not a
- * guess budget. Bound through the same binder the application uses, so a rule that
- * is dropped or misspelt in the YAML fails here instead of in production.
+ * Pins the shipped {@code identity.rate-limits} rules of {@code application.yml} for the endpoints
+ * that check a credential. Each must resolve to its own per-address rule, never to
+ * {@code default-config}: 120 a minute is a throughput guard, not a guess budget.
  */
 class RateLimitConfigurationTest {
 
@@ -52,9 +50,8 @@ class RateLimitConfigurationTest {
             "/login/enroll/stepup/otp/verify, 10, PT1M",
             "/login/enroll/stepup/passkey/options, 20, PT1M",
             "/login/enroll/stepup/passkey/verify, 20, PT1M",
-            // Re-authentication. Both check the submitted number against the account's own
-            // binding, and verify checks a code on top. Bearer calls, so the limiter key carries
-            // the user as well as the address, but the rule is needed for the same reason.
+            // Re-authentication: both check the submitted number against the account's own binding, and
+            // verify checks a code on top.
             "/account/reauth/start, 5, PT1M",
             "/account/reauth/verify, 10, PT1M"
     })

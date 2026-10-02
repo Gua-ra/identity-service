@@ -57,7 +57,7 @@ class AccountLocalpartResolverTest {
                 .isEqualTo("alice.s");
     }
 
-    /** The S6 trap: re-keying user_id to a colon-bearing value must not change the localpart. */
+    /** Re-keying user_id to a colon-bearing value must not change the localpart. */
     @Test
     void storedUsernameDoesNotDependOnTheUserId() {
         assertThat(resolver.forExistingAccount("ga1abc:x", List.of(row("ga1abc:x", "alice")))).isEqualTo("alice");
@@ -70,7 +70,6 @@ class AccountLocalpartResolverTest {
         assertThat(resolver.forExistingAccount("@alice:dev.local", List.of())).isEqualTo("alice");
     }
 
-    /** The old derivation gave both of these accounts the localpart {@code ga1abc}. */
     @Test
     void colonBearingIdsSharingAPrefixNeverShareALocalpart() {
         assertRefused(() -> resolver.forExistingAccount("ga1abc:x", List.of(row("ga1abc:x", null))));

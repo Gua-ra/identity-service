@@ -23,19 +23,11 @@ import org.springframework.core.type.classreading.SimpleMetadataReaderFactory;
 import me.sarahlacerda.gua.identityservice.domain.MatrixIds;
 
 /**
- * Regression guard for ADM-001 S6. Returning users used to present
- * {@code localpartOf(userId)} to MAS as {@code preferred_username}: the text before the
- * first colon of whatever the user id was. With the MAS claims import set to
- * {@code on_conflict: add}, re-keying {@code user_id} to a colon-bearing value, or any
- * other change that gives two accounts one localpart, links each such account onto a
- * single MAS user. The localpart now comes from the username stored in the directory,
- * chosen by {@code AccountLocalpartResolver}, with {@code MatrixIds} as its strict
- * fallback parser.
- *
- * <p>The guard fails if a localpart derivation from a user id comes back: a class
- * declaring its own {@code localpartOf}, main code splitting a user id on its colon, a
- * caller of the parser other than the resolver, or a {@code setPreferredUsername} whose
- * value comes from anywhere but the resolver or the handle a new user just chose.
+ * Fails if main code derives a localpart from a user id anywhere but {@code AccountLocalpartResolver}
+ * and {@code MatrixIds}: a class declaring its own {@code localpartOf}, code splitting a user id on
+ * its colon, a caller of the parser other than the resolver, or a {@code setPreferredUsername} whose
+ * value comes from anywhere but the resolver or the handle a new user just chose. MAS imports the
+ * localpart with {@code on_conflict: add}, so two accounts sharing one would be merged.
  */
 class LocalpartDerivationGuardTest {
 
@@ -53,10 +45,7 @@ class LocalpartDerivationGuardTest {
             "\\b(?:\\w*[uU]serId|\\w*[mM]xid|\\w*[mM]atrixId|subject)(?:\\(\\))?\\s*\\.\\s*"
                     + "(?:indexOf|lastIndexOf|split|substring|replaceFirst|replaceAll|replace)\\s*\\(");
 
-    /**
-     * Reviewed exceptions. These lines read the server name after the colon (the Matrix
-     * domain reported for legacy directory rows), never the localpart.
-     */
+    /** Reviewed exceptions: these lines read the server name after the colon, never the localpart. */
     private static final Map<String, Set<String>> SURGERY_ALLOWED = Map.of(
             "DirectoryController.java", Set.of(
                     "int colon = userId.indexOf(':');",

@@ -30,13 +30,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * The attack cases the attach proof exists to stop (ADM-008 decision 6).
- *
- * <p>The premise throughout: anyone can compose an authorize URL, so an attach handle is
- * attacker-controlled in both directions. The dangerous shape is an attacker's own genesis carried in a
- * URL that prefills the victim's number, which the victim's OTP then passes. What stops it is that the
- * attach also needs a signature over bytes the server chose for this session, under the key committed
- * inside the registered genesis.
+ * The attack cases the attach proof exists to stop. Anyone can compose an authorize URL, so an
+ * attach handle is attacker-controlled. The dangerous shape is an attacker's own genesis carried in
+ * a URL that prefills the victim's number. What stops it is that the attach also needs a signature
+ * over bytes the server chose for this session, under the key inside the registered genesis.
  */
 class AccountAttachProofTest {
 
@@ -137,8 +134,7 @@ class AccountAttachProofTest {
     void aProofIsNotReplayableAgainstARowThatIsNoLongerPending() {
         String challenge = challenge();
         String proof = proofOver(challenge, accountId, authority.privateKey());
-        // The row this handle names has already been attached: the shape the compare-and-set leaves
-        // behind, built here rather than mutated, since the state is not settable from outside.
+        // Built in the attached state because it is not settable from outside.
         when(repository.findByAttachHandleHash(AccountGenesisService.sha256Hex(handle)))
                 .thenReturn(Optional.of(AccountGenesisRecord.attachedGenesis(accountId.value(), USER_ID,
                         (short) 1, (short) 1, row.getGenesisB64(), row.getAuthorityKeyB64(), Instant.now())));

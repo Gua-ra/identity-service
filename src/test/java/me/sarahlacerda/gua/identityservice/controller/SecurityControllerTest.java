@@ -84,9 +84,8 @@ class SecurityControllerTest {
     }
 
     /**
-     * R2: a bearer session on its own never adds a durable factor. The endpoint stores nothing
-     * and names the flow that does the work, so an older client is told where to go instead of
-     * failing on a payload that was never going to be kept.
+     * A bearer session on its own never adds a durable factor. The endpoint stores nothing and names
+     * the flow that does.
      */
     @Test
     void theBearerFirstPinIsRefusedAndNamesTheEnrollmentFlow() throws Exception {
@@ -211,10 +210,8 @@ class SecurityControllerTest {
     }
 
     /**
-     * The sheet has to return to the build that opened it, and each build registers its own
-     * scheme, so the redirect comes from the caller's own client rather than from one value
-     * for the whole deployment. The client is read off the verified token, never from anything
-     * the caller sends.
+     * For a token this service minted, the redirect comes from the caller's own client registration,
+     * read off the verified token and never from anything the caller sends.
      */
     @Test
     void theEnrollmentRedirectComesFromTheClientBehindTheToken() throws Exception {
@@ -234,10 +231,9 @@ class SecurityControllerTest {
     }
 
     /**
-     * A homeserver-issued token names no client of ours; a registered client may have no redirect
-     * at all; and a client whose redirects are all web origins, the authentication service among
-     * them, is not an app that can be handed back to. All three fall back to the configured app
-     * scheme rather than to a value the web view is not listening for.
+     * A homeserver-issued token names no client of ours, a registered client may have no redirect, and
+     * a client whose redirects are all web origins is not an app. All three fall back to the configured
+     * app scheme.
      */
     @Test
     void theEnrollmentRedirectFallsBackToTheConfiguredValue() throws Exception {
@@ -284,12 +280,7 @@ class SecurityControllerTest {
         return captor.getValue();
     }
 
-    /**
-     * The case the whole allowlist exists for. An app's bearer is a homeserver token, so it
-     * names no OIDC client of ours and the client-registration path above can never fire for
-     * one: the build has to be able to say which scheme it answers, or the QA sheet has no way
-     * back to the build that opened it.
-     */
+    /** An app's bearer is a homeserver token, so the build names the scheme it answers. */
     @Test
     void theCallerMayNameARedirectTheDeploymentAllows() throws Exception {
         loginProperties.getEnroll().setRedirectUri("global.gua:/oidc");
@@ -311,10 +302,8 @@ class SecurityControllerTest {
     }
 
     /**
-     * A redirect the deployment has not allowlisted is refused, and the refusal is the whole
-     * answer: no session is created, so nothing carries the value, and the message does not
-     * repeat it back, so the endpoint cannot be used to reflect a string of the caller's
-     * choosing. Clients treat this as the signal to retry once with no redirect.
+     * A redirect the deployment has not allowlisted is refused: no session is created and the message
+     * does not repeat the value. Clients treat this as the signal to retry once with no redirect.
      */
     @Test
     void aRedirectOutsideTheAllowlistIsRefusedAndNoSessionIsCreated() throws Exception {
@@ -339,11 +328,7 @@ class SecurityControllerTest {
                 .create(org.mockito.ArgumentMatchers.any(LoginSession.class));
     }
 
-    /**
-     * A near miss is still a miss. The match is exact on purpose: an allowlist that normalized
-     * or prefix-matched would be deciding on the caller's behalf what counts as the same app,
-     * which is the one judgement the list exists to take away from the caller.
-     */
+    /** A near miss is still a miss: the match is exact. */
     @Test
     void aRedirectThatOnlyLooksLikeAnAllowedOneIsRefused() throws Exception {
         loginProperties.getEnroll().setRedirectUris(java.util.List.of("global.gua.dev:/oidc"));
@@ -364,11 +349,7 @@ class SecurityControllerTest {
                 .create(org.mockito.ArgumentMatchers.any(LoginSession.class));
     }
 
-    /**
-     * Until a deployment configures the list, the allowlist is exactly the single value it
-     * already had, so shipping this changes no deployment's behaviour until its configuration
-     * changes. Dev has to add the QA schemes before a QA build can name one.
-     */
+    /** Until a deployment configures the list, the allowlist is exactly the single configured redirect. */
     @Test
     void theAllowlistIsTheSingleConfiguredRedirectUntilTheDeploymentNamesMore() throws Exception {
         loginProperties.getEnroll().setRedirectUri("global.gua:/oidc");
@@ -392,11 +373,7 @@ class SecurityControllerTest {
         org.junit.jupiter.api.Assertions.assertEquals("global.gua:/oidc", createdSession().getRedirectUri());
     }
 
-    /**
-     * Resolution order: a caller that names an allowed redirect is answering the question the
-     * client registration only guesses at, so it wins. The registration stays as the step for a
-     * token this service minted itself.
-     */
+    /** Resolution order: a caller that names an allowed redirect wins over the client registration. */
     @Test
     void anAllowedNameBeatsTheClientRegistration() throws Exception {
         OidcProperties.ClientRegistration storeBuild = new OidcProperties.ClientRegistration();
@@ -419,9 +396,7 @@ class SecurityControllerTest {
 
     /**
      * An absent field, an absent body and a blank value are the same request: the client named
-     * nothing, so the deployment's own resolution runs. A blank value is what an app computes
-     * when its build configuration is missing a scheme, and dead-ending that would cost the
-     * enrollment rather than just the redirect.
+     * nothing, so the deployment's own resolution runs.
      */
     @Test
     void anAbsentOrBlankRedirectLeavesTheDeploymentsOwnResolutionAlone() throws Exception {
@@ -464,11 +439,8 @@ class SecurityControllerTest {
     }
 
     /**
-     * The one account the step-up has no proof for: it holds a passkey, holds no PIN, and this
-     * deployment cannot run a passkey ceremony. The assertion is impossible here, there is no
-     * PIN to give, and the SMS proof is refused to an account that holds a factor, so the
-     * session would publish PHONE_OTP as the thing to offer and then refuse it. Both entry
-     * points say so instead of handing out that session.
+     * The one account the step-up has no proof for: it holds a passkey and no PIN, and this deployment
+     * cannot run a passkey ceremony. Both entry points refuse instead of handing out that session.
      */
     @Test
     void enrollmentIsRefusedWhenNoProofCanRunOnThisDeployment() throws Exception {
@@ -621,10 +593,7 @@ class SecurityControllerTest {
 
         mockMvc.perform(MockMvcRequestBuilders.get("/security/pin/status"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
-                // Registered, which is server truth. There is no field for the client to say
-                // the credential cannot be used on this device, and there must not be: anyone
-                // holding a session could set it, so it would only ever be a way to be offered
-                // something weaker.
+                // Registered is server truth. There is no field for the client to say the credential cannot be used.
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .jsonPath("$.passkeyRegistered").value(true))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
@@ -654,18 +623,12 @@ class SecurityControllerTest {
                         .jsonPath("$.passkeyRegistered").value(false))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .jsonPath("$.preferredFactor").value("PIN"))
-                // The accepted set does not shrink to what this account holds. A client that
-                // registers a passkey later does not need a different answer, and more to the
-                // point, narrowing it per account is how the set collapses onto the one factor
-                // that has become unusable.
+                // The accepted set does not shrink to what this account holds.
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .jsonPath("$.phoneChangeStepUpFactors.length()").value(2));
     }
 
-    /**
-     * E3: the unauthenticated reset shared the recovery episode but not its rules. Both paths now
-     * answer 410 whatever is sent, without reading a body and without touching any account.
-     */
+    /** The unauthenticated reset is retired: both paths answer 410 without reading a body or touching any account. */
     @Test
     void theRetiredPinResetEndpointsAnswerGoneAndTouchNothing() throws Exception {
         for (String path : new String[] { "/security/pin/reset", "/security/pin/reset/complete" }) {
@@ -722,11 +685,7 @@ class SecurityControllerTest {
                         .jsonPath("$.accountRecoveryExpiresAtEpochSeconds").value(1_760_604_800L));
     }
 
-    /**
-     * The two waits are configuration, not episode state, so they are reported whether or not a
-     * recovery is live. A client that states them itself is right only on a deployment left at
-     * the defaults, which the dev target is not.
-     */
+    /** The two waits are configuration, not episode state, so they are reported whether or not a recovery is live. */
     @Test
     void pinStatusReportsTheConfiguredRecoveryWaitsWithNoLiveEpisode() throws Exception {
         org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");

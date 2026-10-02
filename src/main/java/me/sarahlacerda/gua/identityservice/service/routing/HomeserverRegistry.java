@@ -16,17 +16,12 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Home
 import me.sarahlacerda.gua.identityservice.domain.Homeserver;
 
 /**
- * In-memory registry of the homeservers this deployment provisions accounts to,
- * built from local configuration. It is not the federation membership, which is
- * the resolver's roster, and a homeserver chosen from it is a local routing
- * choice, not a placement record: those are the committed placements of
- * <a href="https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md">ADM-001</a>
- * L6, which nothing here implements.
+ * In-memory registry of the homeservers this deployment provisions accounts to, built from local
+ * configuration. It is not the federation membership, which is the resolver's roster.
  *
- * <p>Back-compatible by design: when {@code identity.routing.homeservers} is not
- * configured, the registry synthesises a single homeserver from the legacy
- * {@code identity.matrix.*} properties (id {@value #LEGACY_ID}), so existing
- * single-homeserver deployments behave exactly as before.
+ * <p>When {@code identity.routing.homeservers} is not configured, the registry synthesises a single
+ * homeserver from the legacy {@code identity.matrix.*} properties (id {@value #LEGACY_ID}), so
+ * single-homeserver deployments behave as before.
  */
 @Component
 @RequiredArgsConstructor
@@ -87,7 +82,6 @@ public class HomeserverRegistry {
                 .orElseThrow(() -> new IllegalStateException("No enabled homeserver configured"));
     }
 
-    /** All registered homeservers in declaration order. */
     public List<Homeserver> all() {
         return List.copyOf(byId.values());
     }
@@ -105,7 +99,6 @@ public class HomeserverRegistry {
         return findById(id).orElseThrow(() -> new IllegalArgumentException("Unknown homeserver id: " + id));
     }
 
-    /** The homeserver that hosts the given Matrix domain, if any is registered. */
     public Optional<Homeserver> findByDomain(String domain) {
         return byId.values().stream().filter(hs -> hs.domain().equals(domain)).findFirst();
     }

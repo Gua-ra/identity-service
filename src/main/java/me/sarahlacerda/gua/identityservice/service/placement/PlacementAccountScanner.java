@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.util.List;
@@ -13,26 +12,18 @@ import org.springframework.transaction.annotation.Transactional;
  * Reads the accounts the shadow comparison walks: an accountId, the account it is attached to, its
  * origin, and this service's local routing choice for it.
  *
- * <p><b>No phone column is selected here.</b> {@code directory_entries} holds a phone digest and a
- * masked phone, and neither is in the statement below or needed by anything downstream. The comparison
- * works on accountIds, Matrix user ids and homeserver ids only.
+ * <p><b>No phone column is selected here.</b> The comparison works on accountIds, Matrix user ids
+ * and homeserver ids only.
  *
- * <p>Multiple directory rows exist for one account transiently while a phone change is in flight, so
- * the routing choice is read with a scalar subquery that takes the most recently updated row. Counting
- * an account twice, or reading the row that is about to be deleted, would produce findings that are
- * artefacts of the scan.
- *
- * <p>Keyset pagination rather than OFFSET, so a long run is resumable and rows inserted while it runs
- * do not shift the window.
+ * <p>A phone change can leave several directory rows for one account briefly, so the routing choice
+ * is read with a scalar subquery that takes the most recently updated row. Keyset pagination instead
+ * of OFFSET, so a long run is resumable.
  */
 @Component
 @RequiredArgsConstructor
 public class PlacementAccountScanner {
 
-    /**
-     * Portable on purpose: a scalar subquery with {@code ORDER BY ... LIMIT 1} rather than a lateral
-     * join, so the embedded engine the unit profile uses and the Postgres production runs on agree.
-     */
+    /** A scalar subquery, not a lateral join, so the embedded test database and Postgres agree. */
     private static final String NEXT_BATCH = """
             SELECT g.account_id,
                    g.user_id,
@@ -84,8 +75,7 @@ public class PlacementAccountScanner {
      * Writes the local routing choice back from the evidence. Only reached behind
      * {@code identity.placement.shadow.heal-directory}, which is off by default.
      *
-     * @param registryHomeserverId this deployment's own registry id, not the roster id: the directory
-     *                             column has always held the local namespace and this does not change it
+     * @param registryHomeserverId this deployment's own registry id, not the roster id
      * @return rows updated
      */
     @Transactional

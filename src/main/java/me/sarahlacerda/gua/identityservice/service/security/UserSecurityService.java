@@ -63,9 +63,8 @@ public class UserSecurityService {
     }
 
     /**
-     * Sets the first PIN on a row the caller has already locked. Package-private for the
-     * enrollment step of the login flow, which has to weigh what else the account holds under the
-     * same lock before it decides this PIN may be set at all.
+     * Sets the first PIN on a row the caller has already locked. Package-private for the enrollment
+     * step of the login flow, which weighs what else the account holds under the same lock.
      */
     void setInitialPin(IdentityUser user, String newPin) {
         if (user.hasPin()) {
@@ -106,14 +105,12 @@ public class UserSecurityService {
     }
 
     /**
-     * Step 1, second half: sends the PIN change code and records the challenge. Package-private
-     * and unguarded on purpose: it authorizes nothing, so its only caller is
-     * {@link PinChangeService}, after {@link #preparePinChange(String, String)} and an accepted
-     * factor.
+     * Step 1, second half: sends the PIN change code and records the challenge. It authorizes nothing,
+     * so its only caller is {@link PinChangeService}, after {@link #preparePinChange(String, String)}
+     * and an accepted factor.
      */
     String issuePinChangeChallenge(String userId, String phone, String requesterIp) {
-        // The challenge id is minted before the send because it is what the code is keyed
-        // under. Scoped to this challenge, the code cannot be planted by, or satisfied by,
+        // The challenge id is minted before the send because the code is keyed under it, out of reach of
         // the unauthenticated public send.
         String challengeId = UUID.randomUUID().toString();
         otpService.sendScopedOtp(OtpScope.PIN_CHANGE, challengeId, phone, requesterIp, null);
@@ -177,29 +174,13 @@ public class UserSecurityService {
     }
 
     /**
-     * Seconds still to run on the hold that keeps a freshly minted PIN from being spent as
-     * the phone-change step-up factor; {@code 0} when nothing is held.
+     * Seconds still to run on the hold that keeps a freshly set PIN from being spent as the
+     * phone-change step-up factor; {@code 0} when nothing is held.
      *
-     * <p>
-     * A login session can create, change or recover a PIN, and that PIN is then accepted as
-     * the step-up factor on a phone change. The permissive login side is therefore itself a
-     * route to re-pointing the number, and a SIM-swap attacker who reaches a session only
-     * has to set a PIN of their own. Holding the new PIN for a window closes that without
-     * taking any factor away from anyone: nothing is refused permanently, the account keeps
-     * every way in it had, and the hold simply expires.
-     *
-     * <p>
-     * The window is {@code identity.security.pin-reset-cooldown}, which also applies to a PIN
-     * obtained through account recovery (it is stamped the same way), rather than a second
-     * seven-day constant sitting next to it. Both express the same thing: a knowledge factor that has
-     * only just come into existence is not yet trusted for a takeover-shaped action. An
-     * operator who retunes one is retuning both, deliberately.
-     *
-     * <p>
-     * {@code pin_set_at} is stamped on every path that gives the account a new PIN (initial
-     * set, update, OTP-protected change, account recovery), so it is exactly "when the current PIN came
-     * into being". An account with no PIN, or one whose stamp predates the window, is not
-     * held.
+     * <p>A login session can create, change or recover a PIN, so without the hold a SIM-swap attacker
+     * who reaches a session could set a PIN and re-point the number at once. The window is
+     * {@code identity.security.pin-reset-cooldown}. {@code pin_set_at} is stamped on every path that
+     * gives the account a new PIN (initial set, update, OTP-protected change, account recovery).
      */
     @Transactional(readOnly = true)
     public long changePhonePinHoldRemainingSeconds(String userId) {
@@ -209,9 +190,8 @@ public class UserSecurityService {
     }
 
     /**
-     * Refuses a phone change whose step-up PIN is still inside the fresh-2FA hold. An
-     * ADDITIONAL refusal: it never stands in for the per-account phone-change cooldown or
-     * for the account recovery gates, which are unchanged and still run.
+     * Refuses a phone change whose step-up PIN is still inside the fresh-2FA hold. In addition to the
+     * per-account phone-change cooldown, which still runs.
      */
     @Transactional(readOnly = true)
     public void enforcePhoneChangePinHold(String userId) {
@@ -223,19 +203,9 @@ public class UserSecurityService {
     }
 
     /**
-     * Refuses a phone change whose accepted step-up factor came into existence inside the
-     * fresh-2FA hold, on the same window and with the same error as the PIN above.
-     *
-     * <p>
-     * Deliberately knows nothing about which factor it is weighing, and takes the instant
-     * rather than an account: which factors exist, and why a newly minted one is not yet
-     * trusted for a takeover-shaped action, is the caller's business. This service owns PIN
-     * recovery, and the one thing it must never learn to do is decide anything from what
-     * else an account holds.
-     *
-     * <p>
-     * Nothing is taken away by it. An established factor settles the step-up at once, every
-     * other way through is untouched, and the refusal expires on its own.
+     * Refuses a phone change whose accepted step-up factor came into existence inside the fresh-2FA
+     * hold, on the same window and with the same error as the PIN above. Takes the instant, not the
+     * account: this service must not decide anything from what else an account holds.
      *
      * @param factorCreatedAt when the factor that was accepted came into being
      */
@@ -261,16 +231,13 @@ public class UserSecurityService {
      */
     private long freshFactorHoldRemainingSeconds(Instant factorCreatedAt) {
         if (factorCreatedAt == null) {
-            // No stamp. Both stamps are NOT NULL columns written when the factor comes into
-            // being, so the only row that could lack one is older than the column itself,
-            // which is the opposite of a factor minted a moment ago.
+            // No stamp: the row predates the column, so the factor is not new.
             return 0L;
         }
         Duration hold = properties.getSecurity().getPinResetCooldown();
         Duration since = Duration.between(factorCreatedAt, Instant.now());
         if (since.isNegative()) {
-            // Clock skew put the stamp in the future. Hold for the whole window rather than
-            // for longer than the window.
+            // Clock skew put the stamp in the future: hold for the whole window.
             return hold.toSeconds();
         }
         if (since.compareTo(hold) >= 0) {
@@ -281,11 +248,9 @@ public class UserSecurityService {
     }
 
     /**
-     * Stamps the time of a successful phone-number change. Called inside the swap
-     * transaction so the cooldown clock starts atomically with the mapping switch.
-     * Creates the row when a token-only account does not have one yet, and locks it like
-     * every other writer of this row: an unlocked read here would write back whatever
-     * recovery stamp or PIN hash it had read over a cancel or completion committed in between.
+     * Stamps the time of a successful phone-number change. Called inside the swap transaction so the
+     * cooldown clock starts atomically with the mapping switch. Creates the row when the account has
+     * none, and locks it like every other writer of this row.
      */
     @Transactional
     public void stampPhoneChange(String userId) {
@@ -342,35 +307,24 @@ public class UserSecurityService {
         }
 
         resetFailureTracking(user);
-        // Producing the PIN ends any account recovery pending on this account. Somebody who can
-        // produce the PIN is not the person locked out of it, and a recovery left running would
-        // hand the account to whoever started it once the wait is over. This is not a challenge
-        // restarting the clock, which stays forbidden; it is the episode being over.
+        // Producing the PIN ends any pending account recovery: somebody who can produce the PIN is not
+        // locked out, and a recovery left running would hand the account to whoever started it.
         user.setPinResetRequestedAt(null);
         auditLogger.pinValidationSucceeded(userId);
     }
 
     @Transactional
     public void recordSuccessfulLogin(String userId) {
-        // Locked, because this write races the recovery writers: an unlocked read here followed
-        // by a full-row update could put back a PIN hash or a recovery stamp that a concurrent
-        // recovery completion or cancel had just committed.
+        // Locked, because this write races the recovery writers.
         IdentityUser user = lockOrCreateUser(userId);
         user.setLastLoginAt(Instant.now());
         resetFailureTracking(user);
-        // A finished sign-in ends any recovery episode pending on the account, for the reason
-        // spelled out on validatePinOrThrow. Only a completed login reaches here, which means the
-        // account holder produced whatever that account's login demands, so they are not the
-        // person locked out of it. A recovery completion has already ended its own episode by
-        // the time its sign-in is recorded, so this never stands in its way.
+        // A completed sign-in ends any pending recovery episode.
         user.setPinResetRequestedAt(null);
     }
 
-    // ---------------------------------------------------------------------------------------
-    // Row-locked primitives for AccountRecoveryService and the login enrollment step. They hold
-    // no policy of their own: what the account holds beyond its PIN, and whether an episode may
-    // open, finish or end, is decided by the caller inside its own transaction.
-    // ---------------------------------------------------------------------------------------
+    // Row-locked primitives for AccountRecoveryService and the login enrollment step. They hold no
+    // policy of their own: the caller decides inside its own transaction.
 
     /** Reads the account row without locking it, for status answers that write nothing. */
     Optional<IdentityUser> findUser(String userId) {
@@ -383,14 +337,9 @@ public class UserSecurityService {
     }
 
     /**
-     * Locks the account row, creating it first when the account has never had one. An account
-     * that signed in only through paths that never wrote security state has no row yet.
-     *
-     * <p>
-     * A missing row has nothing to lock, so the insert is flushed at once: two transactions
-     * creating the same row then meet on the {@code user_id} unique index, the second waits for
-     * the first and fails with a {@code DataIntegrityViolationException} instead of carrying on
-     * as if it held the only row.
+     * Locks the account row, creating it first when the account has never had one. The insert is
+     * flushed at once, so two transactions creating the same row meet on the {@code user_id} unique
+     * index and the second fails with a {@code DataIntegrityViolationException}.
      */
     IdentityUser lockOrCreateUser(String userId) {
         return repository.findByUserIdForUpdate(userId)
@@ -428,8 +377,8 @@ public class UserSecurityService {
 
     /**
      * Gives a locked row the PIN a completed recovery chose: validated like every other new PIN,
-     * stamped {@code pin_set_at = now} so the fresh-factor hold on a phone change applies to it,
-     * with the episode ended and any failure count or lock cleared.
+     * stamped {@code pin_set_at = now} so the fresh-factor hold applies to it, with the episode ended
+     * and any failure count or lock cleared.
      */
     void applyRecoveredPin(IdentityUser user, String newPin) {
         validatePinFormat(newPin);

@@ -21,15 +21,10 @@ import org.testcontainers.utility.DockerImageName;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The hand-mirrored schema (src/test/resources/db/schema-mirror.sql) is written by hand from the Flyway
- * migrations, which is the likeliest source of a test-versus-production divergence. This applies the
- * real migrations to one schema, the hand-written mirror to another, and compares the resulting columns.
- *
- * <p>Mirrors the test of the same name in gua-resolver, which guards the same hazard there. It runs on
- * Postgres rather than H2 because the migrations are Postgres-only: V5 adds two columns in a single
- * ALTER TABLE and indexes {@code LOWER(username)}, neither of which H2 accepts. Running the comparison
- * on the engine production uses is also the only way the answer means anything. Like the other
- * Testcontainers classes here, it needs a Docker daemon.
+ * The schema mirror (src/test/resources/db/schema-mirror.sql) is written by hand from the Flyway
+ * migrations. This applies the real migrations to one schema, the mirror to another, and compares
+ * the resulting columns. It runs on Postgres because the migrations are Postgres-only, so it needs
+ * a Docker daemon.
  */
 @Testcontainers
 class SchemaParityTest {
@@ -63,10 +58,7 @@ class SchemaParityTest {
         assertThat(columns(dataSource, "mirrored")).isEqualTo(columns(dataSource, "migrated"));
     }
 
-    /**
-     * Resolved through DriverManager rather than a named Driver class: the Postgres driver is a
-     * runtimeOnly dependency, so it is on the test runtime classpath but not the compile one.
-     */
+    /** Resolved through DriverManager because the Postgres driver is runtimeOnly. */
     private static DataSource dataSource() {
         DriverManagerDataSource dataSource = new DriverManagerDataSource();
         dataSource.setUrl(postgres.getJdbcUrl());

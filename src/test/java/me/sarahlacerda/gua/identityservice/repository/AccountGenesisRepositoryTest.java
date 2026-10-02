@@ -16,15 +16,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The genesis table against a real database engine.
+ * The genesis table against a real database engine. The compare-and-set attach is the point: a
+ * mocked repository cannot show that the SQL makes two racing sessions resolve to a single attach.
  *
- * <p>The compare-and-set attach is the point of this class: it is what makes two sessions racing on one
- * handle resolve to a single attach, and a mocked repository cannot show that the SQL actually says so.
- *
- * <p>The schema comes from the entity mapping rather than from Flyway, because the migrations are
- * Postgres-only and will not run on an embedded database (V5 alone adds two columns in one ALTER TABLE
- * and indexes an expression). That the mapping and the migration agree is a separate question, and it
- * is the one {@code SchemaParityTest} answers on Postgres.
+ * <p>The schema comes from the entity mapping because the Flyway migrations are Postgres-only.
+ * {@code SchemaParityTest} checks that the two agree.
  */
 @DataJpaTest(properties = {
         "spring.flyway.enabled=false",

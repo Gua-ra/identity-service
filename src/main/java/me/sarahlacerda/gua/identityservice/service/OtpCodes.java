@@ -10,9 +10,8 @@ public final class OtpCodes {
     }
 
     /**
-     * Whether {@code submitted} equals {@code stored} without leaking, through
-     * timing, how many leading characters matched. A {@code null} submission is a
-     * mismatch, never an error, so it counts as a wrong guess like any other.
+     * Constant-time comparison: does not leak through timing how many leading characters matched. A
+     * {@code null} submission is a mismatch, never an error.
      */
     public static boolean matches(String stored, String submitted) {
         byte[] expected = stored.getBytes(StandardCharsets.UTF_8);

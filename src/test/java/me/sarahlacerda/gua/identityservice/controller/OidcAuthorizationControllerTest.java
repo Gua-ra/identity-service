@@ -58,10 +58,6 @@ import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 @AutoConfigureMockMvc(addFilters = false)
 class OidcAuthorizationControllerTest {
 
-    // The controller now also reads IdentityServiceProperties, which the slice already provides from
-    // @EnableConfigurationProperties. Account genesis is off in it by default, so the "gua:" login-hint
-    // grammar is not parsed here and every assertion below is the behaviour from before it existed.
-
     private static final String CALLBACK = "https://client.example.com/callback";
     private static final String PKCE_CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 
@@ -86,11 +82,7 @@ class OidcAuthorizationControllerTest {
     @MockitoBean
     private EndpointRateLimiter endpointRateLimiter;
 
-    /**
-     * Not a dependency of the controller any more. Present in the slice only so the
-     * legacy-parameter regression can assert, explicitly, that no OTP is ever
-     * verified on {@code /oauth2/authorize}.
-     */
+    /** Present only so a test can assert that no OTP is verified on /oauth2/authorize. */
     @MockitoBean
     private OtpService otpService;
 
@@ -177,13 +169,9 @@ class OidcAuthorizationControllerTest {
     }
 
     /**
-     * Regression for ADM-001 L1a. The removed non-interactive branch verified an OTP
-     * supplied as a query parameter and redirected straight back to the client with
-     * an authorization code, so control of the SMS channel alone yielded a session.
-     * A request that still carries those parameters must be indistinguishable from
-     * an interactive request: same redirect to the login UI, same parked session at
-     * the phone step, no code anywhere, and neither the OTP service nor the
-     * authorization service is touched.
+     * A request that still carries the legacy OTP query parameters must be indistinguishable from an
+     * interactive request: same redirect to the login UI, same parked session at the phone step, no
+     * code, and neither the OTP service nor the authorization service is touched.
      */
     @Test
     void authorizeIgnoresLegacyOtpParametersAndNeverIssuesCode() throws Exception {
@@ -238,13 +226,7 @@ class OidcAuthorizationControllerTest {
         verifyNoInteractions(otpService);
     }
 
-    /**
-     * The service no longer has any path that turns an OTP into an authorization
-     * code. The removal is already enforced at compile time (the controller cannot
-     * call a method that does not exist, and the request record it took is gone);
-     * this check keeps the removal visible as a named test so a reintroduction
-     * fails loudly rather than silently compiling.
-     */
+    /** Keeps the removal visible as a named test: no path turns an OTP into an authorization code. */
     @Test
     void authorizationServiceHasNoOtpBackedCodeIssuancePath() {
         assertThat(Arrays.stream(OidcAuthorizationService.class.getDeclaredMethods()).map(Method::getName))
@@ -300,11 +282,9 @@ class OidcAuthorizationControllerTest {
     }
 
     /**
-     * The native apps send the reserved login_hint {@code passkey} when the user taps
-     * "Sign in with a passkey" and MAS forwards it verbatim. It is an intent, not a
-     * phone number: the session parks at the phone step as usual, flagged PASSKEY,
-     * and the marker never lands in the phone hint. Matching ignores case and
-     * surrounding whitespace.
+     * The reserved login_hint {@code passkey} is an intent, not a phone number: the session parks at
+     * the phone step flagged PASSKEY, and the marker never lands in the phone hint. Matching ignores
+     * case and surrounding whitespace.
      */
     @ParameterizedTest
     @ValueSource(strings = {"passkey", "PASSKEY", " passkey "})
