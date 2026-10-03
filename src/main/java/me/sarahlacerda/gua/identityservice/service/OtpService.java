@@ -1,6 +1,7 @@
 package me.sarahlacerda.gua.identityservice.service;
 
 import java.time.Duration;
+import java.util.function.BiPredicate;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -20,6 +21,9 @@ public class OtpService {
     private static final String ATTEMPTS_KEY_PREFIX = "otp:attempts:";
     private static final String PHONE_RATE_KEY_PREFIX = "otp:rate:phone:";
     private static final String IP_RATE_KEY_PREFIX = "otp:rate:ip:";
+    /** Which live code a review sign-in issued; see {@link #sendLoginOtp}. */
+    private static final String REVIEW_LOGIN_KEY_PREFIX = "otp:review-login:";
+    private static final String EXHAUSTED_MESSAGE = "Too many incorrect verification codes; request a new code";
 
     private final StringRedisTemplate redisTemplate;
     private final IdentityServiceProperties properties;
@@ -27,6 +31,7 @@ public class OtpService {
     private final SmsSender smsSender;
     private final RateLimiter rateLimiter;
     private final MeterRegistry metrics;
+    private final ReviewLogin reviewLogin;
     private final String smsProvider;
 
     public OtpService(
@@ -35,7 +40,8 @@ public class OtpService {
         OtpCodeGenerator codeGenerator,
         SmsSender smsSender,
         RateLimiter rateLimiter,
-        MeterRegistry metrics
+        MeterRegistry metrics,
+        ReviewLogin reviewLogin
     ) {
         this.redisTemplate = redisTemplate;
         this.properties = properties;
@@ -43,6 +49,7 @@ public class OtpService {
         this.smsSender = smsSender;
         this.rateLimiter = rateLimiter;
         this.metrics = metrics;
+        this.reviewLogin = reviewLogin;
         // e.g. TwilioSmsSender -> "twilio", LoggingSmsSender -> "logging". Lets the SMS-usage metric
         // distinguish the real provider from the dev logger once real SMS is wired.
         this.smsProvider = SmsSender.providerTag(smsSender);
@@ -50,6 +57,65 @@ public class OtpService {
 
     public void sendOtp(String e164PhoneNumber, String requesterIp, String language) {
         send(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), e164PhoneNumber, requesterIp, language);
+    }
+
+    /**
+     * The interactive sign-in's send: {@link #sendOtp} for every number except the store review
+     * number ({@link ReviewLogin}). That one gets the same rate limits, a fresh random code under
+     * the same key with the same TTL and a fresh guess budget, takes about as long as a real send,
+     * and texts nothing. The random code is what every other reader of the per-phone key sees, so
+     * reauthentication and the REST sign-in still need a code nobody was sent.
+     */
+    public void sendLoginOtp(String e164PhoneNumber, String requesterIp, String language) {
+        if (!reviewLogin.isReviewNumber(e164PhoneNumber)) {
+            sendOtp(e164PhoneNumber, requesterIp, language);
+            return;
+        }
+        try {
+            enforceRateLimits(e164PhoneNumber, requesterIp);
+        } catch (OtpRateLimitedException ex) {
+            reviewLogin.record(e164PhoneNumber, ReviewLogin.Outcome.SEND_RATE_LIMITED);
+            throw ex;
+        }
+        String code = codeGenerator.generateNumericCode(properties.getOtp().getCodeLength());
+        storeFreshCode(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), code);
+        // Binds the review code to this code alone: any later send replaces the code and so ends it.
+        redisTemplate.opsForValue().set(reviewLoginKey(e164PhoneNumber), code, properties.getOtp().getTtl());
+        reviewLogin.waitLikeAProviderCall();
+        reviewLogin.record(e164PhoneNumber, ReviewLogin.Outcome.SENT);
+    }
+
+    /**
+     * The interactive sign-in's verify: {@link #verifyOtp} for every number except the store review
+     * number, which, while its live code is the one {@link #sendLoginOtp} issued, is compared
+     * against the review code instead. Same guess cap, expiry and burn as any other code.
+     *
+     * <p>
+     * The review code is checked with bcrypt, which takes tens to hundreds of milliseconds, so
+     * while the review login is on every comparison made here, for any number, pays for exactly
+     * one bcrypt check. A wrong guess then answers in the same time whichever number it is for.
+     */
+    public void verifyLoginOtp(String e164PhoneNumber, String code) {
+        if (!reviewLogin.isReviewNumber(e164PhoneNumber)) {
+            verify(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), code, OtpVerifyFlow.PHONE,
+                    this::matchesAfterAReviewCodeCheck);
+            return;
+        }
+        String bindingKey = reviewLoginKey(e164PhoneNumber);
+        ReviewLoginCheck check = new ReviewLoginCheck(bindingKey);
+        try {
+            verify(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), code, OtpVerifyFlow.PHONE, check);
+        } catch (InvalidOtpException ex) {
+            ReviewLogin.Outcome outcome = EXHAUSTED_MESSAGE.equals(ex.getMessage()) ? ReviewLogin.Outcome.EXHAUSTED
+                    : check.compared ? ReviewLogin.Outcome.REJECTED : ReviewLogin.Outcome.NO_CODE;
+            if (outcome == ReviewLogin.Outcome.EXHAUSTED) {
+                redisTemplate.delete(bindingKey);
+            }
+            reviewLogin.record(e164PhoneNumber, outcome);
+            throw ex;
+        }
+        redisTemplate.delete(bindingKey);
+        reviewLogin.record(e164PhoneNumber, ReviewLogin.Outcome.ACCEPTED);
     }
 
     /**
@@ -67,7 +133,8 @@ public class OtpService {
 
     /** Redeems a scoped code under the same per-code guess cap as {@link #verifyOtp}. */
     public void verifyScopedOtp(OtpScope scope, String scopeId, String code) {
-        verify(scopedCodeKey(scope, scopeId), scopedAttemptsKey(scope, scopeId), code, scope.verifyFlow());
+        verify(scopedCodeKey(scope, scopeId), scopedAttemptsKey(scope, scopeId), code, scope.verifyFlow(),
+                OtpCodes::matches);
     }
 
     /**
@@ -85,18 +152,23 @@ public class OtpService {
         String code = codeGenerator.generateNumericCode(properties.getOtp().getCodeLength());
         String messageBody = SmsTemplates.forLanguage(properties.getOtp(), language).formatted(code);
 
-        Duration ttl = properties.getOtp().getTtl();
-        // A fresh code starts with a fresh guess budget.
-        redisTemplate.delete(attemptsKey);
-        redisTemplate.opsForValue().set(codeKey, code, ttl);
+        storeFreshCode(codeKey, attemptsKey, code);
+        long started = System.nanoTime();
         try {
             smsSender.send(e164PhoneNumber, messageBody);
+            reviewLogin.observeProviderLatency(Duration.ofNanos(System.nanoTime() - started));
             // gua_identity_sms_send_total{provider,result} — SMS usage + delivery failures.
             metrics.counter("gua.identity.sms.send", "provider", smsProvider, "result", "sent").increment();
         } catch (RuntimeException ex) {
             metrics.counter("gua.identity.sms.send", "provider", smsProvider, "result", "failed").increment();
             throw ex;
         }
+    }
+
+    private void storeFreshCode(String codeKey, String attemptsKey, String code) {
+        // A fresh code starts with a fresh guess budget.
+        redisTemplate.delete(attemptsKey);
+        redisTemplate.opsForValue().set(codeKey, code, properties.getOtp().getTtl());
     }
 
     /**
@@ -111,10 +183,11 @@ public class OtpService {
      * fast one address can guess, this bounds how many guesses a code can absorb at all.
      */
     public void verifyOtp(String e164PhoneNumber, String code) {
-        verify(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), code, OtpVerifyFlow.PHONE);
+        verify(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), code, OtpVerifyFlow.PHONE, OtpCodes::matches);
     }
 
-    private void verify(String codeKey, String attemptsKey, String code, OtpVerifyFlow flow) {
+    private void verify(String codeKey, String attemptsKey, String code, OtpVerifyFlow flow,
+            BiPredicate<String, String> matches) {
         String storedCode = redisTemplate.opsForValue().get(codeKey);
         if (!StringUtils.hasText(storedCode)) {
             // gua_identity_otp_verify_total{result} — wrong/expired codes (auth friction / abuse signal).
@@ -127,7 +200,7 @@ public class OtpService {
             // A parallel guess spent the last slot between this one's GET and INCR.
             throw exhausted(codeKey, flow);
         }
-        if (!OtpCodes.matches(storedCode, code)) {
+        if (!matches.test(storedCode, code)) {
             metrics.counter("gua.identity.otp.verify", "result", "invalid", "flow", flow.tagValue()).increment();
             if (attempts < maxAttempts) {
                 throw new InvalidOtpException("Invalid or expired verification code");
@@ -152,7 +225,7 @@ public class OtpService {
         redisTemplate.delete(codeKey);
         // gua_identity_otp_verify_total{result="exhausted"}: guesses refused by the cap (brute-force signal).
         metrics.counter("gua.identity.otp.verify", "result", "exhausted", "flow", flow.tagValue()).increment();
-        return new InvalidOtpException("Too many incorrect verification codes; request a new code");
+        return new InvalidOtpException(EXHAUSTED_MESSAGE);
     }
 
     private Duration remainingTtl(String codeKey) {
@@ -166,6 +239,10 @@ public class OtpService {
 
     private static String attemptsKey(String e164PhoneNumber) {
         return ATTEMPTS_KEY_PREFIX + e164PhoneNumber;
+    }
+
+    private static String reviewLoginKey(String e164PhoneNumber) {
+        return REVIEW_LOGIN_KEY_PREFIX + e164PhoneNumber;
     }
 
     private static String scopedCodeKey(OtpScope scope, String scopeId) {
@@ -188,4 +265,37 @@ public class OtpService {
         }
     }
 
+    /**
+     * A sign-in comparison against a live code: the plain one, after the bcrypt check the review
+     * code's comparison costs, so it takes as long. No bcrypt while the review login is off.
+     */
+    private boolean matchesAfterAReviewCodeCheck(String storedCode, String submitted) {
+        reviewLogin.spendAReviewCodeCheck(submitted);
+        return OtpCodes.matches(storedCode, submitted);
+    }
+
+    /**
+     * The review number's comparison: the review code while the live code is the one a review
+     * sign-in issued, the live code itself otherwise (a code another flow texted to the number).
+     * Either way one bcrypt check, like every other sign-in comparison.
+     */
+    private final class ReviewLoginCheck implements BiPredicate<String, String> {
+
+        private final String bindingKey;
+        private boolean compared;
+
+        ReviewLoginCheck(String bindingKey) {
+            this.bindingKey = bindingKey;
+        }
+
+        @Override
+        public boolean test(String storedCode, String submitted) {
+            compared = true;
+            String issuedForReview = redisTemplate.opsForValue().get(bindingKey);
+            if (issuedForReview != null && OtpCodes.matches(issuedForReview, storedCode)) {
+                return reviewLogin.matchesReviewCode(submitted);
+            }
+            return matchesAfterAReviewCodeCheck(storedCode, submitted);
+        }
+    }
 }

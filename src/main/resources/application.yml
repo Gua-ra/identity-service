@@ -95,6 +95,13 @@ identity:
         enabled: ${IDENTITY_PLACEMENT_MAS_ADMIN_API_ENABLED:false}
       sql:
         enabled: ${IDENTITY_PLACEMENT_MAS_SQL_ENABLED:false}
+  # Store review login: one project-owned number signs in with a fixed code instead of an SMS, for app
+  # store reviewers. Off unless enabled; when on, a missing or malformed phone or hash refuses startup.
+  # The hash is bcrypt, never the code. See README "Store review login".
+  review-login:
+    enabled: ${GUA_REVIEW_LOGIN_ENABLED:false}
+    phone: ${GUA_REVIEW_LOGIN_PHONE:}
+    code-hash: ${GUA_REVIEW_LOGIN_CODE_HASH:}
   rate-limits:
     enabled: ${IDENTITY_RATE_LIMITS_ENABLED:true}
     default-config:

@@ -486,6 +486,28 @@ Returning users are not blocked as long as their directory row resolves: that nu
 
 **Limits.** The marker travels in a browser redirect, so the user can edit it, and MAS derives it from a `client_uri` that a dynamically registered client sets for itself. Treat the native exemption as a convenience for the beta apps, not a security boundary; SMS rate limits remain the defence against credit burn. An unforgeable signal needs a MAS-side change, such as a signed or PAR-carried downstream claim.
 
+### Store review login
+
+Lets app store reviewers, who cannot receive our SMS, sign in to one project-owned account. Off by default. When on, the configured number gets a fixed code instead of an SMS, on the interactive sign-in only (`POST /login/phone`, `POST /login/otp`). The account's PIN or passkey is still required, and delayed account recovery, which would replace that PIN, is never offered to this number; the operator recovers that account outside the app. Every other number, and every other OTP use of this number (re-authentication, change of number, PIN change, enrollment step-up, the REST `/otp/*` endpoints), is unchanged and still texted.
+
+Set it up:
+
+1. Pick a random code with `identity.otp.code-length` digits (6). It goes in the store's review instructions with the number and the account PIN.
+2. Hash it. This prompts twice and prints a bcrypt hash at cost 10, the PIN hashes' cost, so the code never reaches shell history (on Linux, `htpasswd` is in `apache2-utils`). While the feature is on, every sign-in code check of every number pays one comparison at this cost, so keep it at 10:
+
+   ```bash
+   htpasswd -nBC 10 "" | tr -d ':\n'
+   ```
+
+3. Set, from a secret: `GUA_REVIEW_LOGIN_ENABLED=true`, `GUA_REVIEW_LOGIN_PHONE` (exactly E.164, and a number libphonenumber accepts as valid: the fictional 555 range is refused) and `GUA_REVIEW_LOGIN_CODE_HASH` (bcrypt, cost 10 to 14). The hash contains `$`: single-quote it in a shell, write each `$` as `$$` in a compose file.
+4. Create the account once by signing up that number in the app with the code, then set its PIN and seed its test conversation.
+
+Before turning it on, make sure the public host refuses `/actuator/prometheus`. The metrics count review sends and SMS sends, so anyone who can read them can tell which number was sent nothing.
+
+A missing or malformed number or hash refuses startup. A review send texts nothing but keeps the normal response, rate limits and roughly the provider's timing. The code is accepted only after a sign-in send, within the normal OTP lifetime, and five wrong guesses burn it like any code. Every sign-in code check pays one bcrypt comparison while the feature is on, so a wrong guess for the review number answers as fast as one for any other number. Each send and verify logs a WARN line `Store review login <outcome> for ••••1234` and counts `gua_identity_review_login_total{outcome}`. Neither the code nor the hash is logged.
+
+**Turn it off** by setting `GUA_REVIEW_LOGIN_ENABLED=false` (or removing it) and rolling the pods. To rotate the code, replace the hash.
+
 ### Signing & configuration
 
 Tokens are signed with **RS256**. Provide the keypair via `OIDC_RSA_PRIVATE_KEY` / `OIDC_RSA_PUBLIC_KEY` (key id from `OIDC_JWK_KEY_ID`, default `oidc-signing-key`). If the keys are unset, an **ephemeral** key is generated at startup (dev only). The issuer is taken from `IDENTITY_BASE_URL`, so point it at the publicly reachable base path (e.g. `https://identity.example.com`). Token TTLs: authorization code `PT5M`, access token `PT15M`, ID token `PT15M` (all overridable).
