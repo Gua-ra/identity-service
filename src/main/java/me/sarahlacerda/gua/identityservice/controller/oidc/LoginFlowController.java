@@ -54,6 +54,7 @@ import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
 import me.sarahlacerda.gua.identityservice.service.RegistrationGuard;
+import me.sarahlacerda.gua.identityservice.service.ReviewLogin;
 import me.sarahlacerda.gua.identityservice.service.account.AccountCreationService;
 import me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService;
 import me.sarahlacerda.gua.identityservice.service.routing.AccountPlacementContext;
@@ -162,6 +163,7 @@ public class LoginFlowController {
     private final AccountReauthService accountReauthService;
     private final TokenRevocationService tokenRevocationService;
     private final EndOtherSessionsService endOtherSessionsService;
+    private final ReviewLogin reviewLogin;
 
     @GetMapping("/context")
     @Operation(summary = "Fetch the current login state", description = "Returns the current step, the login intent (PHONE or PASSKEY, from the OIDC login_hint), a CSRF token to echo on subsequent calls, the login language (locale) when known, the masked phone when known, and whether this is an in-app passkey enrollment. Once the step is one the flow can only reach with the subject resolved, it also reports passkeyRegistered, preferredFactor and passkeysEnabled; all are absent before then, and in particular at the phone step, where the session holds a submitted number and nothing proved. At ENROLL_STEP_UP, and only there, it additionally reports pinRegistered, so the step-up offers the PIN beside the passkey only to an account that holds one. At PIN_REQUIRED and PASSKEY_REQUIRED after an OTP it also reports recovery, the delayed account recovery state, which is absent whenever recovery is not available to this session.")
@@ -239,7 +241,11 @@ public class LoginFlowController {
         // flows are exempt. Runs before the SMS is dispatched.
         registrationGuard.assertOtpAllowed(session, phone);
         String locale = postedLocale(request, session);
-        otpService.sendOtp(phone, servletRequest.getRemoteAddr(), locale);
+        if (isSignIn(session)) {
+            otpService.sendLoginOtp(phone, servletRequest.getRemoteAddr(), locale);
+        } else {
+            otpService.sendOtp(phone, servletRequest.getRemoteAddr(), locale);
+        }
 
         session.setPhoneNumber(phone);
         session.setLocale(locale);
@@ -258,7 +264,11 @@ public class LoginFlowController {
         requireCsrf(session, csrf);
         requirePhase(session, Phase.OTP_SENT);
 
-        otpService.verifyOtp(session.getPhoneNumber(), request.code().trim());
+        if (isSignIn(session)) {
+            otpService.verifyLoginOtp(session.getPhoneNumber(), request.code().trim());
+        } else {
+            otpService.verifyOtp(session.getPhoneNumber(), request.code().trim());
+        }
         // The only place this is set. Recovery is offered only to a session that proved the
         // number here, never to one that reached a factor step some other way.
         session.setOtpVerified(true);
@@ -1075,13 +1085,20 @@ public class LoginFlowController {
      * subject must be resolved and the step must be one where a factor the account holds is being
      * asked for. A re-authentication already belongs to a signed-in user, who has nothing to
      * recover, and an enrollment session is not a sign-in at all.
+     *
+     * <p>
+     * Never for the store review number ({@link ReviewLogin}): its sign-in code is a fixed value
+     * written in the store's review instructions, so it proves nothing about who is asking, and a
+     * recovery would let whoever holds it replace the account's PIN without ever knowing it. The
+     * operator recovers that account outside the app.
      */
     private boolean recoveryAvailable(LoginSession session) {
         return session.isOtpVerified()
                 && StringUtils.hasText(session.getUserId())
                 && RECOVERY_PHASES.contains(session.getPhase())
                 && session.getReauthUserId() == null
-                && !session.isEnroll();
+                && !session.isEnroll()
+                && !reviewLogin.isReviewNumber(session.getPhoneNumber());
     }
 
     private void requireRecoveryAvailable(LoginSession session) {
@@ -1089,6 +1106,15 @@ public class LoginFlowController {
             throw new LoginFlowException(HttpStatus.CONFLICT, "recovery_unavailable",
                     "Account recovery is not available from this step.");
         }
+    }
+
+    /**
+     * Whether this session's OTP is a sign-in's, the only purpose the store review login
+     * ({@code ReviewLogin}) applies to. A re-authentication of a signed-in user is a step-up and
+     * keeps the plain OTP.
+     */
+    private static boolean isSignIn(LoginSession session) {
+        return session.getReauthUserId() == null && !session.isEnroll();
     }
 
     private void requirePhase(LoginSession session, Phase... allowed) {

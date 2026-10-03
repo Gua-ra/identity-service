@@ -53,7 +53,11 @@ public class SecurityConfig {
                         "/actuator/health",
                         "/actuator/health/**",
                         "/actuator/info",
-                        "/actuator/prometheus",   // scraped by Prometheus in-cluster; blocked at the public edge
+                        // Scraped by Prometheus in-cluster, without credentials. The metrics are not public: they
+                        // count sign-ins and SMS sends, and the store review login's are enough to name its
+                        // number. The deployment's public ingress must refuse /actuator/** except health (in
+                        // gua-deploy, services/login-ingress.sh does).
+                        "/actuator/prometheus",
                         "/signup/check-username");
 
         @Bean
