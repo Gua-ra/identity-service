@@ -31,4 +31,7 @@ public interface SecurityAuditLogger {
     void phoneChangeOtpFailed(String userId, int attempt, String requesterIp);
 
     void reauthFailed(String userId, String operation, String requesterIp);
+
+    /** One line per committed deletion: the user id and row counts, nothing about the person. */
+    void accountDeleted(String userId, int directoryEntries, int securityRows, int passkeys, int trustedDevices);
 }

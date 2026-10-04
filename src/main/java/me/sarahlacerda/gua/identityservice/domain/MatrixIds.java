@@ -38,4 +38,18 @@ public final class MatrixIds {
         }
         return matcher.group(1);
     }
+
+    /**
+     * Returns the server name of a Matrix user id, e.g. {@code @alice:example.org -> example.org}.
+     *
+     * @throws IllegalArgumentException when {@code userId} is not a Matrix user id; the
+     *                                  message never echoes the value
+     */
+    public static String serverNameOf(String userId) {
+        Matcher matcher = userId == null ? null : MATRIX_USER_ID.matcher(userId);
+        if (matcher == null || !matcher.matches()) {
+            throw new IllegalArgumentException("Not a Matrix user id (expected @localpart:server)");
+        }
+        return matcher.group(2);
+    }
 }

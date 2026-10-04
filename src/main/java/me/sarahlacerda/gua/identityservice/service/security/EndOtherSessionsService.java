@@ -97,6 +97,11 @@ public class EndOtherSessionsService {
         redisTemplate.delete(key(userId));
     }
 
+    /** Drops the mark of a deleted account, whose sessions the authentication service has already ended. */
+    public void discard(String userId) {
+        redisTemplate.delete(key(userId));
+    }
+
     private void write(String userId) {
         Duration ttl = properties.getSecurity().getAccountRecoveryWait();
         redisTemplate.opsForValue().set(key(userId), "1", ttl);

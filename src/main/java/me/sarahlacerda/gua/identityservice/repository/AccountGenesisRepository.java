@@ -69,6 +69,26 @@ public interface AccountGenesisRepository extends JpaRepository<AccountGenesisRe
             @Param("pending") State pending,
             @Param("attached") State attached);
 
+    boolean existsByUserIdAndState(String userId, State state);
+
+    boolean existsByUserIdInAndState(Collection<String> userIds, State state);
+
+    /**
+     * Turns the account's row into a tombstone, whatever state it was in. Only the state and the attach
+     * pair change; every other column, the audit marker included, keeps its value.
+     *
+     * @return rows updated: 1 when the account held a row, 0 when it held none
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update AccountGenesisRecord r
+               set r.state = :deleted,
+                   r.attachHandleHash = null,
+                   r.expiresAt = null
+             where r.userId = :userId
+            """)
+    int markDeleted(@Param("userId") String userId, @Param("deleted") State deleted);
+
     /**
      * Expiry sweep: pending registrations nobody attached inside their window.
      *

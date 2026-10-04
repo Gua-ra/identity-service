@@ -81,4 +81,11 @@ public class LoggingSecurityAuditLogger implements SecurityAuditLogger {
     public void reauthFailed(String userId, String operation, String requesterIp) {
         log.warn("Reauth/step-up failed for user {} from IP {} (operation={})", userId, requesterIp, operation);
     }
+
+    @Override
+    public void accountDeleted(String userId, int directoryEntries, int securityRows, int passkeys,
+            int trustedDevices) {
+        log.warn("Account deleted for user {} (directoryEntries={} securityRows={} passkeys={} trustedDevices={})",
+                userId, directoryEntries, securityRows, passkeys, trustedDevices);
+    }
 }

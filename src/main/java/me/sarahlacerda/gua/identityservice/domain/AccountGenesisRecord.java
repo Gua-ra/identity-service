@@ -21,8 +21,9 @@ import lombok.Setter;
  * <p>The row is local to identity-service and is not replicated: the MXID to accountId link stays
  * private here. Nothing in Phase 3 reads it for routing or for login.
  *
- * <p>An accountId is permanent. Deactivating an account leaves this row in place (L3), and no code path
- * updates {@link #origin}: a bootstrap account is not adopted into a rooted one in this phase.
+ * <p>An accountId is permanent. Deleting an account turns this row into a {@link State#DELETED} tombstone
+ * rather than removing it (L3), and no code path updates {@link #origin}: a bootstrap account is not
+ * adopted into a rooted one in this phase.
  */
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -42,7 +43,12 @@ public class AccountGenesisRecord {
         /** Registered, not yet attached to an account. Carries an attach handle and an expiry. */
         PENDING,
         /** Attached to the account named by {@link #userId}. */
-        ATTACHED
+        ATTACHED,
+        /**
+         * Tombstone of a deleted account. Keeps {@link #userId} reserved for good and carries no
+         * attach handle and no expiry. Nothing that resolves a live account reads it.
+         */
+        DELETED
     }
 
     @Id
@@ -135,6 +141,16 @@ public class AccountGenesisRecord {
             String genesisB64, Instant attachedAt) {
         return new AccountGenesisRecord(accountId, userId, Origin.BOOTSTRAP, State.ATTACHED, version, suite,
                 genesisB64, null, null, null, attachedAt);
+    }
+
+    /**
+     * The tombstone of a deleted account that never held a genesis row: a bootstrap id minted at
+     * deletion so the account's user id stays reserved. Never attached, so {@link #attachedAt} is null.
+     */
+    public static AccountGenesisRecord deletedBootstrap(String accountId, String userId, short version, short suite,
+            String genesisB64) {
+        return new AccountGenesisRecord(accountId, userId, Origin.BOOTSTRAP, State.DELETED, version, suite,
+                genesisB64, null, null, null, null);
     }
 
     @PrePersist

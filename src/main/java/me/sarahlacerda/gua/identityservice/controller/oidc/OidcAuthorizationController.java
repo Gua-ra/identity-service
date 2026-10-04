@@ -1,9 +1,7 @@
 package me.sarahlacerda.gua.identityservice.controller.oidc;
 
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Locale;
@@ -37,6 +35,7 @@ import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.exception.OidcInvalidRequestException;
 import me.sarahlacerda.gua.identityservice.service.LanguageTags;
+import me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
@@ -65,6 +64,7 @@ public class OidcAuthorizationController {
     private final LoginSessionService loginSessionService;
     private final LoginFlowProperties loginProperties;
     private final IdentityServiceProperties identityProperties;
+    private final AccountGenesisService accountGenesisService;
 
     /**
      * Prefix of the structured login hint the first-party clients send (ADM-008 decision 6). Parsed only
@@ -167,7 +167,7 @@ public class OidcAuthorizationController {
     }
 
     @PostMapping(value = "/oauth2/token", consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
-    @Operation(summary = "Exchange an authorization code for tokens", description = "Validates the authorization code, client authentication, and PKCE verifier, then returns RS256-signed access and ID tokens.")
+    @Operation(summary = "Exchange an authorization code for tokens", description = "Validates the authorization code, client authentication, and PKCE verifier, then returns RS256-signed access and ID tokens. A code whose account has since been deleted is refused with invalid_grant.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Token exchange succeeded", content = @Content(schema = @Schema(implementation = OidcTokenResponse.class))),
             @ApiResponse(responseCode = "400", description = "Invalid grant request", content = @Content),
@@ -186,7 +186,8 @@ public class OidcAuthorizationController {
                     "Only authorization_code grant is supported");
         }
 
-        ClientCredentials credentials = resolveClientCredentials(authorizationHeader, clientIdParam, clientSecretParam);
+        OidcClientCredentials credentials = OidcClientCredentials.resolve(authorizationHeader, clientIdParam,
+                clientSecretParam);
         RegisteredClient client = clientService.requireClient(credentials.clientId());
         clientService.authenticateClient(client, credentials.clientSecret());
 
@@ -207,26 +208,12 @@ public class OidcAuthorizationController {
         clientService.verifyPkce(authorizationCode.codeChallenge(), codeVerifier);
 
         OidcAuthorization authorization = authorizationCode.authorization();
+        // A code issued before its account was deleted is spent here and yields nothing.
+        if (accountGenesisService.isDeleted(authorization.userId())) {
+            throw new OidcInvalidRequestException("invalid_grant", "Authorization code is unknown or already used");
+        }
         OidcTokenResponse tokens = tokenService.issueTokens(authorization);
         return ResponseEntity.ok(tokens);
-    }
-
-    private static ClientCredentials resolveClientCredentials(String authorizationHeader, String clientIdParam,
-            String clientSecretParam) {
-        if (authorizationHeader != null && authorizationHeader.regionMatches(true, 0, "Basic ", 0, 6)) {
-            String token = authorizationHeader.substring(6).trim();
-            try {
-                String decoded = new String(Base64.getDecoder().decode(token), StandardCharsets.UTF_8);
-                int sep = decoded.indexOf(':');
-                if (sep < 0) {
-                    throw new OidcInvalidRequestException("invalid_request", "Malformed Basic authorization header");
-                }
-                return new ClientCredentials(decoded.substring(0, sep), decoded.substring(sep + 1));
-            } catch (IllegalArgumentException ex) {
-                throw new OidcInvalidRequestException("invalid_request", "Malformed Basic authorization header");
-            }
-        }
-        return new ClientCredentials(clientIdParam, clientSecretParam);
     }
 
     /**
@@ -367,8 +354,5 @@ public class OidcAuthorizationController {
             }
         }
         return value.startsWith("+") ? value : null;
-    }
-
-    private record ClientCredentials(String clientId, String clientSecret) {
     }
 }

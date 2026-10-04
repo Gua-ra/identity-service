@@ -52,6 +52,7 @@ import me.sarahlacerda.gua.identityservice.service.oidc.OidcClientService.Regist
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenResponse;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
+import me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService;
 import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 
 @WebMvcTest(OidcAuthorizationController.class)
@@ -86,6 +87,10 @@ class OidcAuthorizationControllerTest {
     @MockitoBean
     private EndpointRateLimiter endpointRateLimiter;
 
+    /** Answers isDeleted=false unless a test says otherwise: no account here was deleted. */
+    @MockitoBean
+    private AccountGenesisService accountGenesisService;
+
     /**
      * Not a dependency of the controller any more. Present in the slice only so the
      * legacy-parameter regression can assert, explicitly, that no OTP is ever
@@ -100,9 +105,9 @@ class OidcAuthorizationControllerTest {
     @BeforeEach
     void setUp() {
         confidentialClient = new RegisteredClient("mas", "$2a$10$abc", false,
-                List.of(CALLBACK), Set.of("openid", "profile", "phone"), false);
+                List.of(CALLBACK), Set.of("openid", "profile", "phone"), false, Set.of("default"));
         publicClient = new RegisteredClient("gua-ios", null, true,
-                List.of("global.gua:/oidc"), Set.of("openid", "profile", "phone"), true);
+                List.of("global.gua:/oidc"), Set.of("openid", "profile", "phone"), true, Set.of());
         when(clientService.requireClient("mas")).thenReturn(confidentialClient);
         when(clientService.requireClient("gua-ios")).thenReturn(publicClient);
     }
@@ -468,6 +473,50 @@ class OidcAuthorizationControllerTest {
         verify(clientService).verifyPkce(Optional.empty(), null);
         verify(authorizationService).consumeAuthorizationCode("auth-code");
         verify(tokenService).issueTokens(authorization);
+    }
+
+    /** A code issued before its account was deleted is spent and yields no tokens. */
+    @Test
+    void tokenRefusesACodeWhoseAccountWasDeleted() throws Exception {
+        OidcAuthorization authorization = new OidcAuthorization(
+                "@alice:example.com", "+15551234567", "Alice", Set.of("openid"), "mas");
+        when(authorizationService.consumeAuthorizationCode("auth-code"))
+                .thenReturn(Optional.of(new OidcAuthorizationCode("auth-code", authorization, CALLBACK)));
+        when(accountGenesisService.isDeleted("@alice:example.com")).thenReturn(true);
+
+        mockMvc.perform(post("/oauth2/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "authorization_code")
+                .param("code", "auth-code")
+                .param("redirect_uri", CALLBACK)
+                .param("client_id", "mas")
+                .param("client_secret", "shh"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("invalid_grant"));
+
+        verify(tokenService, never()).issueTokens(any());
+    }
+
+    /** RFC 6749 section 2.3.1: the Basic user and password arrive form-urlencoded. */
+    @Test
+    void tokenDecodesAFormUrlencodedBasicSecret() throws Exception {
+        OidcAuthorization authorization = new OidcAuthorization(
+                "user-123", "+15551234567", null, Set.of("openid"), "mas");
+        when(authorizationService.consumeAuthorizationCode("auth-code"))
+                .thenReturn(Optional.of(new OidcAuthorizationCode("auth-code", authorization, CALLBACK)));
+        when(tokenService.issueTokens(authorization)).thenReturn(
+                new OidcTokenResponse("at", 600, "openid", "Bearer", "it"));
+
+        String basic = java.util.Base64.getEncoder().encodeToString("mas:s%2Bcr%2Ft%3D".getBytes());
+        mockMvc.perform(post("/oauth2/token")
+                .header("Authorization", "Basic " + basic)
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "authorization_code")
+                .param("code", "auth-code")
+                .param("redirect_uri", CALLBACK))
+                .andExpect(status().isOk());
+
+        verify(clientService).authenticateClient(confidentialClient, "s+cr/t=");
     }
 
     @Test

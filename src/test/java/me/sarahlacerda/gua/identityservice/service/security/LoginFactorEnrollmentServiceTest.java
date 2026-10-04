@@ -53,7 +53,7 @@ class LoginFactorEnrollmentServiceTest {
         UserSecurityService userSecurityService = new UserSecurityService(repository, passwordEncoder,
                 new IdentityServiceProperties(), mock(DirectoryService.class), mock(PhoneNumberHasher.class),
                 mock(OtpService.class), mock(SecurityAuditLogger.class), mock(StringRedisTemplate.class),
-                new PinPolicy());
+                new PinPolicy(), mock(me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService.class));
         service = new LoginFactorEnrollmentService(userSecurityService, passkeyService);
         user = IdentityUser.builder().userId(USER).build();
         when(repository.findByUserIdForUpdate(USER)).thenReturn(Optional.of(user));

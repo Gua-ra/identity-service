@@ -119,6 +119,17 @@ class LoginFlowControllerTest {
                 AccountGenesisService accountGenesisService) {
             return new AccountCreationService(directoryService, accountGenesisService);
         }
+
+        // The real shared username check, so the directory and userExists stubs below decide it as
+        // they did before it existed. The mocked genesis service reports no deleted account.
+        @org.springframework.context.annotation.Bean
+        me.sarahlacerda.gua.identityservice.service.UsernameAvailability usernameAvailability(
+                DirectoryService directoryService, AccountGenesisService accountGenesisService,
+                me.sarahlacerda.gua.identityservice.service.routing.HomeserverRegistry homeserverRegistry,
+                MatrixAdminClient matrixAdminClient) {
+            return new me.sarahlacerda.gua.identityservice.service.UsernameAvailability(directoryService,
+                    accountGenesisService, homeserverRegistry, matrixAdminClient);
+        }
     }
 
     private static final String SID = "session-id";
@@ -176,6 +187,8 @@ class LoginFlowControllerTest {
     // that does not configure it.
     @MockitoBean
     private ReviewLogin reviewLogin;
+    @MockitoBean
+    private me.sarahlacerda.gua.identityservice.service.routing.HomeserverRegistry homeserverRegistry;
 
     @BeforeEach
     void setUp() {
@@ -686,6 +699,98 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phase").value("PIN_REQUIRED"))
                 .andExpect(jsonPath("$.newUser").value(false));
+    }
+
+    // --- Deleted accounts ---------------------------------------------------------
+
+    /** A session bound to an account deleted since it began is ended at its next request. */
+    @Test
+    void aSessionWhoseAccountWasDeletedIsEndedAndAnswered410() throws Exception {
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("@alice:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(accountGenesisService.isDeleted("@alice:dev.local")).thenReturn(true);
+
+        mockMvc.perform(post("/login/pin")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pin\":\"123456\"}"))
+                .andExpect(status().isGone())
+                .andExpect(jsonPath("$.code").value("account_deleted"));
+
+        verify(loginSessionService).delete(SID);
+        verify(userSecurityService, never()).validatePinOrThrow(any(), any());
+        verify(authorizationService, never()).issueCode(any(), any(), any());
+    }
+
+    @Test
+    void aReauthenticationOfADeletedAccountIsEnded() throws Exception {
+        LoginSession session = session(Phase.PHONE);
+        session.setReauthUserId("@alice:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(accountGenesisService.isDeleted("@alice:dev.local")).thenReturn(true);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isGone())
+                .andExpect(jsonPath("$.code").value("account_deleted"));
+    }
+
+    /** A deletion that commits while the PIN request is in flight still issues no code. */
+    @Test
+    void completeRefusesAnAccountDeletedDuringTheRequest() throws Exception {
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("@alice:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.isEnabled()).thenReturn(false);
+        when(accountGenesisService.isDeleted("@alice:dev.local")).thenReturn(false, true);
+
+        mockMvc.perform(post("/login/pin")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pin\":\"123456\"}"))
+                .andExpect(status().isGone())
+                .andExpect(jsonPath("$.code").value("account_deleted"));
+
+        verify(userSecurityService, never()).recordSuccessfulLogin(any());
+        verify(authorizationService, never()).issueCode(any(), any(), any());
+    }
+
+    /** The homeserver may still bind the number to a deleted account; that number signs up afresh. */
+    @Test
+    void thePhoneBindingFallbackIgnoresADeletedAccount() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
+        when(matrixAdminClient.findUserIdByPhone(PHONE)).thenReturn(Optional.of("@alice:dev.local"));
+        when(accountGenesisService.isDeleted("@alice:dev.local")).thenReturn(true);
+
+        performOtp()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PROFILE_REQUIRED"))
+                .andExpect(jsonPath("$.newUser").value(true));
+
+        verify(directoryService, never()).upsertByDigest(any(), any(), any(), any());
+        verify(accountGenesisService, never()).bootstrap(any());
+    }
+
+    @Test
+    void submitProfileRefusesTheUsernameOfADeletedAccount() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PROFILE_REQUIRED)));
+        when(usernamePolicy.normalizeAndValidate("Alice")).thenReturn("alice");
+        when(matrixProvisioningService.buildUserId(eq("alice"), any())).thenReturn("@alice:gua.local");
+        when(accountGenesisService.isAnyDeleted(org.mockito.ArgumentMatchers.anyCollection())).thenReturn(true);
+
+        mockMvc.perform(post("/login/profile")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"Alice\",\"displayName\":\"Alice A\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("username_taken"));
+
+        verify(directoryService, never()).upsertByDigest(any(), any(), any(), any());
     }
 
     @Test
