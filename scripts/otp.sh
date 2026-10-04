@@ -2,13 +2,13 @@
 #
 # Local-dev helper to see Gua verification codes (OTPs) while testing.
 #
-# In local/dev the SMS sender doesn't really text anything — it logs the code
-# and stores it in Redis (key `otp:code:<E.164>`, TTL ~5 min). Production uses
-# Twilio and never logs codes, so this is a dev convenience only.
+# In local/dev the SMS sender doesn't really text anything. The code is stored
+# in Redis (key `otp:code:<E.164>`, TTL ~5 min) and the log only says a code was
+# sent, to the masked number. No build ever logs a code.
 #
 # Usage:
 #   scripts/otp.sh            # list every active code currently in Redis (phone = code)
-#   scripts/otp.sh watch      # live-tail the identity-service log, highlighting codes
+#   scripts/otp.sh watch      # live-tail the identity-service log for sends, then read the code here
 #   scripts/otp.sh <phone>    # print the code for one E.164 number, e.g. +5511999998888
 #
 set -euo pipefail
@@ -35,9 +35,8 @@ list_all() {
 
 case "${1:-list}" in
   watch)
-    echo "Watching $LOG_FILE for OTP codes (Ctrl-C to stop)…"
-    # Works with the new 'GUA OTP' banner and the older 'verification code' line.
-    tail -n0 -f "$LOG_FILE" | grep --line-buffered -iE 'GUA OTP|code  :|verification code is|Pretending to send SMS'
+    echo "Watching $LOG_FILE for OTP sends (Ctrl-C to stop). Run scripts/otp.sh <phone> for the code."
+    tail -n0 -f "$LOG_FILE" | grep --line-buffered -iE 'Code sent to'
     ;;
   list|"")
     list_all

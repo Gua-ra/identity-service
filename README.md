@@ -325,7 +325,7 @@ Passkey **registration** is normally offered during onboarding (see [Interactive
 
 | Method & path | Auth | Purpose |
 | --- | --- | --- |
-| `POST /security/passkey/enroll/start` | Bearer | Start in-app passkey enrollment: creates a login session pinned to the authenticated user and returns a one-time `enrollUrl`. The session starts at the step-up, see [Adding a factor from settings](#adding-a-factor-from-settings). `409 passkey_already_registered` when the account has one. |
+| `POST /security/passkey/enroll/start` | Bearer | Start in-app passkey enrollment: creates a login session pinned to the authenticated user and returns a one-time `enrollUrl`. The session starts at the step-up, see [Adding a factor from settings](#adding-a-factor-from-settings). `409 passkey_already_registered` when the account has one, `403 passkey_not_allowed` for the [store review account](#store-review-login). |
 | `GET /login/enroll/{token}` · `GET /login/passkey/enroll/{token}` | Public (one-time token) | Redeems the `enrollUrl` in a web view: sets the first-party login cookie and redirects into the sign-in UI, which finds the session at `ENROLL_STEP_UP`. The redirect carries `ui_locales`: the one on this URL, else the `Accept-Language` of the enroll start call, else this request's. A used or expired link redirects the same way with no cookie, and the UI shows its expired message. The `/passkey/` spelling is what older links carry and is the same handoff. |
 | `POST /security/passkey/stepup/options` | Bearer | Start a **user-verifying** assertion that may be spent as the step-up factor on a privileged operation. Returns a `stepUpId` and the WebAuthn `publicKey` options. |
 
@@ -488,7 +488,9 @@ Returning users are not blocked as long as their directory row resolves: that nu
 
 ### Store review login
 
-Lets app store reviewers, who cannot receive our SMS, sign in to one project-owned account. Off by default. When on, the configured number gets a fixed code instead of an SMS, on the interactive sign-in only (`POST /login/phone`, `POST /login/otp`). The account's PIN or passkey is still required, and delayed account recovery, which would replace that PIN, is never offered to this number; the operator recovers that account outside the app. Every other number, and every other OTP use of this number (re-authentication, change of number, PIN change, enrollment step-up, the REST `/otp/*` endpoints), is unchanged and still texted.
+Lets app store reviewers, who cannot receive our SMS, sign in to one project-owned account. Off by default. When on, the configured number gets a fixed code instead of an SMS, on the interactive sign-in only (`POST /login/phone`, `POST /login/otp`). The account's PIN is still required after the code. Every other number, and every other OTP use of this number (re-authentication, change of number, PIN change, enrollment step-up, the REST `/otp/*` endpoints), is unchanged and still texted.
+
+The code and the PIN are the review account's only way in, so rotating either cuts off everyone who held the old one. Delayed account recovery, which would replace the PIN, is never offered to this number; the operator recovers that account outside the app. The account never holds a passkey: none is offered at signup or after the PIN, enrollment from settings is refused (`403 passkey_not_allowed`), and a passkey sign-in that resolves to it is refused the same way.
 
 Set it up:
 
@@ -499,12 +501,17 @@ Set it up:
    htpasswd -nBC 10 "" | tr -d ':\n'
    ```
 
-3. Set, from a secret: `GUA_REVIEW_LOGIN_ENABLED=true`, `GUA_REVIEW_LOGIN_PHONE` (exactly E.164, and a number libphonenumber accepts as valid: the fictional 555 range is refused) and `GUA_REVIEW_LOGIN_CODE_HASH` (bcrypt, cost 10 to 14). The hash contains `$`: single-quote it in a shell, write each `$` as `$$` in a compose file.
-4. Create the account once by signing up that number in the app with the code, then set its PIN and seed its test conversation.
+3. Set three environment variables from a secret: `GUA_REVIEW_LOGIN_ENABLED=true`, `GUA_REVIEW_LOGIN_PHONE` (exactly E.164, and a number libphonenumber accepts as valid: the fictional 555 range is refused) and `GUA_REVIEW_LOGIN_CODE_HASH` (bcrypt, cost 10 to 14). The hash contains `$`: single-quote it in a shell, write each `$` as `$$` in a compose file.
+4. Immediately after the restart that turns it on, and before the code goes anywhere else, create the account: sign up that number in the app with the code. Signup goes straight to the PIN step; set the PIN there. Until the account exists with a PIN, whoever uses the code first creates it and chooses its PIN.
+5. Seed its test conversation. It holds no real data and no privileges. Only then put the number, code and PIN in the store's review instructions.
+
+Only those three environment variables are read. `GUA_REVIEW_LOGIN_ENABLED` must be exactly `true` to turn it on; exactly `false`, empty or unset is off; any other value (`TRUE`, `yes`, `on`, `1`) refuses startup. Any `identity.review-login` property, in any spelling Spring would bind (`IDENTITY_REVIEW_LOGIN_*` or `IDENTITY_REVIEWLOGIN_*` variables, application.yml, `-D` system properties, `SPRING_APPLICATION_JSON`), refuses startup, so no other source can switch the feature on or change its number or hash.
 
 Before turning it on, make sure the public host refuses `/actuator/prometheus`. The metrics count review sends and SMS sends, so anyone who can read them can tell which number was sent nothing.
 
 A missing or malformed number or hash refuses startup. A review send texts nothing but keeps the normal response, rate limits and roughly the provider's timing. The code is accepted only after a sign-in send, within the normal OTP lifetime, and five wrong guesses burn it like any code. Every sign-in code check pays one bcrypt comparison while the feature is on, so a wrong guess for the review number answers as fast as one for any other number. Each send and verify logs a WARN line `Store review login <outcome> for ••••1234` and counts `gua_identity_review_login_total{outcome}`. Neither the code nor the hash is logged.
+
+**Lockout.** The code never changes, so wrong guesses at it also add up across sends. The 20th wrong review code within 24 hours of the first locks it: until those 24 hours end, every review code is refused, the right one included, and each refusal answers like a wrong guess. The lock logs one ERROR line `Store review login locked for ••••1234` and counts `outcome="locked"`, as does each verify it refuses. Other numbers, and codes texted to this one, are unaffected. To end it early, rotate the code if it may have leaked, then delete the Redis key `otp:review-login-failures:<number in E.164>`.
 
 **Turn it off** by setting `GUA_REVIEW_LOGIN_ENABLED=false` (or removing it) and rolling the pods. To rotate the code, replace the hash.
 

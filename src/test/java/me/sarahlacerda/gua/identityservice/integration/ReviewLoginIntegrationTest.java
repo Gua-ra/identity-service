@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -32,6 +33,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.ApplicationContextInitializer;
+import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.core.env.StandardEnvironment;
+import org.springframework.core.env.SystemEnvironmentPropertySource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -41,15 +46,20 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
@@ -74,9 +84,11 @@ import me.sarahlacerda.gua.identityservice.service.security.ReauthOperation;
 /**
  * The store review login switched on, over real HTTP against Postgres and Redis: the review number
  * signs in with the review code and still needs its PIN, with no SMS; the code keeps every rule a
- * texted code has; and no other purpose or number is touched.
+ * texted code has; the review account never holds a passkey; and no other purpose or number is
+ * touched. The feature is configured the only way it can be, through the process environment.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@ContextConfiguration(initializers = ReviewLoginIntegrationTest.ReviewLoginEnvironment.class)
 @Testcontainers
 class ReviewLoginIntegrationTest {
 
@@ -85,6 +97,7 @@ class ReviewLoginIntegrationTest {
     private static final String REVIEW_CODE = "246802";
     private static final String REVIEW_CODE_HASH = new BCryptPasswordEncoder(10).encode(REVIEW_CODE);
     private static final String REVIEW_PIN = "739164";
+    private static final String OTHER_PIN = "518306";
     private static final String CLIENT_ID = "gua-ios";
     private static final String REDIRECT_URI = "global.gua:/oidc";
     private static final String LOGIN_COOKIE = "gua_login";
@@ -136,10 +149,20 @@ class ReviewLoginIntegrationTest {
         registry.add("oidc.issuer", () -> "http://localhost");
         registry.add("idp.login.cookie-name", () -> LOGIN_COOKIE);
         registry.add("idp.login.registration.web-allowlist-enabled", () -> "false");
+    }
 
-        registry.add("identity.review-login.enabled", () -> "true");
-        registry.add("identity.review-login.phone", () -> REVIEW_PHONE);
-        registry.add("identity.review-login.code-hash", () -> REVIEW_CODE_HASH);
+    /** The process environment with the three review login variables added, as the pod would have it. */
+    static class ReviewLoginEnvironment implements ApplicationContextInitializer<ConfigurableApplicationContext> {
+        @Override
+        public void initialize(ConfigurableApplicationContext context) {
+            Map<String, Object> variables = new HashMap<>(System.getenv());
+            variables.put("GUA_REVIEW_LOGIN_ENABLED", "true");
+            variables.put("GUA_REVIEW_LOGIN_PHONE", REVIEW_PHONE);
+            variables.put("GUA_REVIEW_LOGIN_CODE_HASH", REVIEW_CODE_HASH);
+            context.getEnvironment().getPropertySources().replace(
+                    StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME, new SystemEnvironmentPropertySource(
+                            StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME, variables));
+        }
     }
 
     @LocalServerPort
@@ -196,7 +219,8 @@ class ReviewLoginIntegrationTest {
         deleteKeys("otp:rate:*");
         deleteKeys("reauth:phone-mismatch:*");
         for (String phone : List.of(REVIEW_PHONE, OTHER_PHONE)) {
-            redisTemplate.delete(List.of("otp:code:" + phone, "otp:attempts:" + phone, "otp:review-login:" + phone));
+            redisTemplate.delete(List.of("otp:code:" + phone, "otp:attempts:" + phone, "otp:review-login:" + phone,
+                    "otp:review-login-failures:" + phone));
         }
 
         logs.list.clear();
@@ -235,10 +259,8 @@ class ReviewLoginIntegrationTest {
         assertThat(wrongPin.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(wrongPin.getBody()).containsEntry("code", "invalid_pin");
 
+        // Done on the PIN: the review account is never offered a passkey.
         state = login.post("/login/pin", Map.of("pin", REVIEW_PIN));
-        if ("PASSKEY_SETUP".equals(state.get("phase"))) {
-            state = login.post("/login/passkey/setup-skip", Map.of());
-        }
         assertThat(state.get("phase")).isEqualTo("COMPLETED");
         assertThat((String) state.get("redirectUrl")).startsWith(REDIRECT_URI).contains("code=");
 
@@ -272,9 +294,6 @@ class ReviewLoginIntegrationTest {
         assertThat(complete.getBody()).containsEntry("code", "recovery_unavailable");
         // The PIN is still the way in, and still works.
         state = review.post("/login/pin", Map.of("pin", REVIEW_PIN));
-        if ("PASSKEY_SETUP".equals(state.get("phase"))) {
-            state = review.post("/login/passkey/setup-skip", Map.of());
-        }
         assertThat(state.get("phase")).isEqualTo("COMPLETED");
 
         signUpOtherNumber();
@@ -366,6 +385,84 @@ class ReviewLoginIntegrationTest {
         assertThat(review("send_rate_limited")).isPositive();
     }
 
+    // -------------------- the review account never holds a passkey --------------------
+
+    /**
+     * The code and the PIN are the review account's only way in, so rotating either cuts off
+     * whoever held the old one. It is offered no passkey at signup or after its PIN, and settings
+     * refuses to enroll one, while another account on the same deployment is offered both.
+     */
+    @Test
+    void theReviewAccountIsNeverOfferedAndCannotEnrollAPasskey() throws Exception {
+        reviewAccountUserId();
+        LoginClient review = startAuthorize();
+        review.post("/login/phone", Map.of("phoneNumber", REVIEW_PHONE));
+        review.post("/login/otp", Map.of("code", REVIEW_CODE));
+        Map<?, ?> state = review.post("/login/pin", Map.of("pin", REVIEW_PIN));
+        assertThat(state.get("phase")).isEqualTo("COMPLETED");
+
+        ResponseEntity<Map> refused = authenticatedPost(accessToken(review, state), "/security/passkey/enroll/start");
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(refused.getBody()).containsEntry("code", "passkey_not_allowed");
+
+        signUpOtherNumber();
+        LoginClient other = startAuthorize();
+        other.post("/login/phone", Map.of("phoneNumber", OTHER_PHONE));
+        other.post("/login/otp", Map.of("code", textedCode(OTHER_PHONE)));
+        state = other.post("/login/pin", Map.of("pin", OTHER_PIN));
+        assertThat(state.get("phase")).isEqualTo("PASSKEY_SETUP");
+        state = other.post("/login/passkey/setup-skip", Map.of());
+        assertThat(state.get("phase")).isEqualTo("COMPLETED");
+
+        ResponseEntity<Map> allowed = authenticatedPost(accessToken(other, state), "/security/passkey/enroll/start");
+        assertThat(allowed.getStatusCode()).as("enroll: %s", allowed.getBody()).isEqualTo(HttpStatus.OK);
+    }
+
+    // -------------------- the lockout --------------------
+
+    /**
+     * The review code never changes, so wrong guesses add up across sends. The 20th within 24
+     * hours locks it with one ERROR line; then even the right code is refused, until the window
+     * ends. Other numbers sign in throughout.
+     */
+    @Test
+    void twentyWrongReviewCodesLockItUntilTheWindowEnds() throws Exception {
+        String failuresKey = "otp:review-login-failures:" + REVIEW_PHONE;
+        double lockedBefore = review("locked");
+        for (int send = 0; send < 4; send++) {
+            otpService.sendLoginOtp(REVIEW_PHONE, IP, null);
+            for (int guess = 0; guess < 5; guess++) {
+                assertThatThrownBy(() -> otpService.verifyLoginOtp(REVIEW_PHONE, "000000"))
+                        .isInstanceOf(InvalidOtpException.class);
+            }
+        }
+
+        assertThat(redisTemplate.opsForValue().get(failuresKey)).isEqualTo("20");
+        assertThat(redisTemplate.getExpire(failuresKey)).isBetween(
+                ReviewLogin.LOCKOUT_WINDOW.toSeconds() - 60, ReviewLogin.LOCKOUT_WINDOW.toSeconds());
+        assertThat(lockoutErrors()).singleElement().satisfies(event -> assertThat(event.getFormattedMessage())
+                .startsWith("Store review login locked for ••••9911"));
+        assertThat(review("locked")).isEqualTo(lockedBefore + 1);
+
+        otpService.sendLoginOtp(REVIEW_PHONE, IP, null);
+        assertThatThrownBy(() -> otpService.verifyLoginOtp(REVIEW_PHONE, REVIEW_CODE))
+                .isInstanceOf(InvalidOtpException.class)
+                .hasMessage("Invalid or expired verification code");
+        assertThat(review("locked")).isEqualTo(lockedBefore + 2);
+        assertThat(lockoutErrors()).hasSize(1);
+        // Refused, not counted again.
+        assertThat(redisTemplate.opsForValue().get(failuresKey)).isEqualTo("20");
+
+        otpService.sendLoginOtp(OTHER_PHONE, IP, null);
+        otpService.verifyLoginOtp(OTHER_PHONE, textedCode(OTHER_PHONE));
+
+        // The window ends: the same live code, with budget left, now takes the review code.
+        redisTemplate.expire(failuresKey, Duration.ofMillis(1));
+        waitUntilGone(failuresKey);
+        otpService.verifyLoginOtp(REVIEW_PHONE, REVIEW_CODE);
+        verify(smsSender, never()).send(eq(REVIEW_PHONE), anyString());
+    }
+
     // -------------------- nothing else changes --------------------
 
     @Test
@@ -436,9 +533,7 @@ class ReviewLoginIntegrationTest {
             assertThat(state.get("phase")).isEqualTo("PROFILE_REQUIRED");
             state = login.post("/login/profile", Map.of("username",
                     "review" + UUID.randomUUID().toString().replace("-", "").substring(0, 8), "displayName", "Review"));
-            if ("PASSKEY_SETUP".equals(state.get("phase"))) {
-                state = login.post("/login/passkey/setup-skip", Map.of());
-            }
+            // Straight to the PIN: the review account is never offered a passkey.
             assertThat(state.get("phase")).isEqualTo("PIN_SETUP");
             state = login.post("/login/pin-setup", Map.of("pin", REVIEW_PIN));
             assertThat(state.get("phase")).isEqualTo("COMPLETED");
@@ -458,11 +553,11 @@ class ReviewLoginIntegrationTest {
         assertThat(state.get("phase")).isEqualTo("PROFILE_REQUIRED");
         state = login.post("/login/profile", Map.of("username",
                 "other" + UUID.randomUUID().toString().replace("-", "").substring(0, 8), "displayName", "Other"));
-        if ("PASSKEY_SETUP".equals(state.get("phase"))) {
-            state = login.post("/login/passkey/setup-skip", Map.of());
-        }
+        // Any account but the review one is offered a passkey first.
+        assertThat(state.get("phase")).isEqualTo("PASSKEY_SETUP");
+        state = login.post("/login/passkey/setup-skip", Map.of());
         assertThat(state.get("phase")).isEqualTo("PIN_SETUP");
-        state = login.post("/login/pin-setup", Map.of("pin", "518306"));
+        state = login.post("/login/pin-setup", Map.of("pin", OTHER_PIN));
         assertThat(state.get("phase")).isEqualTo("COMPLETED");
         deleteKeys("otp:rate:*");
     }
@@ -500,17 +595,53 @@ class ReviewLoginIntegrationTest {
             }
         }
         assertThat(cookie).isNotNull();
-        LoginClient anonymous = new LoginClient(cookie, null);
-        return new LoginClient(cookie, (String) anonymous.get("/login/context").get("csrfToken"));
+        String codeVerifier = Base64.getUrlEncoder().withoutPadding().encodeToString(verifier);
+        LoginClient anonymous = new LoginClient(cookie, null, codeVerifier);
+        return new LoginClient(cookie, (String) anonymous.get("/login/context").get("csrfToken"), codeVerifier);
+    }
+
+    /** Redeems a completed sign-in's authorization code, the way the app does, for its access token. */
+    private String accessToken(LoginClient login, Map<?, ?> completed) {
+        String code = UriComponentsBuilder.fromUriString((String) completed.get("redirectUrl")).build()
+                .getQueryParams().getFirst("code");
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("grant_type", "authorization_code");
+        form.add("code", code);
+        form.add("redirect_uri", REDIRECT_URI);
+        form.add("client_id", CLIENT_ID);
+        form.add("code_verifier", login.codeVerifier);
+        ResponseEntity<Map> tokens = restTemplate.exchange(baseUrl + "/oauth2/token", HttpMethod.POST,
+                new HttpEntity<>(form, headers), Map.class);
+        assertThat(tokens.getStatusCode()).as("token: %s", tokens.getBody()).isEqualTo(HttpStatus.OK);
+        return (String) tokens.getBody().get("access_token");
+    }
+
+    private ResponseEntity<Map> authenticatedPost(String accessToken, String path) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(accessToken);
+        return restTemplate.exchange(baseUrl + path, HttpMethod.POST, new HttpEntity<>(Map.of(), headers), Map.class);
+    }
+
+    private List<ILoggingEvent> lockoutErrors() {
+        return logs.list.stream()
+                .filter(event -> event.getLevel() == Level.ERROR)
+                .filter(event -> event.getLoggerName().equals(ReviewLogin.class.getName()))
+                .toList();
     }
 
     private final class LoginClient {
         private final String cookie;
         private final String csrf;
+        private final String codeVerifier;
 
-        LoginClient(String cookie, String csrf) {
+        LoginClient(String cookie, String csrf, String codeVerifier) {
             this.cookie = cookie;
             this.csrf = csrf;
+            this.codeVerifier = codeVerifier;
         }
 
         Map<?, ?> get(String path) {

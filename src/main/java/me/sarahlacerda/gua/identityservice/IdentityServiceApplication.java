@@ -8,11 +8,9 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.config.OidcProperties;
-import me.sarahlacerda.gua.identityservice.config.ReviewLoginProperties;
 
 @SpringBootApplication(exclude = UserDetailsServiceAutoConfiguration.class)
-@EnableConfigurationProperties({ IdentityServiceProperties.class, OidcProperties.class, LoginFlowProperties.class,
-        ReviewLoginProperties.class })
+@EnableConfigurationProperties({ IdentityServiceProperties.class, OidcProperties.class, LoginFlowProperties.class })
 public class IdentityServiceApplication {
 
     public static void main(String[] args) {
