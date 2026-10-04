@@ -49,6 +49,7 @@ import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
 import me.sarahlacerda.gua.identityservice.service.RegistrationGuard;
+import me.sarahlacerda.gua.identityservice.service.ReviewLogin;
 import me.sarahlacerda.gua.identityservice.service.account.AccountCreationService;
 import me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService;
 import me.sarahlacerda.gua.identityservice.service.UsernamePolicy;
@@ -171,6 +172,10 @@ class LoginFlowControllerTest {
     private TokenRevocationService tokenRevocationService;
     @MockitoBean
     private EndOtherSessionsService endOtherSessionsService;
+    // A mock answers false for every number: the store review login is off, as on any deployment
+    // that does not configure it.
+    @MockitoBean
+    private ReviewLogin reviewLogin;
 
     @BeforeEach
     void setUp() {
@@ -367,7 +372,7 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.phase").value("OTP_SENT"))
                 .andExpect(jsonPath("$.maskedPhone").value("\u2022\u2022\u2022\u20224567"));
 
-        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("pt-BR"));
     }
 
     @Test
@@ -384,7 +389,7 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.locale").value("pt-BR"));
 
-        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("pt-BR"));
     }
 
     @Test
@@ -402,7 +407,7 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.locale").value("es"));
 
-        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("es"));
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("es"));
     }
 
     @Test
@@ -420,7 +425,7 @@ class LoginFlowControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("invalid_phone_number"));
 
-        verify(otpService, org.mockito.Mockito.never()).sendOtp(any(), any(), any());
+        org.mockito.Mockito.verifyNoInteractions(otpService);
     }
 
     @Test
@@ -437,7 +442,62 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.phase").value("OTP_SENT"));
 
         // OTP is keyed by the normalized E.164 value, not the raw national input.
-        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("en-CA"));
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("en-CA"));
+    }
+
+    /**
+     * The store review login applies to the sign-in's OTP only. A re-authentication of a signed-in
+     * user is a step-up, so it keeps the plain send and verify, which never consult it.
+     */
+    @Test
+    void aReauthenticationSendsAndVerifiesThePlainOtpNotTheSignInOne() throws Exception {
+        LoginSession atPhone = session(Phase.PHONE);
+        atPhone.setReauthUserId("u1");
+
+        performPhone(atPhone).andExpect(status().isOk());
+
+        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService, org.mockito.Mockito.never()).sendLoginOtp(any(), any(), any());
+
+        LoginSession atOtp = session(Phase.OTP_SENT);
+        atOtp.setReauthUserId("u1");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(atOtp));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(DirectoryEntry.builder()
+                .phoneDigest("digest").userId("u1").username("alice").displayName("Alice").build()));
+        when(userSecurityService.hasPin("u1")).thenReturn(true);
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\" 123456 \"}"))
+                .andExpect(status().isOk());
+
+        verify(otpService).verifyOtp(PHONE, "123456");
+        verify(otpService, org.mockito.Mockito.never()).verifyLoginOtp(any(), any());
+    }
+
+    @Test
+    void aSignInSendsAndVerifiesTheSignInOtp() throws Exception {
+        performPhone(session(Phase.PHONE)).andExpect(status().isOk());
+
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService, org.mockito.Mockito.never()).sendOtp(any(), any(), any());
+
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
+        stubPhoneUnknown();
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\" 123456 \"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PROFILE_REQUIRED"));
+
+        verify(otpService).verifyLoginOtp(PHONE, "123456");
+        verify(otpService, org.mockito.Mockito.never()).verifyOtp(any(), any());
     }
 
     @Test
@@ -525,7 +585,7 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"))
                 .andExpect(jsonPath("$.redirectUrl").doesNotExist());
 
-        verify(otpService).verifyOtp(PHONE, "123456");
+        verify(otpService).verifyLoginOtp(PHONE, "123456");
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
@@ -949,7 +1009,7 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.redirectUrl").value(CALLBACK + "?code=auth-code&state=xyz"));
 
         // OTP is bypassed entirely for a proven existing user.
-        verify(otpService, org.mockito.Mockito.never()).verifyOtp(any(), any());
+        org.mockito.Mockito.verifyNoInteractions(otpService);
         // The stored username is what MAS is told.
         assertEquals("alice", issuedAuthorization().preferredUsername());
     }
@@ -1374,7 +1434,7 @@ class LoginFlowControllerTest {
                         "This number is not approved for web sign-up yet. Gua Web is available to Gua beta testers only."));
 
         // The credit-burn protection: no SMS is ever dispatched for a blocked number.
-        verify(otpService, org.mockito.Mockito.never()).sendOtp(any(), any(), any());
+        org.mockito.Mockito.verifyNoInteractions(otpService);
     }
 
     @Test
@@ -1393,7 +1453,7 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phase").value("OTP_SENT"));
 
-        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("pt-BR"));
     }
 
     @Test
@@ -1406,7 +1466,7 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phase").value("OTP_SENT"));
 
-        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("pt-BR"));
     }
 
     @Test
@@ -1420,7 +1480,7 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phase").value("OTP_SENT"));
 
-        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("pt-BR"));
     }
 
     @Test
@@ -1438,7 +1498,7 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phase").value("OTP_SENT"));
 
-        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("pt-BR"));
     }
 
     @Test
@@ -1452,7 +1512,7 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phase").value("OTP_SENT"));
 
-        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("pt-BR"));
     }
 
     @Test
@@ -2465,6 +2525,34 @@ class LoginFlowControllerTest {
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
+    /**
+     * The store review number's sign-in code is a fixed value printed in the store's review
+     * instructions. It never opens the delayed recovery, which would replace the account's PIN
+     * without anyone knowing it.
+     */
+    @Test
+    void recoveryIsNeverOfferedToTheStoreReviewNumber() throws Exception {
+        when(reviewLogin.isReviewNumber(PHONE)).thenReturn(true);
+
+        for (LoginSession session : List.of(pinRequiredSessionAfterOtp(), passkeyRequiredSession())) {
+            when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+            mockMvc.perform(get("/login/context").cookie(cookie()))
+                    .andExpect(status().isOk())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                            .string(org.hamcrest.Matchers.containsString("\"recovery\":null")));
+            postJson("/login/recovery/start", "{}")
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.code").value("recovery_unavailable"));
+            postJson("/login/recovery/complete", "{\"newPin\":\"284917\"}")
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.code").value("recovery_unavailable"));
+        }
+
+        org.mockito.Mockito.verifyNoInteractions(accountRecoveryService, tokenRevocationService);
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
     @Test
     void startingRecoveryOpensTheEpisodeAndReturnsTheState() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(passkeyRequiredSession()));
@@ -2478,7 +2566,7 @@ class LoginFlowControllerTest {
 
         verify(accountRecoveryService).start("@alice:dev.local", "••••4567", "127.0.0.1");
         // Recovery sends no SMS.
-        verify(otpService, org.mockito.Mockito.never()).sendOtp(any(), any(), any());
+        org.mockito.Mockito.verifyNoInteractions(otpService);
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 

@@ -61,7 +61,11 @@ class OtpServiceTest {
     void setUp() {
         properties = new IdentityServiceProperties();
         metrics = new SimpleMeterRegistry();
-        otpService = new OtpService(redisTemplate, properties, codeGenerator, smsSender, rateLimiter, metrics);
+        // The store review login is off, as on every deployment that does not configure it.
+        ReviewLogin reviewLogin = new ReviewLogin(new me.sarahlacerda.gua.identityservice.config.ReviewLoginProperties(),
+                new PhoneNumberNormalizer(), new PhoneNumberMasker(), metrics);
+        otpService = new OtpService(redisTemplate, properties, codeGenerator, smsSender, rateLimiter, metrics,
+                reviewLogin);
     }
 
     @Test
