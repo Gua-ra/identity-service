@@ -24,6 +24,7 @@ import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
+import me.sarahlacerda.gua.identityservice.service.ReviewLogin;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryService;
@@ -58,6 +59,10 @@ class SecurityControllerTest {
     @Mock
     private AccountRecoveryService accountRecoveryService;
 
+    // A mock answers false for every account: the store review login is off.
+    @Mock
+    private ReviewLogin reviewLogin;
+
     private MockMvc mockMvc;
     private ObjectMapper objectMapper;
     private IdentityServiceProperties properties;
@@ -76,7 +81,7 @@ class SecurityControllerTest {
                 // Real policy over the mocked services, so the factor report and the enrollment
                 // guard are the ones the application computes.
                 new AuthFactorPolicy(userSecurityService, passkeyService),
-                new AccountLocalpartResolver(directoryService), pinChangeService, accountRecoveryService);
+                new AccountLocalpartResolver(directoryService), pinChangeService, accountRecoveryService, reviewLogin);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new RestExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter())
@@ -530,6 +535,24 @@ class SecurityControllerTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
 
         verify(loginSessionService).create(org.mockito.ArgumentMatchers.any(LoginSession.class));
+    }
+
+    /**
+     * The store review account signs in with its code and PIN only, and a passkey would outlive
+     * the rotation of both, so settings never hands it an enrollment link.
+     */
+    @Test
+    void startPasskeyEnrollmentIsRefusedForTheStoreReviewAccount() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@review:dev.local");
+        org.mockito.Mockito.when(reviewLogin.isReviewAccount("@review:dev.local")).thenReturn(true);
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/passkey/enroll/start")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code")
+                        .value("passkey_not_allowed"));
+
+        org.mockito.Mockito.verifyNoInteractions(loginSessionService, passkeyService);
     }
 
     @Test

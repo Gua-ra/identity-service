@@ -9,6 +9,7 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
@@ -16,6 +17,7 @@ import org.springframework.util.StringUtils;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import me.sarahlacerda.gua.identityservice.config.ReviewLoginProperties;
+import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPhoneNumberException;
 
 /**
@@ -23,15 +25,24 @@ import me.sarahlacerda.gua.identityservice.exception.InvalidPhoneNumberException
  * project-owned number may sign in with a fixed code instead of a texted one. Only the
  * interactive sign-in consults this (see {@link OtpService#sendLoginOtp} and
  * {@link OtpService#verifyLoginOtp}); every other OTP purpose never does, and every other
- * number is answered as before. The PIN or passkey the account holds is still required after
- * the code, and the delayed account recovery, which would replace that PIN, is never offered
- * to the review number (the login flow asks {@link #isReviewNumber}).
+ * number is answered as before. The account's PIN is still required after the code. The
+ * delayed account recovery, which would replace that PIN, is never offered to the review number,
+ * and the review account ({@link #isReviewAccount}) is never offered, never registers and never
+ * signs in with a passkey, so the code and the PIN are its only way in and rotating either cuts
+ * off everyone who held the old one.
  *
  * <p>
- * Off unless {@code identity.review-login.enabled} is true. When on, a missing or malformed
- * number or hash refuses startup, so a bad configuration can neither enable the feature
- * half way nor accept anything. The code itself is never configured, only its bcrypt hash,
- * the primitive PINs are hashed with; bcrypt's comparison is constant time.
+ * Configured only by the {@code GUA_REVIEW_LOGIN_*} environment variables
+ * ({@link ReviewLoginProperties}), off unless {@code GUA_REVIEW_LOGIN_ENABLED} is exactly
+ * {@code true}. When on, a missing or malformed number or hash refuses startup, so a bad
+ * configuration can neither enable the feature half way nor accept anything. The code itself is
+ * never configured, only its bcrypt hash, the primitive PINs are hashed with; bcrypt's comparison
+ * is constant time.
+ *
+ * <p>
+ * The code never changes, so wrong guesses at it add up across sends: {@value #LOCKOUT_FAILURES}
+ * of them within {@link #LOCKOUT_WINDOW} refuse every review code until that window ends
+ * ({@link OtpService#verifyLoginOtp} keeps the count).
  *
  * <p>
  * A bcrypt check is slow, so while the feature is on every sign-in verify of every number
@@ -40,8 +51,8 @@ import me.sarahlacerda.gua.identityservice.exception.InvalidPhoneNumberException
  *
  * <p>
  * Every send and verify for the review number is logged at WARN with the number masked, and
- * counted as {@code gua_identity_review_login_total{outcome}}. Neither the code nor the hash
- * is ever logged.
+ * counted as {@code gua_identity_review_login_total{outcome}}. The lockout is also logged once
+ * at ERROR when it trips. Neither the code nor the hash is ever logged.
  */
 @Component
 public class ReviewLogin {
@@ -52,6 +63,11 @@ public class ReviewLogin {
     private static final Pattern BCRYPT = Pattern.compile("\\A\\$2[aby]\\$(\\d\\d)\\$[./0-9A-Za-z]{53}\\z");
     static final int MIN_COST = 10;
     static final int MAX_COST = 14;
+
+    /** Wrong review codes within {@link #LOCKOUT_WINDOW} that lock the review code until the window ends. */
+    public static final int LOCKOUT_FAILURES = 20;
+    /** Fixed from the first wrong review code it counts. */
+    public static final Duration LOCKOUT_WINDOW = Duration.ofHours(24);
 
     /** How long a review send waits before any real provider call has been timed on this instance. */
     static final Duration DEFAULT_PROVIDER_LATENCY = Duration.ofMillis(400);
@@ -66,7 +82,12 @@ public class ReviewLogin {
         /** The guess budget is spent and the code is gone. */
         EXHAUSTED("exhausted"),
         /** No live code: never sent, expired, already used or burned. */
-        NO_CODE("no_code");
+        NO_CODE("no_code"),
+        /**
+         * The lockout tripped, or refused a verify while it holds. A refused verify is never
+         * compared with the review code, whatever was submitted.
+         */
+        LOCKED("locked");
 
         private final String tag;
 
@@ -92,26 +113,30 @@ public class ReviewLogin {
     private final PasswordEncoder encoder;
     private final PhoneNumberMasker masker;
     private final MeterRegistry metrics;
+    private final DirectoryService directory;
+    private final PhoneNumberHasher hasher;
     private final Sleeper sleeper;
     /** Moving average of real provider calls, or -1 before the first one. */
     private final AtomicLong providerLatencyNanos = new AtomicLong(-1);
 
     @Autowired
-    public ReviewLogin(ReviewLoginProperties properties, PhoneNumberNormalizer normalizer, PhoneNumberMasker masker,
-            MeterRegistry metrics) {
-        this(properties, normalizer, masker, metrics, Sleeper.THREAD);
+    public ReviewLogin(ConfigurableEnvironment environment, PhoneNumberNormalizer normalizer,
+            PhoneNumberMasker masker, MeterRegistry metrics, DirectoryService directory, PhoneNumberHasher hasher) {
+        this(ReviewLoginProperties.fromEnvironment(environment), normalizer, masker, metrics, directory, hasher,
+                Sleeper.THREAD, new BCryptPasswordEncoder());
     }
 
+    /**
+     * {@code sleeper} and {@code encoder} are seams for tests that time sends and count
+     * comparisons; {@code encoder} must check bcrypt hashes.
+     */
     ReviewLogin(ReviewLoginProperties properties, PhoneNumberNormalizer normalizer, PhoneNumberMasker masker,
-            MeterRegistry metrics, Sleeper sleeper) {
-        this(properties, normalizer, masker, metrics, sleeper, new BCryptPasswordEncoder());
-    }
-
-    /** {@code encoder} is a seam for tests that count comparisons; it must check bcrypt hashes. */
-    ReviewLogin(ReviewLoginProperties properties, PhoneNumberNormalizer normalizer, PhoneNumberMasker masker,
-            MeterRegistry metrics, Sleeper sleeper, PasswordEncoder encoder) {
+            MeterRegistry metrics, DirectoryService directory, PhoneNumberHasher hasher, Sleeper sleeper,
+            PasswordEncoder encoder) {
         this.masker = masker;
         this.metrics = metrics;
+        this.directory = directory;
+        this.hasher = hasher;
         this.sleeper = sleeper;
         this.encoder = encoder;
         this.enabled = properties.isEnabled();
@@ -129,6 +154,20 @@ public class ReviewLogin {
     /** Whether {@code e164} is the review number, compared exactly against its canonical form. */
     public boolean isReviewNumber(String e164) {
         return enabled && phone.equals(e164);
+    }
+
+    /**
+     * Whether {@code userId} is the review account: the account the review number's directory row
+     * names. Reads nothing while the feature is off.
+     */
+    public boolean isReviewAccount(String userId) {
+        if (!enabled || !StringUtils.hasText(userId)) {
+            return false;
+        }
+        return directory.findByDigest(hasher.digest(phone))
+                .map(DirectoryEntry::getUserId)
+                .filter(userId::equals)
+                .isPresent();
     }
 
     /** Whether {@code submitted} is the review code. */
@@ -149,6 +188,17 @@ public class ReviewLogin {
 
     public void record(String e164, Outcome outcome) {
         log.warn("Store review login {} for {}", outcome.tag(), masker.mask(e164));
+        count(outcome);
+    }
+
+    /** The one ERROR line a lockout writes, when it trips, counted as {@link Outcome#LOCKED}. */
+    public void recordLockout(String e164) {
+        log.error("Store review login locked for {}: {} wrong codes within {} hours. Every review code is refused"
+                + " until the window ends.", masker.mask(e164), LOCKOUT_FAILURES, LOCKOUT_WINDOW.toHours());
+        count(Outcome.LOCKED);
+    }
+
+    private void count(Outcome outcome) {
         metrics.counter("gua.identity.review.login", "outcome", outcome.tag()).increment();
     }
 

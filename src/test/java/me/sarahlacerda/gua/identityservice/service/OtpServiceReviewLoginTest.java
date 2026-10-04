@@ -34,6 +34,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
@@ -55,6 +56,7 @@ class OtpServiceReviewLoginTest {
     private static final String CODE_KEY = "otp:code:" + REVIEW_PHONE;
     private static final String ATTEMPTS_KEY = "otp:attempts:" + REVIEW_PHONE;
     private static final String BINDING_KEY = "otp:review-login:" + REVIEW_PHONE;
+    private static final String FAILURES_KEY = "otp:review-login-failures:" + REVIEW_PHONE;
     /** The random code a review send stores, which nobody is ever sent. */
     private static final String ISSUED = "482913";
 
@@ -68,6 +70,10 @@ class OtpServiceReviewLoginTest {
     private SmsSender smsSender;
     @Mock
     private RateLimiter rateLimiter;
+    @Mock
+    private DirectoryService directory;
+    @Mock
+    private PhoneNumberHasher hasher;
 
     private final IdentityServiceProperties properties = new IdentityServiceProperties();
     private final SimpleMeterRegistry metrics = new SimpleMeterRegistry();
@@ -97,7 +103,7 @@ class OtpServiceReviewLoginTest {
 
     private OtpService otpService(ReviewLoginProperties reviewProperties) {
         ReviewLogin reviewLogin = new ReviewLogin(reviewProperties, new PhoneNumberNormalizer(),
-                new PhoneNumberMasker(), metrics, waits::add, new BCryptPasswordEncoder() {
+                new PhoneNumberMasker(), metrics, directory, hasher, waits::add, new BCryptPasswordEncoder() {
                     @Override
                     public boolean matches(CharSequence rawPassword, String encodedPassword) {
                         reviewCodeChecks.incrementAndGet();
@@ -121,7 +127,7 @@ class OtpServiceReviewLoginTest {
             when(redisTemplate.opsForValue()).thenReturn(valueOperations);
             when(codeGenerator.generateNumericCode(6)).thenReturn(ISSUED);
 
-            otpService(new ReviewLoginProperties()).sendLoginOtp(REVIEW_PHONE, "127.0.0.1", null);
+            otpService(ReviewLoginProperties.off()).sendLoginOtp(REVIEW_PHONE, "127.0.0.1", null);
 
             verify(valueOperations).set(CODE_KEY, ISSUED, properties.getOtp().getTtl());
             verify(smsSender).send(eq(REVIEW_PHONE), eq(
@@ -138,10 +144,12 @@ class OtpServiceReviewLoginTest {
             when(valueOperations.get(CODE_KEY)).thenReturn(ISSUED);
             when(valueOperations.increment(ATTEMPTS_KEY)).thenReturn(1L);
 
-            assertThatThrownBy(() -> otpService(new ReviewLoginProperties()).verifyLoginOtp(REVIEW_PHONE, REVIEW_CODE))
+            assertThatThrownBy(() -> otpService(ReviewLoginProperties.off()).verifyLoginOtp(REVIEW_PHONE, REVIEW_CODE))
                     .isInstanceOf(InvalidOtpException.class);
 
             verify(valueOperations, never()).get(BINDING_KEY);
+            verify(valueOperations, never()).get(FAILURES_KEY);
+            verify(valueOperations, never()).increment(FAILURES_KEY);
             verify(redisTemplate, never()).delete(CODE_KEY);
             assertThat(reviewCodeChecks).hasValue(0);
         }
@@ -151,7 +159,7 @@ class OtpServiceReviewLoginTest {
             when(redisTemplate.opsForValue()).thenReturn(valueOperations);
             when(valueOperations.get("otp:code:" + OTHER_PHONE)).thenReturn("777777");
             when(valueOperations.increment("otp:attempts:" + OTHER_PHONE)).thenReturn(1L, 2L);
-            OtpService otpService = otpService(new ReviewLoginProperties());
+            OtpService otpService = otpService(ReviewLoginProperties.off());
 
             assertThatThrownBy(() -> otpService.verifyLoginOtp(OTHER_PHONE, "000000"))
                     .isInstanceOf(InvalidOtpException.class);
@@ -408,6 +416,7 @@ class OtpServiceReviewLoginTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(valueOperations.get(CODE_KEY)).thenReturn(ISSUED, "654321");
         when(valueOperations.get(BINDING_KEY)).thenReturn(ISSUED);
+        when(valueOperations.get(FAILURES_KEY)).thenReturn(null);
         when(valueOperations.get("otp:code:" + OTHER_PHONE)).thenReturn("777777");
         when(valueOperations.increment(anyString())).thenReturn(1L);
         OtpService otpService = enabled();
@@ -431,7 +440,170 @@ class OtpServiceReviewLoginTest {
         assertThat(review(ReviewLogin.Outcome.ACCEPTED)).isZero();
     }
 
+    // -------------------- the lockout --------------------
+
+    /**
+     * A review sign-in's live code, compared with the review code, in a window whose counter reads
+     * {@code failures} and then each of {@code later}.
+     */
+    private void liveReviewCode(String failures, String... later) {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(CODE_KEY)).thenReturn(ISSUED);
+        when(valueOperations.get(BINDING_KEY)).thenReturn(ISSUED);
+        when(valueOperations.get(FAILURES_KEY)).thenReturn(failures, later);
+    }
+
+    /** Every wrong review code is counted, in a window that starts with the first and is never extended. */
+    @Test
+    void wrongReviewCodesAreCountedInAWindowFixedFromTheFirst() {
+        liveReviewCode(null);
+        when(valueOperations.increment(ATTEMPTS_KEY)).thenReturn(1L, 2L);
+        when(redisTemplate.getExpire(CODE_KEY)).thenReturn(200L);
+        when(valueOperations.increment(FAILURES_KEY)).thenReturn(1L, 2L);
+        when(redisTemplate.getExpire(FAILURES_KEY)).thenReturn(80_000L);
+        OtpService otpService = enabled();
+
+        for (int guess = 0; guess < 2; guess++) {
+            assertThatThrownBy(() -> otpService.verifyLoginOtp(REVIEW_PHONE, "000000"))
+                    .isInstanceOf(InvalidOtpException.class)
+                    .hasMessage("Invalid or expired verification code");
+        }
+
+        verify(valueOperations, times(2)).increment(FAILURES_KEY);
+        verify(redisTemplate, times(1)).expire(FAILURES_KEY, ReviewLogin.LOCKOUT_WINDOW);
+        assertThat(review(ReviewLogin.Outcome.REJECTED)).isEqualTo(2.0);
+        assertThat(review(ReviewLogin.Outcome.LOCKED)).isZero();
+    }
+
+    /** A counter that lost its expiry gets one back, so no lockout outlives its window. */
+    @Test
+    void aCounterFoundWithoutAWindowGetsOne() {
+        liveReviewCode("7");
+        when(valueOperations.increment(ATTEMPTS_KEY)).thenReturn(1L);
+        when(valueOperations.increment(FAILURES_KEY)).thenReturn(8L);
+        when(redisTemplate.getExpire(CODE_KEY)).thenReturn(200L);
+        when(redisTemplate.getExpire(FAILURES_KEY)).thenReturn(-1L);
+
+        assertThatThrownBy(() -> enabled().verifyLoginOtp(REVIEW_PHONE, "000000"))
+                .isInstanceOf(InvalidOtpException.class);
+
+        verify(redisTemplate).expire(FAILURES_KEY, ReviewLogin.LOCKOUT_WINDOW);
+    }
+
+    /**
+     * The 20th wrong review code trips the lockout: one ERROR line and one locked count. From then
+     * on the right code is refused too, without being compared, while still paying its bcrypt
+     * check and answering exactly like a wrong guess.
+     */
+    @Test
+    void theTwentiethWrongReviewCodeLocksItAndEvenTheRightCodeIsRefused() {
+        liveReviewCode("19", "20", "20");
+        when(valueOperations.increment(ATTEMPTS_KEY)).thenReturn(1L, 2L, 3L);
+        when(valueOperations.increment(FAILURES_KEY)).thenReturn(20L);
+        OtpService otpService = enabled();
+
+        assertThatThrownBy(() -> otpService.verifyLoginOtp(REVIEW_PHONE, "000000"))
+                .isInstanceOf(InvalidOtpException.class)
+                .hasMessage("Invalid or expired verification code");
+        assertThat(review(ReviewLogin.Outcome.REJECTED)).isEqualTo(1.0);
+        assertThat(review(ReviewLogin.Outcome.LOCKED)).isEqualTo(1.0);
+        assertThat(errors()).singleElement().satisfies(event -> assertThat(event.getFormattedMessage())
+                .startsWith("Store review login locked for ••••9901"));
+        int checksBefore = reviewCodeChecks.get();
+
+        for (String submitted : new String[] { REVIEW_CODE, "000000" }) {
+            assertThatThrownBy(() -> otpService.verifyLoginOtp(REVIEW_PHONE, submitted))
+                    .isInstanceOf(InvalidOtpException.class)
+                    .hasMessage("Invalid or expired verification code");
+        }
+
+        // Each refusal paid the bcrypt check a comparison costs, counted, and was not counted again.
+        assertThat(reviewCodeChecks).hasValue(checksBefore + 2);
+        assertThat(review(ReviewLogin.Outcome.LOCKED)).isEqualTo(3.0);
+        assertThat(review(ReviewLogin.Outcome.ACCEPTED)).isZero();
+        assertThat(errors()).hasSize(1);
+        verify(valueOperations, times(1)).increment(FAILURES_KEY);
+        verify(redisTemplate, never()).delete(CODE_KEY);
+    }
+
+    /** A refused guess spends the code's budget like any wrong guess, so the fifth burns it as usual. */
+    @Test
+    void lockedGuessesStillSpendTheCodesBudget() {
+        liveReviewCode("20");
+        when(valueOperations.increment(ATTEMPTS_KEY)).thenReturn(1L, 2L, 3L, 4L, 5L);
+        OtpService otpService = enabled();
+
+        for (int guess = 1; guess < properties.getOtp().getMaxVerifyAttempts(); guess++) {
+            assertThatThrownBy(() -> otpService.verifyLoginOtp(REVIEW_PHONE, REVIEW_CODE))
+                    .hasMessage("Invalid or expired verification code");
+        }
+        assertThatThrownBy(() -> otpService.verifyLoginOtp(REVIEW_PHONE, REVIEW_CODE))
+                .hasMessage("Too many incorrect verification codes; request a new code");
+
+        verify(redisTemplate).delete(CODE_KEY);
+        verify(redisTemplate).delete(BINDING_KEY);
+        verify(valueOperations, never()).increment(FAILURES_KEY);
+        assertThat(review(ReviewLogin.Outcome.LOCKED)).isEqualTo(5.0);
+        assertThat(errors()).isEmpty();
+    }
+
+    @Test
+    void theRightCodeWorksAgainOnceTheWindowEnds() {
+        // Locked, then the counter expired with its window.
+        liveReviewCode("20", (String) null);
+        when(valueOperations.increment(ATTEMPTS_KEY)).thenReturn(1L, 2L);
+        OtpService otpService = enabled();
+
+        assertThatThrownBy(() -> otpService.verifyLoginOtp(REVIEW_PHONE, REVIEW_CODE))
+                .isInstanceOf(InvalidOtpException.class);
+        otpService.verifyLoginOtp(REVIEW_PHONE, REVIEW_CODE);
+
+        assertThat(review(ReviewLogin.Outcome.LOCKED)).isEqualTo(1.0);
+        assertThat(review(ReviewLogin.Outcome.ACCEPTED)).isEqualTo(1.0);
+    }
+
+    /** The lockout is the review code's: a code texted to the number, and every other number, work as before. */
+    @Test
+    void aLockoutLeavesTextedCodesAndOtherNumbersAlone() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(CODE_KEY)).thenReturn("654321");
+        when(valueOperations.get(BINDING_KEY)).thenReturn(ISSUED);
+        when(valueOperations.get("otp:code:" + OTHER_PHONE)).thenReturn("777777");
+        when(valueOperations.increment(anyString())).thenReturn(1L);
+        OtpService otpService = enabled();
+
+        otpService.verifyLoginOtp(REVIEW_PHONE, "654321");
+        otpService.verifyLoginOtp(OTHER_PHONE, "777777");
+
+        verify(valueOperations, never()).get(FAILURES_KEY);
+        verify(valueOperations, never()).get("otp:review-login-failures:" + OTHER_PHONE);
+        assertThat(review(ReviewLogin.Outcome.LOCKED)).isZero();
+    }
+
+    /** Only wrong review codes count: a wrong guess at a texted code, or at another number's, does not. */
+    @Test
+    void onlyWrongReviewCodesCount() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(CODE_KEY)).thenReturn("654321");
+        when(valueOperations.get(BINDING_KEY)).thenReturn(ISSUED);
+        when(valueOperations.get("otp:code:" + OTHER_PHONE)).thenReturn("777777");
+        when(valueOperations.increment(anyString())).thenReturn(1L);
+        OtpService otpService = enabled();
+
+        assertThatThrownBy(() -> otpService.verifyLoginOtp(REVIEW_PHONE, "000000"))
+                .isInstanceOf(InvalidOtpException.class);
+        assertThatThrownBy(() -> otpService.verifyLoginOtp(OTHER_PHONE, "000000"))
+                .isInstanceOf(InvalidOtpException.class);
+
+        verify(valueOperations, never()).increment(FAILURES_KEY);
+        verify(valueOperations, never()).increment("otp:review-login-failures:" + OTHER_PHONE);
+    }
+
     // -------------------- helpers --------------------
+
+    private List<ILoggingEvent> errors() {
+        return logs.list.stream().filter(event -> event.getLevel() == Level.ERROR).toList();
+    }
 
     private double review(ReviewLogin.Outcome outcome) {
         return ReviewLoginTest.count(metrics, outcome);

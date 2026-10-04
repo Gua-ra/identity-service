@@ -2553,6 +2553,148 @@ class LoginFlowControllerTest {
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
+    // --- The store review account never holds a passkey -----------------
+
+    /**
+     * The review account's way in is the review code and its PIN, both rotated by the operator. A
+     * passkey would sign in with neither and survive every rotation, so signup takes the review
+     * number straight to the PIN step instead of offering one.
+     */
+    @Test
+    void theStoreReviewNumberGoesStraightToThePinStepAtSignup() throws Exception {
+        when(reviewLogin.isReviewNumber(PHONE)).thenReturn(true);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PROFILE_REQUIRED)));
+        when(usernamePolicy.normalizeAndValidate("Review")).thenReturn("review");
+        when(directoryService.isUsernameTaken("review")).thenReturn(false);
+        when(matrixProvisioningService.buildUserId(eq("review"), any())).thenReturn("@review:gua.local");
+        when(matrixAdminClient.userExists("@review:gua.local")).thenReturn(false);
+        when(passkeyService.isEnabled()).thenReturn(true);
+
+        postJson("/login/profile", "{\"username\":\"Review\",\"displayName\":\"Review\"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+    }
+
+    /** The same for an older review account that holds no factor yet. */
+    @Test
+    void anOlderStoreReviewAccountWithNoFactorGoesStraightToThePinStep() throws Exception {
+        when(reviewLogin.isReviewNumber(PHONE)).thenReturn(true);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("@review:gua.local")
+                .username("review").displayName("Review").build();
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
+        when(passkeyService.isEnabled()).thenReturn(true);
+
+        postJson("/login/otp", "{\"code\":\"123456\"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+    }
+
+    /** After its PIN the review account is done: it is not offered the passkey every other account is. */
+    @Test
+    void theStoreReviewNumberIsNotOfferedAPasskeyAfterItsPin() throws Exception {
+        when(reviewLogin.isReviewNumber(PHONE)).thenReturn(true);
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("@review:gua.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.isEnabled()).thenReturn(true);
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        postJson("/login/pin", "{\"pin\":\"123456\"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.redirectUrl").value(CALLBACK + "?code=auth-code&state=xyz"));
+
+        verify(userSecurityService).validatePinOrThrow("@review:gua.local", "123456");
+        assertEquals(SessionFactor.PIN, session.getAuthenticatedFactor());
+    }
+
+    /**
+     * A review session that reaches the setup step anyway, from a sign-in or from settings, is
+     * refused there, before any ceremony starts or any credential is stored.
+     */
+    @Test
+    void passkeyRegistrationIsRefusedForTheStoreReviewAccount() throws Exception {
+        LoginSession signIn = session(Phase.PASSKEY_SETUP);
+        signIn.setUserId("@review:gua.local");
+        signIn.setAuthenticatedFactor(SessionFactor.PIN);
+        when(reviewLogin.isReviewNumber(PHONE)).thenReturn(true);
+
+        LoginSession enrollment = enrollSessionPastStepUp(LoginSession.EnrollTarget.PASSKEY);
+        enrollment.setUserId("@review:gua.local");
+        when(reviewLogin.isReviewAccount("@review:gua.local")).thenReturn(true);
+
+        for (LoginSession session : List.of(signIn, enrollment)) {
+            when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+            postJson("/login/passkey/register/options", "{}")
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.code").value("passkey_not_allowed"));
+            postJson("/login/passkey/register/verify", "{\"credential\":{\"id\":\"cred-1\"}}")
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.code").value("passkey_not_allowed"));
+        }
+
+        verify(passkeyService, org.mockito.Mockito.never()).startRegistration(any(), any());
+        verify(passkeyService, org.mockito.Mockito.never()).finishRegistration(any(), any(), any());
+        verify(loginFactorEnrollmentService, org.mockito.Mockito.never()).registerPasskey(any(), any(), any());
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    /**
+     * A passkey that resolves to the review account signs nothing in, from any step, so one
+     * registered before this rule, or by any other route, is worthless.
+     */
+    @Test
+    void aPasskeySignInThatResolvesToTheStoreReviewAccountIsRefused() throws Exception {
+        when(reviewLogin.isReviewAccount("@review:gua.local")).thenReturn(true);
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@review:gua.local", REGISTERED_LONG_AGO));
+
+        LoginSession atPin = session(Phase.PIN_REQUIRED);
+        atPin.setUserId("@review:gua.local");
+        for (LoginSession session : List.of(session(Phase.PHONE), session(Phase.OTP_SENT), atPin)) {
+            when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+            postJson("/login/passkey/auth/verify", "{\"credential\":{\"id\":\"cred-1\"}}")
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.code").value("passkey_not_allowed"));
+            assertEquals(null, session.getAuthenticatedFactor());
+        }
+
+        verify(directoryService, org.mockito.Mockito.never()).findByUserId(any());
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+        verify(userSecurityService, org.mockito.Mockito.never()).recordSuccessfulLogin(any());
+    }
+
+    /**
+     * The refusal follows the account a passkey resolves to, never the number a session holds
+     * unproved, so typing the review number tells nobody anything: another account's passkey
+     * still signs that account in from the phone and code steps.
+     */
+    @Test
+    void typingTheStoreReviewNumberDoesNotChangeAnotherAccountsPasskeySignIn() throws Exception {
+        when(reviewLogin.isReviewNumber(PHONE)).thenReturn(true);
+        ObjectNode options = JsonNodeFactory.instance.objectNode();
+        options.put("challenge", "abc");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
+        when(passkeyService.startAuthentication(SID)).thenReturn(options);
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local", REGISTERED_LONG_AGO));
+        DirectoryEntry entry = DirectoryEntry.builder()
+                .phoneDigest("digest").userId("@alice:dev.local").username("alice").displayName("Alice").build();
+        when(directoryService.findByUserId("@alice:dev.local")).thenReturn(List.of(entry));
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        postJson("/login/passkey/auth/options", "{}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.publicKey.challenge").value("abc"));
+        postJson("/login/passkey/auth/verify", "{\"credential\":{\"id\":\"cred-1\"}}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+    }
+
     @Test
     void startingRecoveryOpensTheEpisodeAndReturnsTheState() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(passkeyRequiredSession()));

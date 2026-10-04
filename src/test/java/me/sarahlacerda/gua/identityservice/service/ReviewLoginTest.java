@@ -3,11 +3,15 @@ package me.sarahlacerda.gua.identityservice.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import org.junit.jupiter.api.AfterEach;
@@ -15,11 +19,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.env.StandardEnvironment;
 import org.springframework.core.env.SystemEnvironmentPropertySource;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
@@ -31,6 +35,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import me.sarahlacerda.gua.identityservice.config.ReviewLoginProperties;
+import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 
 class ReviewLoginTest {
 
@@ -42,8 +47,13 @@ class ReviewLoginTest {
     /** What the operator command in the README prints for {@link #REVIEW_CODE}: htpasswd writes $2y$. */
     private static final String HTPASSWD_HASH = "$2y$12$l6e7kk4cHubVejUuAh.w8.H50f.NEqmUEVbdJo96Q4mra.CoykzAG";
 
+    private static final String REVIEW_DIGEST = "review-digest";
+    private static final String REVIEW_ACCOUNT = "@review:gua.local";
+
     private final SimpleMeterRegistry metrics = new SimpleMeterRegistry();
     private final List<Duration> waits = new ArrayList<>();
+    private final DirectoryService directory = mock(DirectoryService.class);
+    private final PhoneNumberHasher hasher = mock(PhoneNumberHasher.class);
     private ListAppender<ILoggingEvent> logs;
     private Logger logger;
 
@@ -61,44 +71,69 @@ class ReviewLoginTest {
     }
 
     static ReviewLoginProperties enabled(String phone, String hash) {
-        ReviewLoginProperties properties = new ReviewLoginProperties();
-        properties.setEnabled(true);
-        properties.setPhone(phone);
-        properties.setCodeHash(hash);
-        return properties;
+        return ReviewLoginProperties.of("true", phone, hash);
     }
 
     private ReviewLogin reviewLogin(ReviewLoginProperties properties) {
-        return new ReviewLogin(properties, new PhoneNumberNormalizer(), new PhoneNumberMasker(), metrics, waits::add);
+        return reviewLogin(properties, new BCryptPasswordEncoder());
+    }
+
+    private ReviewLogin reviewLogin(ReviewLoginProperties properties, BCryptPasswordEncoder encoder) {
+        return new ReviewLogin(properties, new PhoneNumberNormalizer(), new PhoneNumberMasker(), metrics, directory,
+                hasher, waits::add, encoder);
     }
 
     // -------------------- off --------------------
 
     @Test
     void offByDefaultAndInert() {
-        ReviewLogin off = reviewLogin(new ReviewLoginProperties());
+        ReviewLogin off = reviewLogin(ReviewLoginProperties.off());
 
         assertThat(off.isReviewNumber(REVIEW_PHONE)).isFalse();
         assertThat(off.matchesReviewCode(REVIEW_CODE)).isFalse();
+        assertThat(off.isReviewAccount(REVIEW_ACCOUNT)).isFalse();
         assertThat(logs.list).isEmpty();
         assertThat(metrics.getMeters()).isEmpty();
+        verifyNoInteractions(directory, hasher);
     }
 
     @Test
     void theOffSwitchWinsWhateverElseIsSet() {
-        ReviewLoginProperties properties = enabled("not a phone", "not a hash");
-        properties.setEnabled(false);
+        for (String off : new String[] { "false", "", null }) {
+            ReviewLogin reviewLogin = reviewLogin(ReviewLoginProperties.of(off, "not a phone", "not a hash"));
 
-        ReviewLogin off = reviewLogin(properties);
-
-        assertThat(off.isReviewNumber("not a phone")).isFalse();
-        assertThat(off.matchesReviewCode(REVIEW_CODE)).isFalse();
+            assertThat(reviewLogin.isReviewNumber("not a phone")).isFalse();
+            assertThat(reviewLogin.matchesReviewCode(REVIEW_CODE)).isFalse();
+        }
     }
 
     @Test
     void theConstructorSpringUsesNeedsNoTestSeam() {
-        assertThatCode(() -> new ReviewLogin(new ReviewLoginProperties(), new PhoneNumberNormalizer(),
-                new PhoneNumberMasker(), metrics)).doesNotThrowAnyException();
+        StandardEnvironment environment = new StandardEnvironment();
+        environment.getPropertySources().replace(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME,
+                new SystemEnvironmentPropertySource(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME,
+                        Map.of()));
+
+        assertThatCode(() -> new ReviewLogin(environment, new PhoneNumberNormalizer(), new PhoneNumberMasker(),
+                metrics, directory, hasher)).doesNotThrowAnyException();
+    }
+
+    // -------------------- the switch --------------------
+
+    /** Exactly true turns it on; exactly false, empty or unset is off; nothing else is guessed at. */
+    @Test
+    void onlyExactlyTrueOrFalseIsASwitch() {
+        assertThat(ReviewLoginProperties.of("true", null, null).isEnabled()).isTrue();
+        for (String off : new String[] { "false", "", null }) {
+            assertThat(ReviewLoginProperties.of(off, REVIEW_PHONE, REVIEW_CODE_HASH).isEnabled()).isFalse();
+        }
+        for (String unreadable : new String[] { "TRUE", "True", "yes", "on", "1", " true", "true ", "FALSE", "no",
+                "off", "0", "maybe" }) {
+            assertThatThrownBy(() -> ReviewLoginProperties.of(unreadable, REVIEW_PHONE, REVIEW_CODE_HASH))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("GUA_REVIEW_LOGIN_ENABLED must be exactly true or false")
+                    .hasMessageContaining("Refusing to start");
+        }
     }
 
     // -------------------- startup validation --------------------
@@ -225,6 +260,31 @@ class ReviewLoginTest {
      * The check a sign-in verify of any other number pays for: the same bcrypt comparison against
      * the same hash, so it costs the same, with the answer thrown away. Nothing while off.
      */
+    // -------------------- the review account --------------------
+
+    /** The account the review number's directory row names, and no other. */
+    @Test
+    void theReviewAccountIsTheOneTheReviewNumberResolvesTo() {
+        when(hasher.digest(REVIEW_PHONE)).thenReturn(REVIEW_DIGEST);
+        DirectoryEntry row = mock(DirectoryEntry.class);
+        when(row.getUserId()).thenReturn(REVIEW_ACCOUNT);
+        when(directory.findByDigest(REVIEW_DIGEST)).thenReturn(Optional.of(row));
+        ReviewLogin on = reviewLogin(enabled(REVIEW_PHONE, REVIEW_CODE_HASH));
+
+        assertThat(on.isReviewAccount(REVIEW_ACCOUNT)).isTrue();
+        assertThat(on.isReviewAccount("@someone:gua.local")).isFalse();
+        assertThat(on.isReviewAccount(null)).isFalse();
+        assertThat(on.isReviewAccount("")).isFalse();
+    }
+
+    @Test
+    void beforeTheReviewNumberSignsUpThereIsNoReviewAccount() {
+        when(hasher.digest(REVIEW_PHONE)).thenReturn(REVIEW_DIGEST);
+        when(directory.findByDigest(REVIEW_DIGEST)).thenReturn(Optional.empty());
+
+        assertThat(reviewLogin(enabled(REVIEW_PHONE, REVIEW_CODE_HASH)).isReviewAccount(REVIEW_ACCOUNT)).isFalse();
+    }
+
     @Test
     void aSpentCheckIsTheReviewCodeCheckWithItsAnswerDiscarded() {
         List<String> checkedAgainst = new CopyOnWriteArrayList<>();
@@ -235,8 +295,7 @@ class ReviewLoginTest {
                 return super.matches(rawPassword, encodedPassword);
             }
         };
-        ReviewLogin on = new ReviewLogin(enabled(REVIEW_PHONE, REVIEW_CODE_HASH), new PhoneNumberNormalizer(),
-                new PhoneNumberMasker(), metrics, waits::add, recording);
+        ReviewLogin on = reviewLogin(enabled(REVIEW_PHONE, REVIEW_CODE_HASH), recording);
         logs.list.clear();
 
         on.spendAReviewCodeCheck("000000");
@@ -248,8 +307,7 @@ class ReviewLoginTest {
         assertThat(logs.list).isEmpty();
         assertThat(metrics.getMeters()).isEmpty();
 
-        ReviewLogin off = new ReviewLogin(new ReviewLoginProperties(), new PhoneNumberNormalizer(),
-                new PhoneNumberMasker(), metrics, waits::add, recording);
+        ReviewLogin off = reviewLogin(ReviewLoginProperties.off(), recording);
         off.spendAReviewCodeCheck(REVIEW_CODE);
         assertThat(checkedAgainst).hasSize(3);
     }
@@ -272,6 +330,23 @@ class ReviewLoginTest {
         for (ReviewLogin.Outcome outcome : ReviewLogin.Outcome.values()) {
             assertThat(count(metrics, outcome)).isEqualTo(1.0);
         }
+        assertNoSecretsLogged();
+    }
+
+    /** A lockout writes one ERROR line, masked, and counts as locked. */
+    @Test
+    void aLockoutIsLoggedOnceAtErrorAndCounted() {
+        ReviewLogin on = reviewLogin(enabled(REVIEW_PHONE, REVIEW_CODE_HASH));
+        logs.list.clear();
+
+        on.recordLockout(REVIEW_PHONE);
+
+        assertThat(logs.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(event.getFormattedMessage()).startsWith("Store review login locked for ••••9901")
+                    .contains("20 wrong codes within 24 hours");
+        });
+        assertThat(count(metrics, ReviewLogin.Outcome.LOCKED)).isEqualTo(1.0);
         assertNoSecretsLogged();
     }
 
@@ -312,8 +387,8 @@ class ReviewLoginTest {
     // -------------------- bound from the environment --------------------
 
     /**
-     * Through the binder and the real application.yml, with the variables presented the way the
-     * OS presents them, so the documented variable names are the ones that work.
+     * Through a Spring context and the real application.yml, with the variables in the process
+     * environment's own property source, the only place they are read from.
      */
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withInitializer(new ConfigDataApplicationContextInitializer())
@@ -321,12 +396,21 @@ class ReviewLoginTest {
 
     private ApplicationContextRunner withEnv(Map<String, Object> env) {
         return runner.withInitializer(context -> context.getEnvironment().getPropertySources()
-                .addFirst(new SystemEnvironmentPropertySource("os-env", env)));
+                .replace(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME, new SystemEnvironmentPropertySource(
+                        StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME, env)));
     }
 
+    private static Map<String, Object> fullyConfigured() {
+        return Map.of(
+                "GUA_REVIEW_LOGIN_ENABLED", "true",
+                "GUA_REVIEW_LOGIN_PHONE", REVIEW_PHONE,
+                "GUA_REVIEW_LOGIN_CODE_HASH", REVIEW_CODE_HASH);
+    }
+
+    /** Also proves application.yml carries no identity.review-login property, which would refuse startup. */
     @Test
     void noVariablesMeansOff() {
-        runner.run(context -> {
+        withEnv(Map.of()).run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context.getBean(ReviewLogin.class).isReviewNumber(REVIEW_PHONE)).isFalse();
         });
@@ -334,10 +418,7 @@ class ReviewLoginTest {
 
     @Test
     void theDocumentedVariablesTurnItOn() {
-        withEnv(Map.of(
-                "GUA_REVIEW_LOGIN_ENABLED", "true",
-                "GUA_REVIEW_LOGIN_PHONE", REVIEW_PHONE,
-                "GUA_REVIEW_LOGIN_CODE_HASH", REVIEW_CODE_HASH)).run(context -> {
+        withEnv(fullyConfigured()).run(context -> {
                     assertThat(context).hasNotFailed();
                     ReviewLogin on = context.getBean(ReviewLogin.class);
                     assertThat(on.isReviewNumber(REVIEW_PHONE)).isTrue();
@@ -381,18 +462,92 @@ class ReviewLoginTest {
         }
     }
 
+    /** What relaxed binding to a Boolean accepted before: each now refuses startup instead. */
     @Test
     void anUnreadableSwitchFailsRatherThanGuessing() {
-        withEnv(Map.of("GUA_REVIEW_LOGIN_ENABLED", "maybe")).run(context -> assertThat(context).hasFailed());
+        for (String unreadable : new String[] { "maybe", "TRUE", "yes", "on", "1", "FALSE", "no", "0" }) {
+            withEnv(Map.of(
+                    "GUA_REVIEW_LOGIN_ENABLED", unreadable,
+                    "GUA_REVIEW_LOGIN_PHONE", REVIEW_PHONE,
+                    "GUA_REVIEW_LOGIN_CODE_HASH", REVIEW_CODE_HASH)).run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure()).rootCause()
+                                .hasMessageContaining("GUA_REVIEW_LOGIN_ENABLED must be exactly true or false");
+                    });
+        }
+    }
+
+    /**
+     * The three names count only as environment variables. Set as properties or system
+     * properties they are ignored, so nothing but the process environment can switch it on.
+     */
+    @Test
+    void theVariablesAreReadFromTheEnvironmentOnly() {
+        withEnv(Map.of())
+                .withPropertyValues("GUA_REVIEW_LOGIN_ENABLED=true", "GUA_REVIEW_LOGIN_PHONE=" + REVIEW_PHONE,
+                        "GUA_REVIEW_LOGIN_CODE_HASH=" + REVIEW_CODE_HASH)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(ReviewLogin.class).isReviewNumber(REVIEW_PHONE)).isFalse();
+                });
+        withEnv(Map.of())
+                .withSystemProperties("GUA_REVIEW_LOGIN_ENABLED=true", "GUA_REVIEW_LOGIN_PHONE=" + REVIEW_PHONE,
+                        "GUA_REVIEW_LOGIN_CODE_HASH=" + REVIEW_CODE_HASH)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(ReviewLogin.class).isReviewNumber(REVIEW_PHONE)).isFalse();
+                });
+    }
+
+    /**
+     * The probe that found the gap: relaxed binding read IDENTITY_REVIEW_LOGIN_ENABLED=true over
+     * GUA_REVIEW_LOGIN_ENABLED=false and turned the feature on. Any spelling of an
+     * identity.review-login property, from the environment or any other source, now refuses
+     * startup, whatever the GUA_ variables say, and the refusal never carries the value.
+     */
+    @Test
+    void anIdentityReviewLoginPropertyFromAnySourceRefusesStartup() {
+        Map<String, Object> off = Map.of("GUA_REVIEW_LOGIN_ENABLED", "false");
+        List<ApplicationContextRunner> foreign = List.of(
+                withEnv(Map.of("GUA_REVIEW_LOGIN_ENABLED", "false", "IDENTITY_REVIEW_LOGIN_ENABLED", "true")),
+                withEnv(Map.of("IDENTITY_REVIEWLOGIN_ENABLED", "true")),
+                withEnv(Map.of("IDENTITY_REVIEW_LOGIN_PHONE", OTHER_PHONE)),
+                withEnv(Map.of("IDENTITY_REVIEW_LOGIN_CODE_HASH", REVIEW_CODE_HASH)),
+                withEnv(fullyConfigured()).withPropertyValues("identity.review-login.phone=" + OTHER_PHONE),
+                withEnv(off).withPropertyValues("identity.review-login.enabled=true"),
+                withEnv(off).withPropertyValues("identity.reviewLogin.code-hash=" + REVIEW_CODE_HASH),
+                withEnv(off).withSystemProperties("identity.review-login.enabled=true"));
+        for (ApplicationContextRunner candidate : foreign) {
+            candidate.run(context -> {
+                assertThat(context).hasFailed();
+                assertThat(context.getStartupFailure()).rootCause()
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("reads only the GUA_REVIEW_LOGIN_ENABLED, GUA_REVIEW_LOGIN_PHONE and"
+                                + " GUA_REVIEW_LOGIN_CODE_HASH environment variables")
+                        .hasMessageContaining("Refusing to start");
+                assertThat(stackText(context.getStartupFailure()))
+                        .doesNotContain(REVIEW_CODE_HASH)
+                        .doesNotContain(OTHER_PHONE);
+            });
+        }
     }
 
     @Configuration(proxyBeanMethods = false)
-    @EnableConfigurationProperties(ReviewLoginProperties.class)
     @Import({ ReviewLogin.class, PhoneNumberNormalizer.class, PhoneNumberMasker.class })
     static class ReviewLoginOnly {
         @Bean
         MeterRegistry meterRegistry() {
             return new SimpleMeterRegistry();
+        }
+
+        @Bean
+        DirectoryService directoryService() {
+            return mock(DirectoryService.class);
+        }
+
+        @Bean
+        PhoneNumberHasher phoneNumberHasher() {
+            return mock(PhoneNumberHasher.class);
         }
     }
 

@@ -23,6 +23,8 @@ public class OtpService {
     private static final String IP_RATE_KEY_PREFIX = "otp:rate:ip:";
     /** Which live code a review sign-in issued; see {@link #sendLoginOtp}. */
     private static final String REVIEW_LOGIN_KEY_PREFIX = "otp:review-login:";
+    /** Wrong review codes in the current lockout window; see {@link #verifyLoginOtp}. */
+    private static final String REVIEW_FAILURES_KEY_PREFIX = "otp:review-login-failures:";
     private static final String EXHAUSTED_MESSAGE = "Too many incorrect verification codes; request a new code";
 
     private final StringRedisTemplate redisTemplate;
@@ -94,6 +96,15 @@ public class OtpService {
      * The review code is checked with bcrypt, which takes tens to hundreds of milliseconds, so
      * while the review login is on every comparison made here, for any number, pays for exactly
      * one bcrypt check. A wrong guess then answers in the same time whichever number it is for.
+     *
+     * <p>
+     * The review code never changes, so wrong guesses at it are also counted across sends, in a
+     * window of {@link ReviewLogin#LOCKOUT_WINDOW} fixed from the first. The
+     * {@value ReviewLogin#LOCKOUT_FAILURES}th trips the lockout: until the window ends every
+     * comparison with the review code is refused without looking at what was submitted. A refused
+     * guess still pays its bcrypt check and spends the code's guess budget, so it answers like any
+     * other wrong guess. Codes another flow texted to the number, and every other number, are not
+     * affected.
      */
     public void verifyLoginOtp(String e164PhoneNumber, String code) {
         if (!reviewLogin.isReviewNumber(e164PhoneNumber)) {
@@ -102,16 +113,21 @@ public class OtpService {
             return;
         }
         String bindingKey = reviewLoginKey(e164PhoneNumber);
-        ReviewLoginCheck check = new ReviewLoginCheck(bindingKey);
+        ReviewLoginCheck check = new ReviewLoginCheck(e164PhoneNumber, bindingKey);
         try {
             verify(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), code, OtpVerifyFlow.PHONE, check);
         } catch (InvalidOtpException ex) {
-            ReviewLogin.Outcome outcome = EXHAUSTED_MESSAGE.equals(ex.getMessage()) ? ReviewLogin.Outcome.EXHAUSTED
-                    : check.compared ? ReviewLogin.Outcome.REJECTED : ReviewLogin.Outcome.NO_CODE;
-            if (outcome == ReviewLogin.Outcome.EXHAUSTED) {
+            boolean exhausted = EXHAUSTED_MESSAGE.equals(ex.getMessage());
+            if (exhausted) {
                 redisTemplate.delete(bindingKey);
             }
+            ReviewLogin.Outcome outcome = check.refusedByLockout ? ReviewLogin.Outcome.LOCKED
+                    : exhausted ? ReviewLogin.Outcome.EXHAUSTED
+                    : check.compared ? ReviewLogin.Outcome.REJECTED : ReviewLogin.Outcome.NO_CODE;
             reviewLogin.record(e164PhoneNumber, outcome);
+            if (check.wrongReviewCode) {
+                countWrongReviewCode(e164PhoneNumber);
+            }
             throw ex;
         }
         redisTemplate.delete(bindingKey);
@@ -245,6 +261,43 @@ public class OtpService {
         return REVIEW_LOGIN_KEY_PREFIX + e164PhoneNumber;
     }
 
+    private static String reviewFailuresKey(String e164PhoneNumber) {
+        return REVIEW_FAILURES_KEY_PREFIX + e164PhoneNumber;
+    }
+
+    /** Whether the review code is locked: the current window holds the cap of wrong review codes. */
+    private boolean reviewCodeLocked(String e164PhoneNumber) {
+        String failures = redisTemplate.opsForValue().get(reviewFailuresKey(e164PhoneNumber));
+        if (failures == null) {
+            return false;
+        }
+        try {
+            return Long.parseLong(failures) >= ReviewLogin.LOCKOUT_FAILURES;
+        } catch (NumberFormatException ex) {
+            // Only INCR writes the key, so anything else in it is treated as locked.
+            return true;
+        }
+    }
+
+    /**
+     * Counts one wrong review code against the window. The window starts with the first and is
+     * never extended, and a counter found without one gets one, so no lockout outlives its window.
+     * The guess that reaches the cap is the one that reports the lockout, so it is reported once.
+     */
+    private void countWrongReviewCode(String e164PhoneNumber) {
+        String key = reviewFailuresKey(e164PhoneNumber);
+        Long failures = redisTemplate.opsForValue().increment(key);
+        if (failures == null) {
+            return;
+        }
+        if (failures == 1L || Long.valueOf(-1L).equals(redisTemplate.getExpire(key))) {
+            redisTemplate.expire(key, ReviewLogin.LOCKOUT_WINDOW);
+        }
+        if (failures == ReviewLogin.LOCKOUT_FAILURES) {
+            reviewLogin.recordLockout(e164PhoneNumber);
+        }
+    }
+
     private static String scopedCodeKey(OtpScope scope, String scopeId) {
         return OTP_KEY_PREFIX + scope.keySegment() + ":" + scopeId;
     }
@@ -277,14 +330,19 @@ public class OtpService {
     /**
      * The review number's comparison: the review code while the live code is the one a review
      * sign-in issued, the live code itself otherwise (a code another flow texted to the number).
-     * Either way one bcrypt check, like every other sign-in comparison.
+     * While the review code is locked, a comparison with it fails without looking at the
+     * submission. Every path pays one bcrypt check, like every other sign-in comparison.
      */
     private final class ReviewLoginCheck implements BiPredicate<String, String> {
 
+        private final String e164PhoneNumber;
         private final String bindingKey;
         private boolean compared;
+        private boolean refusedByLockout;
+        private boolean wrongReviewCode;
 
-        ReviewLoginCheck(String bindingKey) {
+        ReviewLoginCheck(String e164PhoneNumber, String bindingKey) {
+            this.e164PhoneNumber = e164PhoneNumber;
             this.bindingKey = bindingKey;
         }
 
@@ -292,10 +350,17 @@ public class OtpService {
         public boolean test(String storedCode, String submitted) {
             compared = true;
             String issuedForReview = redisTemplate.opsForValue().get(bindingKey);
-            if (issuedForReview != null && OtpCodes.matches(issuedForReview, storedCode)) {
-                return reviewLogin.matchesReviewCode(submitted);
+            if (issuedForReview == null || !OtpCodes.matches(issuedForReview, storedCode)) {
+                return matchesAfterAReviewCodeCheck(storedCode, submitted);
             }
-            return matchesAfterAReviewCodeCheck(storedCode, submitted);
+            if (reviewCodeLocked(e164PhoneNumber)) {
+                refusedByLockout = true;
+                reviewLogin.spendAReviewCodeCheck(submitted);
+                return false;
+            }
+            boolean matched = reviewLogin.matchesReviewCode(submitted);
+            wrongReviewCode = !matched;
+            return matched;
         }
     }
 }

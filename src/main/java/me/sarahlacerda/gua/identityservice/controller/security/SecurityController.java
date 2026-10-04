@@ -48,6 +48,7 @@ import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.LanguageTags;
+import me.sarahlacerda.gua.identityservice.service.ReviewLogin;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.Phase;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
@@ -79,6 +80,7 @@ public class SecurityController {
     private final AccountLocalpartResolver accountLocalparts;
     private final PinChangeService pinChangeService;
     private final AccountRecoveryService accountRecoveryService;
+    private final ReviewLogin reviewLogin;
 
     @GetMapping("/pin/status")
     @Operation(summary = "Check the authenticated user's two-step verification state", description = "Returns hasPin=true once the user has configured a security PIN (drives the 'set up two-step verification' nudge), and how long the fresh-2FA hold on the account's PIN still has to run before that PIN can change the phone number. Read it when about to offer the PIN, not as 'can I change my number now': it is silent about the separate 24h phone-change cooldown, and it does not describe the passkey path, which carries its own hold on the age of the asserted credential and is refused the same way. It also reports which factors the account has REGISTERED, which one to offer first, and which ones a phone change accepts in precedence order, so a client offers the right factor instead of hardcoding the rule. Registration is server truth; whether a registered passkey is usable on this device is not reported and is never accepted as an input. Finally it reports whether a delayed account recovery is live on the account (accountRecoveryPending), with when it can be finished and when it expires, so every signed-in app can show a banner and offer POST /security/recovery/cancel, and the two configured waits (accountRecoveryDormancySeconds, accountRecoveryWaitSeconds), which are reported whether or not a recovery is live because they are configuration rather than episode state: a client that states them itself is right only on a deployment left at the defaults.", security = @SecurityRequirement(name = "oidcAccessToken"))
@@ -231,12 +233,21 @@ public class SecurityController {
             @ApiResponse(responseCode = "200", description = "Enrollment session created; open the returned enrollUrl in a web view"),
             @ApiResponse(responseCode = "400", description = "invalid_redirect_uri: the named redirect is not one this deployment allows. Retry once with no redirectUri to take the deployment's default.", content = @Content),
             @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content),
+            @ApiResponse(responseCode = "403", description = "passkey_not_allowed: the store review account signs in only with its code and PIN", content = @Content),
             @ApiResponse(responseCode = "409", description = "passkey_already_registered: the account already has a passkey, or step_up_unavailable: the only factor this account holds is one this deployment cannot run", content = @Content)
     })
     public ResponseEntity<PasskeyEnrollStartResponse> startPasskeyEnrollment(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Optional. The app-scheme redirect this build answers.", required = false, content = @Content(schema = @Schema(implementation = FactorEnrollStartRequest.class))) @RequestBody(required = false) FactorEnrollStartRequest request,
             @RequestHeader(value = HttpHeaders.ACCEPT_LANGUAGE, required = false) String acceptLanguage) {
         String userId = authenticatedUserAccessor.requireCurrentUserId();
+
+        // The store review account signs in with its code and PIN only. A passkey would outlive
+        // the rotation of both, so it is never enrolled (LoginFlowController refuses it again at
+        // the setup step).
+        if (reviewLogin.isReviewAccount(userId)) {
+            throw new LoginFlowException(HttpStatus.FORBIDDEN, "passkey_not_allowed",
+                    "Passkeys are turned off for this account.");
+        }
 
         // Enrolling a second passkey for an account that already has one cannot succeed.
         // The ceremony excludes the credentials the account already holds, so the

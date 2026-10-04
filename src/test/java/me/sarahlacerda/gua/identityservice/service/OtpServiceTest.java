@@ -62,8 +62,10 @@ class OtpServiceTest {
         properties = new IdentityServiceProperties();
         metrics = new SimpleMeterRegistry();
         // The store review login is off, as on every deployment that does not configure it.
-        ReviewLogin reviewLogin = new ReviewLogin(new me.sarahlacerda.gua.identityservice.config.ReviewLoginProperties(),
-                new PhoneNumberNormalizer(), new PhoneNumberMasker(), metrics);
+        ReviewLogin reviewLogin = new ReviewLogin(me.sarahlacerda.gua.identityservice.config.ReviewLoginProperties.off(),
+                new PhoneNumberNormalizer(), new PhoneNumberMasker(), metrics, org.mockito.Mockito.mock(DirectoryService.class),
+                org.mockito.Mockito.mock(PhoneNumberHasher.class), duration -> {
+                }, new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder());
         otpService = new OtpService(redisTemplate, properties, codeGenerator, smsSender, rateLimiter, metrics,
                 reviewLogin);
     }

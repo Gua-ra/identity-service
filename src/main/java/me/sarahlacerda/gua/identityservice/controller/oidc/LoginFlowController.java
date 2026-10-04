@@ -554,7 +554,7 @@ public class LoginFlowController {
     }
 
     @PostMapping("/passkey/register/options")
-    @Operation(summary = "Start passkey setup", description = "Creates WebAuthn registration options after phone verification and any PIN step are complete.")
+    @Operation(summary = "Start passkey setup", description = "Creates WebAuthn registration options after phone verification and any PIN step are complete. 403 passkey_not_allowed for the store review account, which signs in only with its code and PIN.")
     public ResponseEntity<PasskeyOptionsResponse> startPasskeyRegistration(
             @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
             @RequestHeader(value = CSRF_HEADER, required = false) String csrf) {
@@ -562,12 +562,13 @@ public class LoginFlowController {
         requireCsrf(session, csrf);
         requirePhase(session, Phase.PASSKEY_SETUP);
         requireEnrollStepUpDone(session);
+        refuseReviewAccountPasskey(session);
 
         return ResponseEntity.ok(new PasskeyOptionsResponse(passkeyService.startRegistration(sessionId, session)));
     }
 
     @PostMapping("/passkey/register/verify")
-    @Operation(summary = "Finish passkey setup", description = "Verifies the WebAuthn attestation response and stores the credential for future passkey sign-ins.")
+    @Operation(summary = "Finish passkey setup", description = "Verifies the WebAuthn attestation response and stores the credential for future passkey sign-ins. 403 passkey_not_allowed for the store review account, which signs in only with its code and PIN.")
     public ResponseEntity<LoginStateResponse> finishPasskeyRegistration(
             @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
             @RequestHeader(value = CSRF_HEADER, required = false) String csrf,
@@ -576,6 +577,7 @@ public class LoginFlowController {
         requireCsrf(session, csrf);
         requirePhase(session, Phase.PASSKEY_SETUP);
         requireEnrollStepUpDone(session);
+        refuseReviewAccountPasskey(session);
 
         if (session.isEnroll()) {
             // Bearer-authenticated handoff from settings: no sign-in is being finished here.
@@ -632,7 +634,7 @@ public class LoginFlowController {
     }
 
     @PostMapping("/passkey/auth/verify")
-    @Operation(summary = "Finish passkey sign-in", description = "Verifies the WebAuthn assertion and, only when it resolves to an existing OTP-registered account with a phone on file, completes login, intentionally bypassing the steps that would otherwise remain. A session that has already resolved its subject, which is every session at PIN_REQUIRED and PASSKEY_REQUIRED, additionally requires the assertion to resolve to that same account. Never creates an account.")
+    @Operation(summary = "Finish passkey sign-in", description = "Verifies the WebAuthn assertion and, only when it resolves to an existing OTP-registered account with a phone on file, completes login, intentionally bypassing the steps that would otherwise remain. A session that has already resolved its subject, which is every session at PIN_REQUIRED and PASSKEY_REQUIRED, additionally requires the assertion to resolve to that same account. Never creates an account. 403 passkey_not_allowed when the assertion resolves to the store review account, which signs in only with its code and PIN.")
     public ResponseEntity<LoginStateResponse> finishPasskeyAuthentication(
             @CookieValue(value = COOKIE_NAME_EXPR, required = false) String sessionId,
             @RequestHeader(value = CSRF_HEADER, required = false) String csrf,
@@ -644,6 +646,12 @@ public class LoginFlowController {
 
         PasskeyService.PasskeyAuthentication auth = passkeyService.finishAuthentication(sessionId, request.credential());
         String userId = auth.userId();
+
+        // Decided by the account the assertion resolved to, never by a number the session holds
+        // unproved, so this refusal says nothing about any number to anyone but the account holder.
+        if (reviewLogin.isReviewAccount(userId)) {
+            throw reviewAccountPasskeyRefused();
+        }
 
         // A session that already knows whose it is keeps that subject. The PIN step is reached
         // only after an OTP proved this account, so an assertion resolving to a different one
@@ -909,9 +917,12 @@ public class LoginFlowController {
      * declines the offer at {@code POST /login/passkey/setup-skip}, which lands on the same PIN
      * step. Either route reaches a step where the account can acquire a second factor, and
      * neither route reaches completion without one having been offered.
+     *
+     * <p>
+     * The store review account goes straight to the PIN step: it never holds a passkey.
      */
     private ResponseEntity<LoginStateResponse> offerPasskeyBeforePin(String sessionId, LoginSession session) {
-        if (!authFactorPolicy.passkeysSupported()) {
+        if (!authFactorPolicy.passkeysSupported() || isReviewAccount(session)) {
             return advanceToPinSetup(sessionId, session);
         }
         session.setPhase(Phase.PASSKEY_SETUP);
@@ -934,9 +945,11 @@ public class LoginFlowController {
     private ResponseEntity<LoginStateResponse> advanceToPasskeySetup(String sessionId, LoginSession session) {
         // Reached only after a PIN sign-in. Don't re-offer passkey setup to an account that already
         // has one: re-registering the same device only fails. Nor on a deployment that cannot run a
-        // passkey ceremony, where the offer is a step nobody can take. Either way the user is done
-        // authenticating; complete the login straight through.
-        if (!authFactorPolicy.passkeysSupported() || authFactorPolicy.passkeyHeld(session.getUserId())) {
+        // passkey ceremony, where the offer is a step nobody can take, nor to the store review
+        // account, which never holds one. Either way the user is done authenticating; complete the
+        // login straight through.
+        if (!authFactorPolicy.passkeysSupported() || authFactorPolicy.passkeyHeld(session.getUserId())
+                || isReviewAccount(session)) {
             return complete(sessionId, session);
         }
         session.setPhase(Phase.PASSKEY_SETUP);
@@ -1117,6 +1130,32 @@ public class LoginFlowController {
         return session.getReauthUserId() == null && !session.isEnroll();
     }
 
+    /**
+     * Whether this session is the store review account's ({@link ReviewLogin}): by the number a
+     * sign-in proved, or by the account an enrollment or sign-in resolved. Only asked at steps
+     * past that proof.
+     *
+     * <p>
+     * That account's way in is the review code and its PIN, both rotated by the operator, and
+     * nothing else. A passkey registered by whoever held them would sign in with neither and
+     * survive every rotation, so the account is never offered one, never registers one and never
+     * signs in with one.
+     */
+    private boolean isReviewAccount(LoginSession session) {
+        return reviewLogin.isReviewNumber(session.getPhoneNumber()) || reviewLogin.isReviewAccount(session.getUserId());
+    }
+
+    private void refuseReviewAccountPasskey(LoginSession session) {
+        if (isReviewAccount(session)) {
+            throw reviewAccountPasskeyRefused();
+        }
+    }
+
+    private static LoginFlowException reviewAccountPasskeyRefused() {
+        return new LoginFlowException(HttpStatus.FORBIDDEN, "passkey_not_allowed",
+                "Passkeys are turned off for this account.");
+    }
+
     private void requirePhase(LoginSession session, Phase... allowed) {
         for (Phase phase : allowed) {
             if (session.getPhase() == phase) {
@@ -1225,24 +1264,45 @@ public class LoginFlowController {
 
     // --- Request / response payloads ---
 
+    /** What every request below prints in place of a code or a PIN. */
+    private static final String REDACTED = "<redacted>";
+
     public record PhoneRequest(@NotBlank String phoneNumber, String locale) {
     }
 
+    /** Never prints the code. */
     public record OtpRequest(@NotBlank String code) {
+        @Override
+        public String toString() {
+            return "OtpRequest[code=" + REDACTED + "]";
+        }
     }
 
+    /** Never prints the PIN. */
     public record PinRequest(@NotBlank String pin) {
+        @Override
+        public String toString() {
+            return "PinRequest[pin=" + REDACTED + "]";
+        }
     }
 
     /**
      * PIN setup is mandatory. {@code skip} is still accepted on the wire so an older client gets
-     * a {@code pin_required} answer instead of a malformed-request one.
+     * a {@code pin_required} answer instead of a malformed-request one. Never prints the PIN.
      */
     public record PinSetupRequest(String pin, boolean skip) {
+        @Override
+        public String toString() {
+            return "PinSetupRequest[pin=" + REDACTED + ", skip=" + skip + "]";
+        }
     }
 
-    /** The new PIN a completed account recovery sets. */
+    /** The new PIN a completed account recovery sets. Never prints it. */
     public record RecoveryCompleteRequest(String newPin) {
+        @Override
+        public String toString() {
+            return "RecoveryCompleteRequest[newPin=" + REDACTED + "]";
+        }
     }
 
     /**
@@ -1256,8 +1316,15 @@ public class LoginFlowController {
     public record PasskeyCredentialRequest(@NotNull JsonNode credential) {
     }
 
-    /** The account's own number again, with the code sent to it, at the enrollment step-up. */
+    /**
+     * The account's own number again, with the code sent to it, at the enrollment step-up. Never
+     * prints the code.
+     */
     public record EnrollStepUpOtpRequest(@NotBlank String phoneNumber, @NotBlank String code) {
+        @Override
+        public String toString() {
+            return "EnrollStepUpOtpRequest[phoneNumber=" + phoneNumber + ", code=" + REDACTED + "]";
+        }
     }
 
     public record PasskeyOptionsResponse(JsonNode publicKey) {
