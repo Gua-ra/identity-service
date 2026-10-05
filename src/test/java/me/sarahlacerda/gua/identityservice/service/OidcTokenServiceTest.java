@@ -93,6 +93,26 @@ class OidcTokenServiceTest {
     }
 
     /**
+     * D3: the phone number is released only to a client that asked for the phone scope. MAS asks for
+     * openid alone and stores the ID tokens it receives, so it must get none.
+     */
+    @Test
+    void thePhoneNumberIsInTheTokensOnlyWhenThePhoneScopeWasGranted() throws ParseException {
+        OidcTokenResponse withoutPhone = tokenService.issueTokens(new OidcAuthorization(
+                "@alice:gua.global", "+15551234567", "Alice", "alice", Set.of("openid"), "mas", "nonce-1"));
+        OidcTokenResponse withPhone = tokenService.issueTokens(new OidcAuthorization(
+                "@alice:gua.global", "+15551234567", "Alice", "alice", Set.of("openid", "phone"), "mas", "nonce-1"));
+
+        for (String token : List.of(withoutPhone.accessToken(), withoutPhone.idToken())) {
+            assertThat(SignedJWT.parse(token).getJWTClaimsSet().getClaims()).doesNotContainKey("phone_number");
+        }
+        for (String token : List.of(withPhone.accessToken(), withPhone.idToken())) {
+            assertThat(SignedJWT.parse(token).getJWTClaimsSet().getStringClaim("phone_number"))
+                    .isEqualTo("+15551234567");
+        }
+    }
+
+    /**
      * ADM-001 S6: the subject stays the account's full Matrix user id and
      * preferred_username is carried verbatim from the authorization. The token service
      * derives neither.
@@ -155,13 +175,13 @@ class OidcTokenServiceTest {
     @Test
     void parseAccessTokenRoundTrips() {
         OidcAuthorization authorization = new OidcAuthorization(
-                "user-99", "+15550009999", null, Set.of("openid"), "gua-ios");
+                "user-99", "+15550009999", null, Set.of("openid", "phone"), "gua-ios");
         OidcTokenResponse tokens = tokenService.issueTokens(authorization);
 
         OidcAuthenticatedPrincipal principal = tokenService.parseAccessToken(tokens.accessToken()).orElseThrow();
         assertThat(principal.userId()).isEqualTo("user-99");
         assertThat(principal.phoneNumber()).isEqualTo("+15550009999");
-        assertThat(principal.scope()).containsExactly("openid");
+        assertThat(principal.scope()).containsExactlyInAnyOrder("openid", "phone");
         // The client the token was accepted on, which is what tells the enrollment handoff
         // which app scheme to return to.
         assertThat(principal.clientId()).isEqualTo("gua-ios");
@@ -292,7 +312,8 @@ class OidcTokenServiceTest {
         assertThat(claims.getIssuer()).isEqualTo(properties.getIssuer());
         assertThat(claims.getSubject()).isEqualTo(authorization.userId());
         assertThat(claims.getAudience()).containsExactly(authorization.clientId());
-        assertThat(claims.getStringClaim("phone_number")).isEqualTo(authorization.phoneNumber());
+        assertThat(claims.getStringClaim("phone_number"))
+                .isEqualTo(authorization.scope().contains("phone") ? authorization.phoneNumber() : null);
         if (authorization.displayName() != null) {
             assertThat(claims.getStringClaim("name")).isEqualTo(authorization.displayName());
         }

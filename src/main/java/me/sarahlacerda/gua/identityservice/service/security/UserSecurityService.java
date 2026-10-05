@@ -7,6 +7,7 @@ import java.util.UUID;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,6 +17,7 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.domain.IdentityUser;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinException;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPinOperationException;
+import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneChangeCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinChangeChallengeNotFoundException;
 import me.sarahlacerda.gua.identityservice.exception.PinChangeCooldownException;
@@ -27,6 +29,7 @@ import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.OtpScope;
 import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
+import me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService;
 import me.sarahlacerda.gua.identityservice.service.security.audit.SecurityAuditLogger;
 
 @Service
@@ -44,6 +47,7 @@ public class UserSecurityService {
     private final SecurityAuditLogger auditLogger;
     private final StringRedisTemplate redisTemplate;
     private final PinPolicy pinPolicy;
+    private final AccountGenesisService accountGenesisService;
 
     @Transactional
     public IdentityUser ensureUser(String userId) {
@@ -391,10 +395,21 @@ public class UserSecurityService {
      * creating the same row then meet on the {@code user_id} unique index, the second waits for
      * the first and fails with a {@code DataIntegrityViolationException} instead of carrying on
      * as if it held the only row.
+     *
+     * <p>
+     * A deleted account is never given a row again. The deletion locks this row too, so a sign-in
+     * racing it waits, finds no row once the deletion commits, and is refused here by the
+     * tombstone that commit wrote.
      */
     IdentityUser lockOrCreateUser(String userId) {
         return repository.findByUserIdForUpdate(userId)
-                .orElseGet(() -> repository.saveAndFlush(IdentityUser.builder().userId(userId).build()));
+                .orElseGet(() -> {
+                    if (accountGenesisService.isDeleted(userId)) {
+                        throw new LoginFlowException(HttpStatus.GONE, "account_deleted",
+                                "This account has been deleted.");
+                    }
+                    return repository.saveAndFlush(IdentityUser.builder().userId(userId).build());
+                });
     }
 
     /** Locks the row of an account that must already have one. */

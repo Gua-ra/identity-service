@@ -8,7 +8,6 @@ import com.google.i18n.phonenumbers.PhoneNumberUtil;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.Nullable;
 import lombok.RequiredArgsConstructor;
-import me.sarahlacerda.gua.identityservice.client.matrix.MatrixAdminClient;
 import me.sarahlacerda.gua.identityservice.domain.MatrixSession;
 import me.sarahlacerda.gua.identityservice.domain.VerifyOtpResult;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
@@ -38,7 +37,6 @@ public class IdentityOrchestrationService {
 
     private final OtpService otpService;
     private final MatrixProvisioningService matrixProvisioningService;
-    private final MatrixAdminClient matrixAdminClient;
     private final SignupTokenService signupTokenService;
     private final PinChallengeService pinChallengeService;
     private final DirectoryService directoryService;
@@ -53,6 +51,7 @@ public class IdentityOrchestrationService {
     private final RegistrationGuard registrationGuard;
     private final AccountGenesisService accountGenesisService;
     private final PinPolicy pinPolicy;
+    private final UsernameAvailability usernameAvailability;
 
     public void sendOtp(String e164PhoneNumber, String requesterIp, String language) {
         otpService.sendOtp(e164PhoneNumber, requesterIp, language);
@@ -191,7 +190,7 @@ public class IdentityOrchestrationService {
             throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
         }
 
-        if (matrixAdminClient.userExists(userId)) {
+        if (usernameAvailability.isTaken(localpart, userId)) {
             throw new UsernameTakenException("Username already taken");
         }
 
@@ -291,12 +290,11 @@ public class IdentityOrchestrationService {
      * Runs the same format + reserved-name checks as {@link #completeSignup}
      * (throwing
      * {@link InvalidUsernameException} on bad input) and returns {@code true} only
-     * when
-     * no Matrix account with that localpart already exists. Does not mutate state.
+     * when {@link UsernameAvailability} finds the username free. Does not mutate state.
      */
     public boolean isUsernameAvailable(String rawUsername) {
         String localpart = validateUsername(rawUsername);
         String userId = matrixProvisioningService.buildUserId(localpart);
-        return !matrixAdminClient.userExists(userId);
+        return !usernameAvailability.isTaken(localpart, userId);
     }
 }

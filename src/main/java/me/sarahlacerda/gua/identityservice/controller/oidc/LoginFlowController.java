@@ -59,6 +59,7 @@ import me.sarahlacerda.gua.identityservice.service.account.AccountCreationServic
 import me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService;
 import me.sarahlacerda.gua.identityservice.service.routing.AccountPlacementContext;
 import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRouter;
+import me.sarahlacerda.gua.identityservice.service.UsernameAvailability;
 import me.sarahlacerda.gua.identityservice.service.UsernamePolicy;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession.Phase;
@@ -164,6 +165,7 @@ public class LoginFlowController {
     private final TokenRevocationService tokenRevocationService;
     private final EndOtherSessionsService endOtherSessionsService;
     private final ReviewLogin reviewLogin;
+    private final UsernameAvailability usernameAvailability;
 
     @GetMapping("/context")
     @Operation(summary = "Fetch the current login state", description = "Returns the current step, the login intent (PHONE or PASSKEY, from the OIDC login_hint), a CSRF token to echo on subsequent calls, the login language (locale) when known, the masked phone when known, and whether this is an in-app passkey enrollment. Once the step is one the flow can only reach with the subject resolved, it also reports passkeyRegistered, preferredFactor and passkeysEnabled; all are absent before then, and in particular at the phone step, where the session holds a submitted number and nothing proved. At ENROLL_STEP_UP, and only there, it additionally reports pinRegistered, so the step-up offers the PIN beside the passkey only to an account that holds one. At PIN_REQUIRED and PASSKEY_REQUIRED after an OTP it also reports recovery, the delayed account recovery state, which is absent whenever recovery is not available to this session.")
@@ -285,7 +287,9 @@ public class LoginFlowController {
         // IDENTITY_DIRECTORY_PEPPER, or env/DB drift, orphans the directory row but
         // NOT this binding, so a genuine returning user is still recognised here and
         // is never minted a second MXID + directory row (the duplicate-account bug).
-        Optional<String> boundUserId = matrixAdminClient.findUserIdByPhone(session.getPhoneNumber());
+        // A deleted account's binding is ignored: its number is free to sign up again.
+        Optional<String> boundUserId = matrixAdminClient.findUserIdByPhone(session.getPhoneNumber())
+                .filter(boundId -> !accountGenesisService.isDeleted(boundId));
         if (boundUserId.isPresent()) {
             String userId = boundUserId.get();
             log.warn("Directory row missing for a returning account (digest miss); recovered userId via "
@@ -470,26 +474,21 @@ public class LoginFlowController {
         registrationGuard.assertAllowedForNewUser(session);
 
         String localpart = usernamePolicy.normalizeAndValidate(request.username());
-        // Username uniqueness is enforced within this deployment's directory (the
-        // per-homeserver userExists check below only sees one homeserver). It is not
-        // federation-wide: that is a property of the sequenced binding log in ADM-001
-        // (L11, L12), which nothing here implements.
-        if (directoryService.isUsernameTaken(localpart)) {
-            throw new UsernameTakenException("Username already taken");
-        }
 
         // This deployment's router picks the homeserver the new account is created on:
         // a local choice, not the committed placement of ADM-001 L6.
         Homeserver homeserver = homeserverRouter
                 .selectForNewAccount(AccountPlacementContext.forPhone(session.getPhoneNumber()));
-        if (matrixAdminClient.userExists(matrixProvisioningService.buildUserId(localpart, homeserver))) {
-            throw new UsernameTakenException("Username already taken");
-        }
-
         // The Matrix localpart is the chosen handle. Build the stable subject (the
         // OIDC sub / directory userId) from the same localpart so sub, the directory
         // entry, and the preferred_username claim MAS imports all agree.
         String userId = matrixProvisioningService.buildUserId(localpart, homeserver);
+        // Username uniqueness is enforced within this deployment (its directory, its deleted
+        // accounts and the chosen homeserver). It is not federation-wide: that is a property of
+        // the sequenced binding log in ADM-001 (L11, L12), which nothing here implements.
+        if (usernameAvailability.isTaken(localpart, userId)) {
+            throw new UsernameTakenException("Username already taken");
+        }
         String displayName = StringUtils.hasText(request.displayName()) ? request.displayName().trim() : localpart;
         String digest = phoneNumberHasher.digest(session.getPhoneNumber());
         String maskedPhone = phoneNumberMasker.mask(session.getPhoneNumber());
@@ -834,6 +833,9 @@ public class LoginFlowController {
             throw new LoginFlowException(HttpStatus.CONFLICT, "factor_required",
                     "Sign in with your PIN or passkey to continue.");
         }
+        // Backstop for a deletion that commits while this request is in flight; requireSession
+        // refuses every later request of the session.
+        refuseDeletedAccount(sessionId, session.getUserId());
         userSecurityService.recordSuccessfulLogin(session.getUserId());
 
         // Only a completed recovery asks the authentication service to end every other session of
@@ -968,10 +970,25 @@ public class LoginFlowController {
                 "This phone number is not associated with your account.");
     }
 
+    /**
+     * The live session for this cookie. A session bound to an account that has since been deleted is
+     * ended and answered 410 {@code account_deleted}, so a sign-in, re-authentication or enrollment
+     * started before the deletion goes no further.
+     */
     private LoginSession requireSession(String sessionId) {
-        return loginSessionService.find(sessionId)
+        LoginSession session = loginSessionService.find(sessionId)
                 .orElseThrow(() -> new LoginFlowException(HttpStatus.GONE, "login_session_expired",
                         "Your login session has expired. Please start again."));
+        refuseDeletedAccount(sessionId,
+                StringUtils.hasText(session.getUserId()) ? session.getUserId() : session.getReauthUserId());
+        return session;
+    }
+
+    private void refuseDeletedAccount(String sessionId, String userId) {
+        if (StringUtils.hasText(userId) && accountGenesisService.isDeleted(userId)) {
+            loginSessionService.delete(sessionId);
+            throw new LoginFlowException(HttpStatus.GONE, "account_deleted", "This account has been deleted.");
+        }
     }
 
     private void requireCsrf(LoginSession session, String csrf) {

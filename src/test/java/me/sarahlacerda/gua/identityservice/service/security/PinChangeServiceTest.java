@@ -76,7 +76,8 @@ class PinChangeServiceTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
         passkeyService = mock(PasskeyService.class);
         UserSecurityService userSecurityService = new UserSecurityService(repository, passwordEncoder, properties,
-                directoryService, phoneNumberHasher, otpService, auditLogger, redisTemplate, new PinPolicy());
+                directoryService, phoneNumberHasher, otpService, auditLogger, redisTemplate, new PinPolicy(),
+                mock(me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService.class));
         service = new PinChangeService(userSecurityService, passkeyService, auditLogger);
     }
 

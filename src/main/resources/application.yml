@@ -122,6 +122,13 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_GENESIS_LIMIT:10}
         refresh-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_GENESIS_REFRESH:PT1M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_ACCOUNT_GENESIS_TIMEOUT:PT0S}
+      # The authentication service's account-deletion notice. Open, and each call costs a bcrypt check
+      # of the client secret, so it is bounded per address. A flood can delay deletions, never cause one.
+      - path: /oauth2/account-deleted
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_DELETED_LIMIT:60}
+        refresh-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_DELETED_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_ACCOUNT_DELETED_TIMEOUT:PT0S}
       - path: /signup/complete
         methods: [POST]
         limit-for-period: ${IDENTITY_RATE_LIMIT_SIGNUP_COMPLETE_LIMIT:10}
@@ -294,12 +301,18 @@ oidc:
     key-id: ${OIDC_JWK_KEY_ID:oidc-signing-key}
     private-key: ${OIDC_RSA_PRIVATE_KEY:}
     public-key: ${OIDC_RSA_PUBLIC_KEY:}
+  # POST /oauth2/account-deleted. Off: 503 to everyone. A confidential client's secret is all a notice
+  # needs, so a deployment turns this on only once every such secret is held by its client alone.
+  account-deletion-notices-enabled: ${OIDC_ACCOUNT_DELETION_NOTICES_ENABLED:false}
   clients:
     - client-id: ${OIDC_CLIENT_MAS_ID:mas}
       client-secret: ${OIDC_CLIENT_MAS_SECRET:}
       redirect-uris: ${OIDC_CLIENT_MAS_REDIRECTS:http://localhost:8080/upstream/account/callback/oidc,http://localhost:8081/upstream/account/callback/oidc}
       allowed-scopes: openid,profile,phone
       require-pkce: ${OIDC_CLIENT_MAS_REQUIRE_PKCE:false}
+      # Registry ids of the homeservers this MAS serves, whose accounts it may report deleted. "default"
+      # is the legacy single homeserver; a deployment with identity.routing.homeservers lists its own ids.
+      homeserver-ids: ${OIDC_CLIENT_MAS_HOMESERVER_IDS:default}
     - client-id: ${OIDC_CLIENT_GUA_IOS_ID:gua-ios}
       redirect-uris: ${OIDC_CLIENT_GUA_IOS_REDIRECTS:global.gua:/oidc}
       allowed-scopes: openid,profile,phone

@@ -48,7 +48,8 @@ public class OidcClientService {
                 publicClient,
                 List.copyOf(registration.getRedirectUris()),
                 Set.copyOf(registration.getAllowedScopes()),
-                publicClient || registration.isRequirePkce()
+                publicClient || registration.isRequirePkce(),
+                publicClient ? Set.of() : Set.copyOf(registration.getHomeserverIds())
             );
             map.put(client.clientId(), client);
         }
@@ -119,6 +120,21 @@ public class OidcClientService {
     }
 
     /**
+     * Authenticates a call that only a confidential client may make. An unknown client, a public client
+     * and a missing or wrong secret are the same 401: a public client holds no secret, so it can prove
+     * nothing here.
+     */
+    public RegisteredClient authenticateConfidentialClient(String clientId, String suppliedSecret) {
+        RegisteredClient client = clientId == null ? null : clientsById.get(clientId);
+        if (client == null || client.publicClient()
+                || suppliedSecret == null || suppliedSecret.isBlank()
+                || !passwordEncoder.matches(suppliedSecret, client.hashedSecret())) {
+            throw new OidcClientAuthenticationException("Client authentication failed");
+        }
+        return client;
+    }
+
+    /**
      * Verifies that the supplied PKCE verifier matches the previously-supplied challenge using S256.
      * Throws when PKCE was used at /authorize but the verifier is missing or wrong.
      */
@@ -157,12 +173,17 @@ public class OidcClientService {
         return r == 0;
     }
 
+    /**
+     * @param homeserverIds registry ids of the homeservers whose accounts this client may report deleted;
+     *                      always empty for a public client
+     */
     public record RegisteredClient(
         String clientId,
         String hashedSecret,
         boolean publicClient,
         List<String> redirectUris,
         Set<String> allowedScopes,
-        boolean requirePkce
+        boolean requirePkce,
+        Set<String> homeserverIds
     ) {}
 }

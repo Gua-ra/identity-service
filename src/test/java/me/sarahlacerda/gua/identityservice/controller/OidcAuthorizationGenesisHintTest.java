@@ -63,6 +63,8 @@ class OidcAuthorizationGenesisHintTest {
     private LoginFlowProperties loginFlowProperties;
     @MockitoBean
     private EndpointRateLimiter endpointRateLimiter;
+    @MockitoBean
+    private me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService accountGenesisService;
 
     @BeforeEach
     void setUp() {

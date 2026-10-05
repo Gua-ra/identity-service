@@ -30,6 +30,9 @@ public class SecurityConfig {
                         "/signup/complete",
                         "/signin/verify-pin",
                         "/oauth2/token",
+                        // The authentication service's account-deletion notice. Authenticated in the
+                        // handler by confidential client credentials, exactly like /oauth2/token.
+                        "/oauth2/account-deleted",
                         "/login/**");
 
         /**

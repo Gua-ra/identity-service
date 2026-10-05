@@ -187,7 +187,7 @@ Interactive docs: **`/swagger-ui.html`** (OpenAPI JSON at `/api-docs`). Endpoint
 | `POST /otp/send` | Public | Generate and dispatch an OTP to a phone number (rate-limited, localized SMS). |
 | `POST /otp/verify` | Public | Verify an OTP. Returns a `signupToken` (new user) or a `pinChallengeToken` (returning user holding a PIN; the PIN may also be sent inline). An account holding only a passkey is `403 passkey_required` and one holding no factor is `403 factor_setup_required`: this path cannot run a passkey ceremony or set a first factor, so those accounts sign in through the interactive flow. |
 | `POST /account/genesis` | Public³ | Register an on-device `AccountGenesis`, receive its `accountId` and a single-use attach handle. Off unless `identity.genesis.enabled`. See [Account genesis](#account-genesis-accountid). |
-| `GET /signup/check-username` | Public | Real-time username availability check (format/reserved rules + Matrix lookup). Does not mutate state. |
+| `GET /signup/check-username` | Public | Real-time username availability check (format/reserved rules, then `UsernameAvailability`: the directory, deleted accounts and the homeserver). Does not mutate state. |
 | `POST /signup/complete` | Public¹ | Exchange a `signupToken` and a PIN for a provisioned Matrix user with chosen username/display name. A missing or blank PIN is `400 pin_required`, and a malformed or weak one `invalid_pin`/`weak_pin`, both checked before the token is consumed. |
 | `POST /signin/verify-pin` | Public¹ | Exchange a `pinChallengeToken` + PIN for a Matrix session (second leg of 2SV sign-in). |
 | `POST /login/passkey/auth/options` | Session² | Start **passkey sign-in** for a returning user: WebAuthn assertion options, offered at the phone and OTP steps and at the PIN step. |
@@ -284,7 +284,7 @@ One asymmetry is deliberate and visible on the wire: `changePhoneCooldownRemaini
 
 **PIN strength** is enforced by `PinPolicy` across every set/update/change/recovery path: a PIN must be exactly six digits and must not be all-repeated (`000000`), strictly sequential (`123456` / `654321`), or one of a curated list of common PINs. Strength failures surface a distinct `weak_pin` error code (vs `invalid_pin` for a wrong PIN at login). The same rules are mirrored client-side (gua-idp-web, gua-ios) for instant feedback, but the server remains authoritative.
 
-**Username policy** (`UsernamePolicy`, shared by `/signup/check-username`, `/signup/complete`, and the interactive `/login/profile` step): 3 to 30 chars of lowercase letters, digits, dot, underscore or dash; not reserved; and, matching MAS's registration policy, not all-numeric (so a bare phone number can't become a handle).
+**Username policy** (`UsernamePolicy`, shared by `/signup/check-username`, `/signup/complete`, and the interactive `/login/profile` step): 3 to 30 chars of lowercase letters, digits, dot, underscore or dash; not reserved; and, matching MAS's registration policy, not all-numeric (so a bare phone number can't become a handle). Availability is one shared check, `UsernameAvailability`: a username is taken when this directory holds it, a deleted account held it on any configured homeserver, or the target homeserver already has the user.
 
 ### Delayed account recovery
 
@@ -434,8 +434,9 @@ The service is a self-contained OIDC provider. It issues the access tokens that 
 | `GET /.well-known/openid-configuration` | Discovery metadata (issuer, authorize/token/userinfo/JWKS URLs, supported response/grant types, `S256` PKCE, `RS256`). |
 | `GET /.well-known/jwks.json` | Publishes the **RSA public** signing key so relying parties can verify RS256 tokens. |
 | `GET /oauth2/authorize` | Authorization-code entry point. Validates `client_id`, `redirect_uri`, `response_type=code`, `scope`, and optional `state`/`nonce`/PKCE `code_challenge`, then starts a login session and **redirects to the interactive login UI**. The optional `login_hint` is either an E.164 phone to pre-fill the phone step or the reserved value `passkey`, which records a passkey sign-in intent on the session and is never treated as a phone number. The optional `ui_locales` (else `Accept-Language`) sets the login language, which is stored on the session and passed to the UI as `ui_locales`. (The legacy non-interactive branch that accepted `phone_number`+`otp_code` directly is removed, per ADM-001 L1a. `phone_number`, `otp_code` and `display_name` are no longer accepted and are ignored if sent.) |
-| `POST /oauth2/token` | Exchanges an authorization code (and PKCE `code_verifier`) for a signed access token + ID token. |
-| `GET /userinfo` | Returns the authenticated subject (`sub`), `phone_number`, `phone_number_masked` (display-only, e.g. `••••4567`), and optional `name` / `preferred_username`. |
+| `POST /oauth2/token` | Exchanges an authorization code (and PKCE `code_verifier`) for a signed access token + ID token. The tokens carry `phone_number` only when the `phone` scope was granted. A code whose account has since been deleted is refused with `invalid_grant`. |
+| `POST /oauth2/account-deleted` | The authentication service's notice that it deleted an account (see [Account deletion](#account-deletion)). |
+| `GET /userinfo` | Returns the authenticated subject (`sub`), `phone_number` (only when the token was issued with the `phone` scope), `phone_number_masked` (display-only, e.g. `••••4567`), and optional `name` / `preferred_username`. |
 
 ### Interactive login flow
 
@@ -470,6 +471,22 @@ On success an authorization code is issued, the login session is consumed (and i
 Login-flow configuration (`idp.login.*`): `ui-url` (`IDP_LOGIN_UI_URL`, default `/signin`), `session-ttl` (`IDP_LOGIN_SESSION_TTL`, default `PT10M`), `cookie-name` (`IDP_LOGIN_COOKIE_NAME`, default `gua_login`), and `cookie-secure` (`IDP_LOGIN_COOKIE_SECURE`, default `true`; set `false` only for plain-HTTP local development).
 
 Passkey configuration (`idp.login.passkeys.*`): `rp-id` (`IDP_LOGIN_PASSKEYS_RP_ID`) and `origins` (`IDP_LOGIN_PASSKEYS_ORIGINS`) default to localhost and MUST be set to the registrable auth domain and the exact HTTPS sign-in origin in production, or every WebAuthn ceremony is rejected by the browser.
+
+### Account deletion
+
+An account is deleted in the authentication service (MAS), which then tells this service with `POST /oauth2/account-deleted`, form body `sub=<the sub this provider issued>`. The caller authenticates exactly as at `/oauth2/token`, with a confidential client from `oidc.clients` by `client_secret_basic` or `client_secret_post`. A public client, an unknown client and a missing or wrong secret are `401 invalid_client`; a `sub` that is not a user id on one of this deployment's homeservers is `400 invalid_request`. A client may only report accounts on the homeservers its registration lists in `homeserver-ids` (registry ids; the `mas` client's come from `OIDC_CLIENT_MAS_HOMESERVER_IDS` and default to `default`, the legacy single homeserver), so one homeserver's MAS can never delete another's accounts; anything else is `403 unauthorized_client`. The path is rate limited per address and every call is logged.
+
+The notice is off by default: `oidc.account-deletion-notices-enabled` (`OIDC_ACCOUNT_DELETION_NOTICES_ENABLED`) false answers `503` to every caller before reading credentials. The client secret is all a notice needs, so a deployment turns it on only once every confidential client's secret is held by that client alone; an environment whose secret was ever exposed rotates it first, in identity-service and in the MAS upstream provider together.
+
+In one transaction the service deletes the account's directory entries (phone digest, masked phone, username, display name), its security record (PIN hash, lockout state, login and change timestamps), its passkeys and its trusted devices, and turns its `account_genesis` row into a `DELETED` tombstone, inserting one when the account had none. After the commit it revokes the account's access tokens, drops its Redis state and logs one audit line with the user id and row counts. The answer is `204`, also when nothing was stored, and a repeat is harmless.
+
+The tombstone holds the user id, the internal account number, the origin and dates, and nothing about the person. It is what keeps the deleted account from coming back through this service:
+
+- a login session, an unredeemed code or an access token from before the deletion is refused (`410 account_deleted`, `invalid_grant`, `401`);
+- the same phone number reaches the new-account step, and the homeserver phone-binding fallback ignores the deleted account;
+- its username stays taken on every path that can claim one (`/login/profile`, `/signup/check-username`, `/signup/complete`), on any configured homeserver, so it can never pass to someone else.
+
+`AccountDeletionService.PURGED_TABLES` and `KEPT_TABLES` name every table that holds per-account data; `AccountDeletionSchemaCoverageTest` fails when a migration adds one to neither.
 
 ### Web login gate
 
@@ -530,7 +547,7 @@ Additional first-party app clients (web today, Android in future) are registered
 
 ### API authentication
 
-Client-facing REST endpoints require an access token in the `Authorization: Bearer <token>` header. `OidcAccessTokenValidator` first tries to verify the token locally against the published JWKS, checking the RS256 signature, the issuer, that the audience matches a registered client, and that the token has not expired or been revoked. If the token is not one of this service's own JWTs, it falls back to Synapse's `/whoami` endpoint so a native client can reuse its Matrix SDK session token (these tokens are granted no OIDC scopes). Access tokens carry a `jti` and can be invalidated ahead of expiry via a per-user revoke-before cutoff in Redis, which `/account/deactivate`, `/account/reset-identity-credentials`, `/account/phone/change/complete` and a completed account recovery set. That cutoff covers this service's own tokens only; it does not end the MAS and Matrix sessions the apps hold. Authorization codes and other short-lived tokens are stored in Redis to keep the service horizontally scalable.
+Client-facing REST endpoints require an access token in the `Authorization: Bearer <token>` header. `OidcAccessTokenValidator` first tries to verify the token locally against the published JWKS, checking the RS256 signature, the issuer, that the audience matches a registered client, and that the token has not expired or been revoked. If the token is not one of this service's own JWTs, it falls back to Synapse's `/whoami` endpoint so a native client can reuse its Matrix SDK session token (these tokens are granted no OIDC scopes). Access tokens carry a `jti` and can be invalidated ahead of expiry via a per-user revoke-before cutoff in Redis, which `/account/deactivate`, `/account/reset-identity-credentials`, `/account/phone/change/complete`, a completed account recovery and an account deletion set. The cutoff expires after an hour, or after the access-token lifetime when that is longer, by which time every token it can refuse has expired anyway. That cutoff covers this service's own tokens only; it does not end the MAS and Matrix sessions the apps hold. Authorization codes and other short-lived tokens are stored in Redis to keep the service horizontally scalable.
 
 ---
 
@@ -543,6 +560,7 @@ Every public endpoint is protected by a **Resilience4j**-based rate limiter, so 
 | `POST /otp/send` | 5 | 1 min |
 | `POST /otp/verify` | 10 | 1 min |
 | `POST /account/genesis` | 10 | 1 min |
+| `POST /oauth2/account-deleted` | 60 | 1 min |
 | `POST /account/reauth/start` | 5 | 1 min |
 | `POST /account/reauth/verify` | 10 | 1 min |
 | `POST /account/phone/change/start` | 3 | 1 hour |
@@ -627,6 +645,7 @@ An example `docker-compose.identity.yml` is included. Provide environment values
 - `IDENTITY_DIRECTORY_PEPPER`: server-side secret used to hash phone digests. This is the current mechanism and is scheduled for replacement; rotating it orphans every stored digest
 - `OIDC_RSA_PRIVATE_KEY` / `OIDC_RSA_PUBLIC_KEY`: RSA keypair used to sign and verify RS256 OIDC tokens (an ephemeral key is generated if omitted, not suitable for production)
 - `OIDC_CLIENT_MAS_SECRET`: confidential client secret for the MAS OIDC client
+- `OIDC_ACCOUNT_DELETION_NOTICES_ENABLED` / `OIDC_CLIENT_MAS_HOMESERVER_IDS`: turn on MAS's account deletion notice and name the homeservers it may report on (see [Account deletion](#account-deletion))
 - **SMS delivery (Twilio).** By default SMS is logged, not sent (`LoggingSmsSender`). Set
   `IDENTITY_SMS_TWILIO_ENABLED=true` to send real OTPs via Twilio:
   - `IDENTITY_SMS_TWILIO_ACCOUNTSID`: Twilio Account SID (`AC…`)

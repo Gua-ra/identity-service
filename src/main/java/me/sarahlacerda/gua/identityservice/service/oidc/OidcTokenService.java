@@ -34,6 +34,9 @@ public class OidcTokenService {
 
     private static final String TOKEN_TYPE = "Bearer";
 
+    /** The OIDC scope that releases the {@code phone_number} claim. */
+    static final String PHONE_SCOPE = "phone";
+
     /**
      * ID token claim marking a sign-in that completed a delayed account recovery. The
      * authentication service ends every other session of the account when it sees it.
@@ -167,7 +170,9 @@ public class OidcTokenService {
                 .expirationTime(Date.from(expiresAt))
                 .claim("scope", authorization.scopeAsString());
 
-        if (StringUtils.hasText(authorization.phoneNumber())) {
+        // Released only with the phone scope, so a relying party that stores its tokens holds no
+        // number it did not ask for.
+        if (authorization.scope().contains(PHONE_SCOPE) && StringUtils.hasText(authorization.phoneNumber())) {
             builder.claim("phone_number", authorization.phoneNumber());
         }
 

@@ -44,6 +44,7 @@ class UserSecurityServiceTest {
     private OtpService otpService;
     private SecurityAuditLogger auditLogger;
     private StringRedisTemplate redisTemplate;
+    private me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService accountGenesisService;
     @SuppressWarnings("unchecked")
     private ValueOperations<String, String> valueOps;
     private UserSecurityService service;
@@ -64,10 +65,11 @@ class UserSecurityServiceTest {
         otpService = mock(OtpService.class);
         auditLogger = mock(SecurityAuditLogger.class);
         redisTemplate = mock(StringRedisTemplate.class);
+        accountGenesisService = mock(me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService.class);
         valueOps = mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
         service = new UserSecurityService(repository, passwordEncoder, properties, directoryService, phoneNumberHasher,
-                otpService, auditLogger, redisTemplate, new PinPolicy());
+                otpService, auditLogger, redisTemplate, new PinPolicy(), accountGenesisService);
     }
 
     @Test
@@ -153,6 +155,21 @@ class UserSecurityServiceTest {
         verify(repository).saveAndFlush(saved.capture());
         assertThat(saved.getValue().getUserId()).isEqualTo("@new:gua.global");
         assertThat(saved.getValue().getLastLoginAt()).isNotNull();
+    }
+
+    /**
+     * A sign-in that waited on a deletion's row lock finds no row afterwards, and must not put one back
+     * for the account the deletion just tombstoned.
+     */
+    @Test
+    void recordingASignInForADeletedAccountCreatesNoRow() {
+        when(repository.findByUserIdForUpdate("@gone:gua.global")).thenReturn(Optional.empty());
+        when(accountGenesisService.isDeleted("@gone:gua.global")).thenReturn(true);
+
+        assertThatThrownBy(() -> service.recordSuccessfulLogin("@gone:gua.global"))
+                .isInstanceOf(me.sarahlacerda.gua.identityservice.exception.LoginFlowException.class)
+                .hasFieldOrPropertyWithValue("code", "account_deleted");
+        verify(repository, org.mockito.Mockito.never()).saveAndFlush(any(IdentityUser.class));
     }
 
     /**

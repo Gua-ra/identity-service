@@ -125,6 +125,11 @@ public class AccountReauthService {
         reauthTokenService.consume(reauthToken, userId, operation);
     }
 
+    /** Drops the wrong-number budget of a deleted account, so no counter named after it is left behind. */
+    public void discardAttemptBudget(String userId) {
+        redisTemplate.delete(mismatchKey(userId));
+    }
+
     /**
      * Normalizes the submitted number and returns it in E.164 when it is one of this account's
      * own, refusing with {@link ReauthPhoneMismatchException} when it is not.

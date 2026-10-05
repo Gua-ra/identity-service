@@ -6,6 +6,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.Collection;
 import java.util.HexFormat;
 import java.util.Optional;
 
@@ -36,7 +37,7 @@ import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.repository.AccountGenesisRepository;
 
 /**
- * Registration, attach and bootstrap for account genesis (ADM-008 Phase 3).
+ * Registration, attach, bootstrap and the deletion tombstone for account genesis (ADM-008 Phase 3).
  *
  * <p>Nothing here is read for routing or for login. The accountId is derived, stored and audited; it
  * never becomes a claim, a localpart or a directory column, because the MAS localpart template is
@@ -111,8 +112,8 @@ public class AccountGenesisService {
         Optional<AccountGenesisRecord> existing = repository.findById(accountId.value());
         if (existing.isPresent()) {
             AccountGenesisRecord row = existing.get();
-            if (row.isAttached()) {
-                // The client must generate a fresh genesis; re-using one that already owns an account
+            if (row.getState() != State.PENDING) {
+                // The client must generate a fresh genesis; re-using one that owns or owned an account
                 // would be an attempt to re-point it.
                 throw new GenesisRegistrationException(HttpStatus.CONFLICT, "genesis_already_attached",
                         "This genesis is already attached to an account.");
@@ -262,6 +263,41 @@ public class AccountGenesisService {
                 encodeBase64Url(genesis.canonicalBytes()),
                 Instant.now()));
         return accountId;
+    }
+
+    // --- Deletion -------------------------------------------------------------
+
+    /**
+     * Leaves the account's tombstone: its row becomes {@link State#DELETED}, or a deleted bootstrap row
+     * is inserted when it held none. Runs whatever the feature flags say, because the tombstone is what
+     * keeps a deleted account's user id from ever being issued again.
+     *
+     * <p>Mandatory propagation: the tombstone commits with the purge of the account's rows or not at all.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void markDeleted(String userId) {
+        if (repository.markDeleted(userId, State.DELETED) > 0) {
+            return;
+        }
+        BootstrapGenesis genesis = BootstrapGenesisCodec.mint();
+        repository.saveAndFlush(AccountGenesisRecord.deletedBootstrap(
+                genesis.accountId().value(),
+                userId,
+                (short) genesis.version(),
+                (short) genesis.suite(),
+                encodeBase64Url(genesis.canonicalBytes())));
+    }
+
+    /** Whether the account was deleted. Independent of the feature flags, like the tombstone itself. */
+    @Transactional(readOnly = true)
+    public boolean isDeleted(String userId) {
+        return StringUtils.hasText(userId) && repository.existsByUserIdAndState(userId, State.DELETED);
+    }
+
+    /** Whether any of these user ids belongs to a deleted account. */
+    @Transactional(readOnly = true)
+    public boolean isAnyDeleted(Collection<String> userIds) {
+        return !userIds.isEmpty() && repository.existsByUserIdInAndState(userIds, State.DELETED);
     }
 
     /** Deletes pending registrations nobody attached inside their window. */

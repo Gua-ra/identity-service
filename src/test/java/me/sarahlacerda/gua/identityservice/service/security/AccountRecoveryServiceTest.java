@@ -73,7 +73,8 @@ class AccountRecoveryServiceTest {
         properties.getSecurity().setAccountRecoveryWait(WAIT);
         UserSecurityService userSecurityService = new UserSecurityService(repository, passwordEncoder, properties,
                 mock(DirectoryService.class), mock(PhoneNumberHasher.class), mock(OtpService.class), auditLogger,
-                mock(StringRedisTemplate.class), new PinPolicy());
+                mock(StringRedisTemplate.class), new PinPolicy(),
+                mock(me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService.class));
         service = new AccountRecoveryService(userSecurityService, passkeyService, endOtherSessionsService, properties,
                 auditLogger, clock);
 
@@ -504,7 +505,7 @@ class AccountRecoveryServiceTest {
     private UserSecurityService userSecurityService() {
         return new UserSecurityService(repository, passwordEncoder, properties, mock(DirectoryService.class),
                 mock(PhoneNumberHasher.class), mock(OtpService.class), auditLogger, mock(StringRedisTemplate.class),
-                new PinPolicy());
+                new PinPolicy(), mock(me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService.class));
     }
 
     /** A clock the test moves by hand. */
