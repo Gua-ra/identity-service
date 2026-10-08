@@ -139,6 +139,13 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_SIGNIN_VERIFY_PIN_LIMIT:10}
         refresh-period: ${IDENTITY_RATE_LIMIT_SIGNIN_VERIFY_PIN_REFRESH:PT1M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_SIGNIN_VERIFY_PIN_TIMEOUT:PT0S}
+      # With the web login gate on, a refused number is answered 403 before any SMS cap
+      # counts, and the answer reveals whether the number has an account.
+      - path: /login/phone
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_LOGIN_PHONE_LIMIT:10}
+        refresh-period: ${IDENTITY_RATE_LIMIT_LOGIN_PHONE_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_LOGIN_PHONE_TIMEOUT:PT0S}
       # Interactive OIDC login counterparts of /otp/verify and /signin/verify-pin. An
       # unlisted path falls under default-config, far too loose for a credential check.
       # These bound guesses per client address; identity.otp.max-verify-attempts bounds
