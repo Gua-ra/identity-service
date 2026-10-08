@@ -1,7 +1,11 @@
 package me.sarahlacerda.gua.identityservice.integration;
 
+import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
+import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.notFound;
+import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
@@ -77,6 +81,7 @@ class AuthFlowIntegrationTest {
     private static final Pattern LOGIN_COOKIE_VALUE = Pattern.compile(LOGIN_COOKIE + "=([^;]+)");
     /** Every new account must set a factor; these flows give it this PIN at PIN setup. */
     private static final String NEW_ACCOUNT_PIN = "739164";
+    private static final String WHOAMI_PATH = "/_matrix/client/v3/account/whoami";
 
     @Container
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>(DockerImageName.parse("postgres:16-alpine"))
@@ -538,6 +543,32 @@ class AuthFlowIntegrationTest {
         ResponseEntity<Map> refused = restTemplate.exchange(baseUrl + "/userinfo", HttpMethod.GET,
                 new HttpEntity<>(forged), Map.class);
         assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+
+        wireMock.verify(0, getRequestedFor(urlPathEqualTo(WHOAMI_PATH)));
+    }
+
+    /** The apps' homeserver session token reaches the bearer API through whoami. */
+    @Test
+    void aHomeserverSessionTokenReachesTheBearerApiThroughWhoami() {
+        wireMock.stubFor(get(urlPathEqualTo(WHOAMI_PATH))
+                .withHeader(HttpHeaders.AUTHORIZATION, equalTo("Bearer mat_app-session"))
+                .willReturn(okJson("{\"user_id\":\"@app-user:example.com\"}")));
+
+        ResponseEntity<Map> status = restTemplate.exchange(baseUrl + "/security/pin/status", HttpMethod.GET,
+                new HttpEntity<>(bearerHeaders("mat_app-session")), Map.class);
+        assertThat(status.getStatusCode()).as("pin status: %s", status.getBody()).isEqualTo(HttpStatus.OK);
+        assertThat(status.getBody()).containsEntry("hasPin", false);
+
+        ResponseEntity<Map> unknown = restTemplate.exchange(baseUrl + "/security/pin/status", HttpMethod.GET,
+                new HttpEntity<>(bearerHeaders("mat_signed-out-session")), Map.class);
+        assertThat(unknown.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    private static HttpHeaders bearerHeaders(String token) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        headers.setBearerAuth(token);
+        return headers;
     }
 
     /**
