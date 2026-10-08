@@ -139,10 +139,9 @@ public class OidcTokenService {
     }
 
     /**
-     * Per RFC 9068 a resource server must reject access tokens that were not issued
-     * for it. Every token we mint carries the requesting client id as its audience,
-     * so we accept a token only when its audience includes a currently-registered
-     * client, and the client it matched on is the client behind the caller.
+     * Every token we mint carries the requesting client id as its audience, so a token is
+     * accepted only when its audience names a currently registered client. Whether that client
+     * may reach the endpoint being called is decided by the caller, from the returned id.
      *
      * @return the registered client id the token was accepted on, or empty when its
      *         audience names none, which is the token being refused

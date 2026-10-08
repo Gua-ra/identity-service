@@ -105,9 +105,9 @@ class OidcAuthorizationControllerTest {
     @BeforeEach
     void setUp() {
         confidentialClient = new RegisteredClient("mas", "$2a$10$abc", false,
-                List.of(CALLBACK), Set.of("openid", "profile", "phone"), false, Set.of("default"));
+                List.of(CALLBACK), Set.of("openid", "profile", "phone"), false, Set.of("default"), false);
         publicClient = new RegisteredClient("gua-ios", null, true,
-                List.of("global.gua:/oidc"), Set.of("openid", "profile", "phone"), true, Set.of());
+                List.of("global.gua:/oidc"), Set.of("openid", "profile", "phone"), true, Set.of(), true);
         when(clientService.requireClient("mas")).thenReturn(confidentialClient);
         when(clientService.requireClient("gua-ios")).thenReturn(publicClient);
     }

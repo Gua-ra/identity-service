@@ -51,6 +51,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
+import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
+import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 
 /**
@@ -132,6 +134,9 @@ class AuthFlowIntegrationTest {
 
     @Autowired
     DirectoryService directoryService;
+
+    @Autowired
+    OidcTokenService tokenService;
 
     @Autowired
     PhoneNumberHasher phoneNumberHasher;
@@ -498,6 +503,41 @@ class AuthFlowIntegrationTest {
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.GONE);
             assertThat(response.getBody()).containsEntry("code", "endpoint_retired");
         }
+    }
+
+    /**
+     * Through the real security chain: a token issued to the relying party is valid at /userinfo
+     * and nowhere else, while the app client's token (every other test here) reaches the bearer API.
+     * /userinfo sits outside the bearer filter and still refuses a token this service did not sign.
+     */
+    @Test
+    void aRelyingPartyTokenReachesUserinfoAndNoOtherBearerEndpoint() {
+        String masToken = tokenService.issueTokens(new OidcAuthorization("@relying:example.com", "+16042250099",
+                null, null, Set.of("openid", "profile", "phone"), "mas", null)).accessToken();
+        HttpHeaders headers = new HttpHeaders();
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        headers.setBearerAuth(masToken);
+
+        ResponseEntity<Map> userInfo = restTemplate.exchange(baseUrl + "/userinfo", HttpMethod.GET,
+                new HttpEntity<>(headers), Map.class);
+        assertThat(userInfo.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(userInfo.getBody()).containsEntry("sub", "@relying:example.com");
+
+        ResponseEntity<Map> status = restTemplate.exchange(baseUrl + "/security/pin/status", HttpMethod.GET,
+                new HttpEntity<>(headers), Map.class);
+        assertThat(status.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        ResponseEntity<Map> reauth = authenticatedPost(masToken, "/account/reauth/start",
+                Map.of("phone", "+16042250099"));
+        assertThat(reauth.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        ResponseEntity<Map> cancel = authenticatedPost(masToken, "/security/recovery/cancel", Map.of());
+        assertThat(cancel.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+
+        HttpHeaders forged = new HttpHeaders();
+        forged.setAccept(List.of(MediaType.APPLICATION_JSON));
+        forged.setBearerAuth(masToken.substring(0, masToken.length() - 4) + "AAAA");
+        ResponseEntity<Map> refused = restTemplate.exchange(baseUrl + "/userinfo", HttpMethod.GET,
+                new HttpEntity<>(forged), Map.class);
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
     /**
