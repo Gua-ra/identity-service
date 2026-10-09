@@ -417,8 +417,11 @@ are on Gua (`phone`, `userId`, `username`, `displayName`). The privacy contract:
   the secret pepper to clients would let anyone holding a DB dump reverse the at-rest digests.
   Honest defense is TLS + server-side pepper, not hashing theater.
 - **Enumeration defenses.** Bearer auth required, per-request cap (`identity.directory.max-lookup-batch`,
-  default 1000, error `lookup_batch_too_large`), endpoint rate limit (below), and a per-account
-  `discoverable` opt-out (V6): accounts with `discoverable = false` never appear in results.
+  default 1000, error `lookup_batch_too_large`), endpoint rate limit (below), a per-account budget of
+  `identity.directory.max-lookups-per-account-per-hour` calls (default 60,
+  `IDENTITY_DIRECTORY_MAX_LOOKUPS_PER_ACCOUNT_PER_HOUR`) counted in Redis by token subject from every
+  address, and a per-account `discoverable` opt-out (V6): accounts with `discoverable = false` never
+  appear in results.
 - Invalid/duplicate address-book entries are skipped silently: one bad contact must not fail a sync.
 
 ---

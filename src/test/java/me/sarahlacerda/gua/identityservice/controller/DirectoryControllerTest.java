@@ -3,6 +3,7 @@ package me.sarahlacerda.gua.identityservice.controller;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -21,6 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import me.sarahlacerda.gua.identityservice.controller.dto.DirectoryLookupRequest;
 import me.sarahlacerda.gua.identityservice.domain.ContactMatch;
 import me.sarahlacerda.gua.identityservice.exception.LookupBatchTooLargeException;
+import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
 import me.sarahlacerda.gua.identityservice.service.ContactDiscoveryService;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.routing.HomeserverRegistry;
@@ -62,7 +64,7 @@ class DirectoryControllerTest {
         request.setPhones(List.of("+5511999998888"));
 
         when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@me:gua.global");
-        when(contactDiscoveryService.match(List.of("+5511999998888")))
+        when(contactDiscoveryService.match("@me:gua.global", List.of("+5511999998888")))
             .thenReturn(List.of(new ContactMatch("+5511999998888", "@friend:gua.global", "friend", "Friend")));
 
         mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/directory/lookup")
@@ -82,7 +84,7 @@ class DirectoryControllerTest {
         request.setPhones(List.of("+5511999998888"));
 
         when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@me:gua.global");
-        when(contactDiscoveryService.match(anyList()))
+        when(contactDiscoveryService.match(eq("@me:gua.global"), anyList()))
             .thenThrow(new LookupBatchTooLargeException("At most 1000 phone numbers can be matched per request"));
 
         mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/directory/lookup")
@@ -90,5 +92,23 @@ class DirectoryControllerTest {
                 .content(objectMapper.writeValueAsBytes(request)))
             .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest())
             .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code", is("lookup_batch_too_large")));
+    }
+
+    @Test
+    void aSpentAccountBudgetAnswersTooManyRequestsWithTheWait() throws Exception {
+        DirectoryLookupRequest request = new DirectoryLookupRequest();
+        request.setPhones(List.of("+5511999998888"));
+
+        when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@me:gua.global");
+        when(contactDiscoveryService.match(eq("@me:gua.global"), anyList()))
+            .thenThrow(new RateLimiterException("Rate limit exceeded", java.time.Duration.ofMillis(1_200_500)));
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/directory/lookup")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(request)))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isTooManyRequests())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string("Retry-After", "1201"))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code", is("rate_limited")))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.retryAfterSeconds", is(1201)));
     }
 }

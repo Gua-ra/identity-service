@@ -34,6 +34,8 @@ identity:
     # account). Blank in dev; pin in every long-lived environment. Not a secret.
     pepper-fingerprint: ${IDENTITY_DIRECTORY_PEPPER_FINGERPRINT:}
     max-lookup-batch: ${IDENTITY_DIRECTORY_MAX_LOOKUP_BATCH:1000}
+    # Per account, from any address. The /directory/lookup endpoint limit below is per account and address.
+    max-lookups-per-account-per-hour: ${IDENTITY_DIRECTORY_MAX_LOOKUPS_PER_ACCOUNT_PER_HOUR:60}
   security:
     pin-reset-cooldown: ${IDENTITY_SECURITY_PIN_RESET_COOLDOWN:PT168H}
     max-pin-attempts: ${IDENTITY_SECURITY_MAX_PIN_ATTEMPTS:5}
