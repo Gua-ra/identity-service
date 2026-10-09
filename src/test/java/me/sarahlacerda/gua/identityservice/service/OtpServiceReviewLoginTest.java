@@ -7,7 +7,6 @@ import static me.sarahlacerda.gua.identityservice.service.ReviewLoginTest.REVIEW
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -44,7 +43,6 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.ReviewLoginProperties;
 import me.sarahlacerda.gua.identityservice.exception.InvalidOtpException;
 import me.sarahlacerda.gua.identityservice.exception.OtpRateLimitedException;
-import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
 
 /**
  * The store review login as {@link OtpService} applies it: the sign-in send and verify for the
@@ -69,7 +67,7 @@ class OtpServiceReviewLoginTest {
     @Mock
     private SmsSender smsSender;
     @Mock
-    private RateLimiter rateLimiter;
+    private SmsSendGuard sendGuard;
     @Mock
     private DirectoryService directory;
     @Mock
@@ -110,7 +108,7 @@ class OtpServiceReviewLoginTest {
                         return super.matches(rawPassword, encodedPassword);
                     }
                 });
-        return new OtpService(redisTemplate, properties, codeGenerator, smsSender, rateLimiter, metrics, reviewLogin);
+        return new OtpService(redisTemplate, properties, codeGenerator, smsSender, sendGuard, metrics, reviewLogin);
     }
 
     private OtpService enabled() {
@@ -179,11 +177,8 @@ class OtpServiceReviewLoginTest {
         enabled().sendLoginOtp(REVIEW_PHONE, "127.0.0.1", "pt-BR");
 
         verifyNoInteractions(smsSender);
-        // The same limits, counted under the same keys as every other send to this number.
-        verify(rateLimiter).checkRate("otp:rate:phone:" + REVIEW_PHONE,
-                properties.getOtp().getMaxRequestsPerPhonePerHour(), Duration.ofHours(1));
-        verify(rateLimiter).checkRate("otp:rate:ip:127.0.0.1", properties.getOtp().getMaxRequestsPerIpPerHour(),
-                Duration.ofHours(1));
+        // The same limits as every other send to this number.
+        verify(sendGuard).admit(REVIEW_PHONE, "127.0.0.1");
         // A fresh random code with a fresh guess budget and the normal lifetime.
         verify(redisTemplate).delete(ATTEMPTS_KEY);
         verify(valueOperations).set(CODE_KEY, ISSUED, properties.getOtp().getTtl());
@@ -196,8 +191,8 @@ class OtpServiceReviewLoginTest {
 
     @Test
     void aRateLimitedReviewSendIsRefusedLikeAnyOtherAndStoresNothing() {
-        doThrow(new RateLimiterException("fail")).when(rateLimiter)
-                .checkRate(eq("otp:rate:phone:" + REVIEW_PHONE), anyInt(), any(Duration.class));
+        doThrow(new OtpRateLimitedException("Too many OTP requests", Duration.ofMinutes(5))).when(sendGuard)
+                .admit(REVIEW_PHONE, "127.0.0.1");
 
         assertThatThrownBy(() -> enabled().sendLoginOtp(REVIEW_PHONE, "127.0.0.1", null))
                 .isInstanceOf(OtpRateLimitedException.class);

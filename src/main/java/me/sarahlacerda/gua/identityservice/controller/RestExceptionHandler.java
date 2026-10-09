@@ -1,5 +1,6 @@
 package me.sarahlacerda.gua.identityservice.controller;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
@@ -45,6 +46,7 @@ import me.sarahlacerda.gua.identityservice.exception.ReauthPhoneMismatchExceptio
 import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
 import me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.UnknownUserException;
+import me.sarahlacerda.gua.identityservice.exception.UnsupportedPhoneCountryException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
 import me.sarahlacerda.gua.identityservice.exception.WeakPinException;
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryState;
@@ -70,8 +72,22 @@ public class RestExceptionHandler {
 
         @ExceptionHandler({ OtpRateLimitedException.class, RateLimiterException.class })
         public ResponseEntity<ErrorResponse> handleRateLimited(RuntimeException ex) {
+                Duration retryAfter = ex instanceof OtpRateLimitedException otp ? otp.getRetryAfter()
+                                : ((RateLimiterException) ex).getRetryAfter();
+                if (retryAfter == null) {
+                        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                                        .body(new ErrorResponse("rate_limited", ex.getMessage()));
+                }
+                long seconds = Math.max(1, (retryAfter.toMillis() + 999) / 1000);
                 return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                                .body(new ErrorResponse("rate_limited", ex.getMessage()));
+                                .header("Retry-After", String.valueOf(seconds))
+                                .body(new ErrorResponse("rate_limited", ex.getMessage(), seconds));
+        }
+
+        @ExceptionHandler(UnsupportedPhoneCountryException.class)
+        public ResponseEntity<ErrorResponse> handleUnsupportedPhoneCountry(UnsupportedPhoneCountryException ex) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .body(new ErrorResponse("phone_country_not_supported", ex.getMessage()));
         }
 
         @ExceptionHandler(PhoneAlreadyLinkedException.class)

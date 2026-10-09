@@ -2,7 +2,9 @@ package me.sarahlacerda.gua.identityservice.service.security;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -16,8 +18,9 @@ import org.springframework.data.redis.core.ValueOperations;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.exception.InvalidOtpException;
+import me.sarahlacerda.gua.identityservice.exception.UnsupportedPhoneCountryException;
 import me.sarahlacerda.gua.identityservice.service.OtpCodeGenerator;
-import me.sarahlacerda.gua.identityservice.service.RateLimiter;
+import me.sarahlacerda.gua.identityservice.service.SmsSendGuard;
 import me.sarahlacerda.gua.identityservice.service.SmsSender;
 
 @ExtendWith(MockitoExtension.class)
@@ -36,7 +39,7 @@ class PhoneChangeOtpServiceTest {
     @Mock
     private SmsSender smsSender;
     @Mock
-    private RateLimiter rateLimiter;
+    private SmsSendGuard sendGuard;
 
     private IdentityServiceProperties properties;
     private PhoneChangeOtpService service;
@@ -44,7 +47,7 @@ class PhoneChangeOtpServiceTest {
     @BeforeEach
     void setUp() {
         properties = new IdentityServiceProperties();
-        service = new PhoneChangeOtpService(redisTemplate, properties, codeGenerator, smsSender, rateLimiter,
+        service = new PhoneChangeOtpService(redisTemplate, properties, codeGenerator, smsSender, sendGuard,
                 new SimpleMeterRegistry());
     }
 
@@ -60,10 +63,18 @@ class PhoneChangeOtpServiceTest {
         verify(smsSender).send(eq(NEW_E164),
                 eq("Your Gua verification code is 123456. Never share this code with anyone. Gua support will never ask you for it."));
         // Send limits keyed on the new number + IP.
-        verify(rateLimiter).checkRate(eq("otp:rate:phone:" + NEW_E164),
-                eq(properties.getOtp().getMaxRequestsPerPhonePerHour()), org.mockito.ArgumentMatchers.any());
-        verify(rateLimiter).checkRate(eq("otp:rate:ip:1.2.3.4"),
-                eq(properties.getOtp().getMaxRequestsPerIpPerHour()), org.mockito.ArgumentMatchers.any());
+        verify(sendGuard).admit(NEW_E164, "1.2.3.4");
+    }
+
+    @Test
+    void aRefusedSendStoresAndTextsNothing() {
+        doThrow(new UnsupportedPhoneCountryException("Verification codes cannot be sent to this country"))
+                .when(sendGuard).admit(NEW_E164, "1.2.3.4");
+
+        assertThatThrownBy(() -> service.send(CHALLENGE, NEW_E164, "1.2.3.4", null))
+                .isInstanceOf(UnsupportedPhoneCountryException.class);
+
+        verifyNoInteractions(smsSender, codeGenerator, redisTemplate);
     }
 
     @Test

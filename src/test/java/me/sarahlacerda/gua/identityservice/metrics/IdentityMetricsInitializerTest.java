@@ -11,6 +11,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import me.sarahlacerda.gua.identityservice.service.SmsSendGuard;
 import me.sarahlacerda.gua.identityservice.service.SmsSender;
 
 class IdentityMetricsInitializerTest {
@@ -38,6 +39,9 @@ class IdentityMetricsInitializerTest {
         }
         assertCounterAtZero(registry, "gua.identity.sms.send", "provider", "dummy", "result", "sent");
         assertCounterAtZero(registry, "gua.identity.sms.send", "provider", "dummy", "result", "failed");
+        for (SmsSendGuard.Refusal refusal : SmsSendGuard.Refusal.values()) {
+            assertCounterAtZero(registry, "gua.identity.sms.refused", "reason", refusal.tagValue());
+        }
     }
 
     @Test
@@ -79,7 +83,8 @@ class IdentityMetricsInitializerTest {
                 .contains("gua_identity_signup_total")
                 .contains("gua_identity_login_total")
                 .contains("gua_identity_otp_verify_total")
-                .contains("gua_identity_sms_send_total");
+                .contains("gua_identity_sms_send_total")
+                .contains("gua_identity_sms_refused_total{reason=\"daily_ceiling\"}");
     }
 
     @Test

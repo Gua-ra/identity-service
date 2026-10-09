@@ -21,7 +21,7 @@ It also runs a self-contained OpenID Connect provider. That provider issues the 
 ## ✨ What it does today
 
 - 📱 **Phone sign-up & sign-in**: request OTP → verify OTP → then the factor the account holds: the PIN, or the passkey when it holds only a passkey. A new account must set a PIN or a passkey before it finishes. The SMS code never completes a sign-in on its own.
-- 🔐 **OTP management**: Redis-backed codes with TTL, per-phone and per-IP hourly caps, localized SMS templates (en, pt-BR, es, fr; every Portuguese tag gets pt-BR), optional Twilio delivery.
+- 🔐 **OTP management**: Redis-backed codes with TTL, per-phone and per-IP hourly caps, hourly and daily SMS ceilings, a destination country allowlist, localized SMS templates (en, pt-BR, es, fr; every Portuguese tag gets pt-BR), optional Twilio delivery.
 - 🔢 **Account PIN (two-step verification)**: set, OTP-protected change with a 24h cooldown, 5-attempt lockout with a 15-minute lock, and audit logging. A NIST-aligned strength policy rejects PINs that are not six digits, all-repeated, sequential, or common.
 - 🛡️ **Privileged account operations**: account deactivation, identity-credential reset and phone-number change. Each is gated by a fresh phone-OTP reauthentication scoped to that one operation (modeled on Matrix UIA `m.login.msisdn`), in which the signed-in user confirms the number on their own account and the server checks it against the account's own directory binding. A phone change also hard-requires a stronger factor on top (a user-verifying passkey assertion, else the account PIN), verifies the **new** number by OTP, and enforces a per-account cooldown.
 - 🔑 **OpenID Connect provider**: RS256 authorization-code + PKCE flow with an interactive browser login (phone → OTP → PIN or profile) that MAS redirects into. Includes discovery and JWKS endpoints, plus seeded clients for MAS (confidential) and the Gua apps (public, PKCE-required).
@@ -588,6 +588,25 @@ Every public endpoint is protected by a **Resilience4j**-based rate limiter, so 
 
 **Guess budgets.** The per-address rules above bound how fast one client can try a code; they do not bound how many guesses a code can absorb, because guesses can be spread over addresses for the whole TTL. Every OTP therefore carries its own budget: each guess is counted per phone in Redis (`otp:attempts:<E.164>`, an atomic increment expiring with the code) before it is compared, so at most `identity.otp.max-verify-attempts` guesses (default **5**, `IDENTITY_OTP_MAX_VERIFY_ATTEMPTS`) are ever compared against one code, whether they arrive one by one, spread over addresses or in parallel. The last allowed guess deletes the code when it is wrong, a guess counted past the cap is refused without being compared, and the spent counter is left to expire so a late guess cannot reopen the budget; only a fresh send, which resets the counter, can continue. Codes are compared in constant time. This covers every path that redeems a phone OTP (`/otp/verify`, `/login/otp`, PIN change, account re-authentication). The flow whose code is namespaced (`otp:code:pin-change:<challengeId>`) counts its guesses under the matching `otp:attempts:` key through the same capped implementation, so namespacing a code never trades the per-phone key for a code with no budget behind it. The new-number OTP of a phone change keeps its own per-challenge cap (`identity.security.max-phone-change-otp-attempts`). The interactive login steps `/login/otp`, `/login/pin`, `/login/passkey/auth/options` and `/login/passkey/auth/verify` are listed individually because the `default-config` window was far too loose for a credential check; those calls carry no bearer token, so their limiter is keyed by client address.
 
+**SMS send limits.** Every SMS (sign-in and sign-up codes, `POST /otp/send`, re-authentication, PIN change and the new number of a phone change) passes one check before the provider is called. All counters are read before any is counted, so a send refused by one limit spends nothing from the others. A refused send answers `429 rate_limited` with `Retry-After` and `retryAfterSeconds`, or `400 phone_country_not_supported` for a destination outside the allowlist. Windows are fixed and open at the first counted send.
+
+| Property | Environment variable | Default |
+| --- | --- | --- |
+| `identity.otp.max-requests-per-phone-per-hour` | `IDENTITY_OTP_MAX_PHONE_PER_HOUR` | 5 |
+| `identity.otp.max-requests-per-ip-per-hour` | `IDENTITY_OTP_MAX_IP_PER_HOUR` | 10 |
+| `identity.otp.max-sends-per-hour` (every number and address) | `IDENTITY_OTP_MAX_SENDS_PER_HOUR` | 60 |
+| `identity.otp.max-sends-per-day` (every number and address) | `IDENTITY_OTP_MAX_SENDS_PER_DAY` | 300 |
+| `identity.otp.allowed-countries` | `IDENTITY_OTP_ALLOWED_COUNTRIES` | `BR,CA,US` |
+
+The allowlist holds ISO 3166-1 alpha-2 regions and is matched on the number's own region, so +1 numbers from the Caribbean are refused unless their region is listed. An unknown region code refuses startup. Refusals are counted in `gua_identity_sms_refused_total{reason}`. The SMS provider's own geographic permissions and fraud protection should allow the same countries.
+
+**Raising the per-address limit for an event.** Everyone on a venue network shares one public address, so the eleventh code requested from it in an hour is refused. For the event window only:
+
+1. Set `IDENTITY_OTP_MAX_IP_PER_HOUR` to the sign-ups expected per hour from that network, for example `100`.
+2. Set `IDENTITY_OTP_MAX_SENDS_PER_HOUR` above that plus normal traffic, and `IDENTITY_OTP_MAX_SENDS_PER_DAY` to the spend you accept for the day. The ceilings are what bound the cost while the per-address limit is high.
+3. If the room signs up at once, raise the per-minute endpoint limits of the phone and code steps: `IDENTITY_RATE_LIMIT_LOGIN_PHONE_LIMIT` and `IDENTITY_RATE_LIMIT_LOGIN_OTP_LIMIT` (10 per minute per address each).
+4. Keep `IDENTITY_OTP_MAX_PHONE_PER_HOUR` at its default, and restore the other values when the event ends.
+
 **Shared addresses.** Unauthenticated login calls are keyed by the client address. On Kubernetes, Spring Boot trusts the forwarded-for header set by the ingress (it enables forwarded-header handling when it detects the platform), and the dev audit log records real client addresses, so the key is the client's public address rather than the ingress hop. Many people can still share one public address (carrier-grade NAT is common on mobile networks), so a per-address limit on a login step has to be sized for a crowd, not for one person. That is why `/login/recovery/start` and `/login/recovery/complete` allow 30 per hour rather than a handful. Neither limit is what protects an account: both endpoints need a login session that has already passed an OTP, starting involves nothing to guess, and completing needs the episode to be `READY`.
 
 Set `IDENTITY_RATE_LIMITS_ENABLED=false` to disable the limiter (e.g., for load testing). Otherwise clients receive HTTP `429` with a JSON body (`{"code":"rate_limited","message":"Rate limit exceeded"}`) and a `Retry-After` header.
@@ -622,6 +641,7 @@ HTTP/JVM/DB-pool metrics, these domain counters drive the Gua usage/reliability 
 | `gua_identity_login_total{result}` | successful sign-ins of existing accounts |
 | `gua_identity_otp_verify_total{result=valid\|invalid\|exhausted}` | OTP correctness (delivery / abuse signal); `exhausted` counts guesses refused by the attempt cap: the guess that burns a code plus any parallel guess counted past the cap (brute-force signal) |
 | `gua_identity_sms_send_total{provider,result=sent\|failed}` | SMS usage + delivery failures (`provider` = the active `SmsSender`) |
+| `gua_identity_sms_refused_total{reason=country\|daily_ceiling\|hourly_ceiling\|ip\|phone}` | SMS sends refused before the provider was called, by the limit that refused them |
 
 > Keep `/actuator` off the public edge (block it at the ingress/reverse-proxy): Prometheus scrapes it on the
 > internal Service.

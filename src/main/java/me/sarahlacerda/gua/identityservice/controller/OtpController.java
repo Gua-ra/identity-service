@@ -46,8 +46,8 @@ public class OtpController {
     @Operation(summary = "Send an OTP to a user's phone", description = "Creates a one-time password for the supplied phone number, applies rate limits, and dispatches the SMS using the client's preferred language when provided.", security = {})
     @ApiResponses({
             @ApiResponse(responseCode = "202", description = "OTP accepted and dispatched"),
-            @ApiResponse(responseCode = "400", description = "Validation failed", content = @Content),
-            @ApiResponse(responseCode = "429", description = "Rate limit exceeded", content = @Content)
+            @ApiResponse(responseCode = "400", description = "Validation failed, or phone_country_not_supported when codes are not texted to the number's country", content = @Content),
+            @ApiResponse(responseCode = "429", description = "rate_limited: a send limit is reached; Retry-After and retryAfterSeconds carry the wait", content = @Content)
     })
     public ResponseEntity<Void> sendOtp(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Phone number to receive the OTP and optional language preference", required = true, content = @Content(schema = @Schema(implementation = OtpSendRequest.class))) @RequestBody @Valid OtpSendRequest request,
