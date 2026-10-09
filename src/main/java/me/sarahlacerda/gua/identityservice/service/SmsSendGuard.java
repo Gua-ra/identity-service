@@ -19,6 +19,8 @@ import org.springframework.util.StringUtils;
 
 import com.google.i18n.phonenumbers.NumberParseException;
 import com.google.i18n.phonenumbers.PhoneNumberUtil;
+import com.google.i18n.phonenumbers.PhoneNumberUtil.PhoneNumberFormat;
+import com.google.i18n.phonenumbers.Phonenumber.PhoneNumber;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
@@ -28,17 +30,24 @@ import me.sarahlacerda.gua.identityservice.exception.OtpRateLimitedException;
 import me.sarahlacerda.gua.identityservice.exception.UnsupportedPhoneCountryException;
 
 /**
- * Decides whether one SMS may be sent. Every path that texts a code calls {@link #admit} before
- * the provider: the destination must be in an allowed region, and the per-address, per-number,
- * hourly and daily counters must all have room.
+ * Decides whether one SMS may be sent. Every path that texts a code calls one of the admit methods
+ * before the provider: the destination must be a valid number in an allowed region, and the
+ * per-address, per-number, hourly and daily counters must all have room.
+ *
+ * <p>
+ * Sends for existing accounts and sends to numbers without one have separate hourly and daily
+ * ceilings, so traffic that needs no account cannot use up the budget existing accounts sign in
+ * with.
  */
 @Component
 public class SmsSendGuard {
 
     static final String IP_KEY_PREFIX = "otp:rate:ip:";
     static final String PHONE_KEY_PREFIX = "otp:rate:phone:";
-    static final String HOURLY_KEY = "otp:rate:all:hour";
-    static final String DAILY_KEY = "otp:rate:all:day";
+    static final String SIGN_UP_HOURLY_KEY = "otp:rate:sign-up:hour";
+    static final String SIGN_UP_DAILY_KEY = "otp:rate:sign-up:day";
+    static final String ACCOUNT_HOURLY_KEY = "otp:rate:account:hour";
+    static final String ACCOUNT_DAILY_KEY = "otp:rate:account:day";
 
     private static final Duration HOUR = Duration.ofHours(1);
     private static final Duration DAY = Duration.ofDays(1);
@@ -72,10 +81,12 @@ public class SmsSendGuard {
     /** Tag values of {@code gua_identity_sms_refused_total{reason}}. */
     public enum Refusal {
         COUNTRY("country"),
-        DAILY_CEILING("daily_ceiling"),
-        HOURLY_CEILING("hourly_ceiling"),
         IP("ip"),
-        PHONE("phone");
+        PHONE("phone"),
+        SIGN_UP_HOURLY_CEILING("sign_up_hourly_ceiling"),
+        SIGN_UP_DAILY_CEILING("sign_up_daily_ceiling"),
+        ACCOUNT_HOURLY_CEILING("account_hourly_ceiling"),
+        ACCOUNT_DAILY_CEILING("account_daily_ceiling");
 
         private final String tagValue;
 
@@ -86,6 +97,14 @@ public class SmsSendGuard {
         public String tagValue() {
             return tagValue;
         }
+
+        boolean isCeiling() {
+            return this != COUNTRY && this != IP && this != PHONE;
+        }
+    }
+
+    private enum Budget {
+        SIGN_UP, ACCOUNT, NONE
     }
 
     private record Counter(String key, int limit, Duration window, Refusal refusal) {
@@ -94,38 +113,74 @@ public class SmsSendGuard {
     private final StringRedisTemplate redisTemplate;
     private final IdentityServiceProperties properties;
     private final MeterRegistry metrics;
+    private final DirectoryService directoryService;
+    private final PhoneNumberHasher phoneNumberHasher;
     private final Set<String> allowedCountries;
 
     public SmsSendGuard(StringRedisTemplate redisTemplate, IdentityServiceProperties properties,
-            MeterRegistry metrics) {
+            MeterRegistry metrics, DirectoryService directoryService, PhoneNumberHasher phoneNumberHasher) {
         this.redisTemplate = redisTemplate;
         this.properties = properties;
         this.metrics = metrics;
+        this.directoryService = directoryService;
+        this.phoneNumberHasher = phoneNumberHasher;
         this.allowedCountries = allowedCountries(properties.getOtp().getAllowedCountries());
     }
 
     /**
-     * Admits one send to {@code e164PhoneNumber} and counts it, or refuses it and counts nothing.
+     * Admits one send to a number that may or may not have an account, and counts it. A number
+     * with an account counts against the account ceilings, any other against the sign-up
+     * ceilings.
      *
-     * @throws InvalidPhoneNumberException      when the number cannot be parsed
+     * @throws InvalidPhoneNumberException      when the number is not a valid phone number
      * @throws UnsupportedPhoneCountryException when its region is not allowed
      * @throws OtpRateLimitedException          when a counter is full, with the wait until the
      *                                          last full one reopens
      */
-    public void admit(String e164PhoneNumber, String requesterIp) {
-        String region = regionOf(e164PhoneNumber);
-        if (region == null || !allowedCountries.contains(region)) {
-            refused(Refusal.COUNTRY);
-            throw new UnsupportedPhoneCountryException("Verification codes cannot be sent to this country");
-        }
+    public void admit(String phoneNumber, String requesterIp) {
+        PhoneNumber parsed = parse(phoneNumber);
+        requireAllowedCountry(parsed);
+        String e164 = PHONE_NUMBERS.format(parsed, PhoneNumberFormat.E164);
+        boolean hasAccount = directoryService.findByDigest(phoneNumberHasher.digest(e164)).isPresent();
+        count(e164, requesterIp, hasAccount ? Budget.ACCOUNT : Budget.SIGN_UP);
+    }
+
+    /**
+     * {@link #admit} for a send a signed-in account asked for, to its own number or to the new
+     * number of its phone change. Counted against the account ceilings.
+     */
+    public void admitForAccount(String phoneNumber, String requesterIp) {
+        PhoneNumber parsed = parse(phoneNumber);
+        requireAllowedCountry(parsed);
+        count(PHONE_NUMBERS.format(parsed, PhoneNumberFormat.E164), requesterIp, Budget.ACCOUNT);
+    }
+
+    /**
+     * Admits a sign-in that texts nothing, the store review number's. It counts against the
+     * per-number and per-address limits only, and needs no allowed region.
+     */
+    public void admitWithoutSms(String phoneNumber, String requesterIp) {
+        count(PHONE_NUMBERS.format(parse(phoneNumber), PhoneNumberFormat.E164), requesterIp, Budget.NONE);
+    }
+
+    private void count(String e164, String requesterIp, Budget budget) {
         OtpProperties otp = properties.getOtp();
         List<Counter> counters = new ArrayList<>();
-        counters.add(new Counter(DAILY_KEY, otp.getMaxSendsPerDay(), DAY, Refusal.DAILY_CEILING));
-        counters.add(new Counter(HOURLY_KEY, otp.getMaxSendsPerHour(), HOUR, Refusal.HOURLY_CEILING));
+        if (budget == Budget.SIGN_UP) {
+            counters.add(new Counter(SIGN_UP_DAILY_KEY, otp.getMaxSignUpSendsPerDay(), DAY,
+                    Refusal.SIGN_UP_DAILY_CEILING));
+            counters.add(new Counter(SIGN_UP_HOURLY_KEY, otp.getMaxSignUpSendsPerHour(), HOUR,
+                    Refusal.SIGN_UP_HOURLY_CEILING));
+        } else if (budget == Budget.ACCOUNT) {
+            counters.add(new Counter(ACCOUNT_DAILY_KEY, otp.getMaxAccountSendsPerDay(), DAY,
+                    Refusal.ACCOUNT_DAILY_CEILING));
+            counters.add(new Counter(ACCOUNT_HOURLY_KEY, otp.getMaxAccountSendsPerHour(), HOUR,
+                    Refusal.ACCOUNT_HOURLY_CEILING));
+        }
         if (StringUtils.hasText(requesterIp)) {
             counters.add(new Counter(IP_KEY_PREFIX + requesterIp, otp.getMaxRequestsPerIpPerHour(), HOUR, Refusal.IP));
         }
-        counters.add(new Counter(PHONE_KEY_PREFIX + e164PhoneNumber, otp.getMaxRequestsPerPhonePerHour(), HOUR,
+        counters.add(new Counter(PHONE_KEY_PREFIX + e164, otp.getMaxRequestsPerPhonePerHour(), HOUR,
                 Refusal.PHONE));
 
         List<String> keys = counters.stream().map(Counter::key).toList();
@@ -155,9 +210,17 @@ public class SmsSendGuard {
             }
         }
         refused(refusal);
-        boolean ceiling = refusal == Refusal.DAILY_CEILING || refusal == Refusal.HOURLY_CEILING;
         throw new OtpRateLimitedException(
-                ceiling ? "Verification codes are temporarily unavailable" : "Too many OTP requests", retryAfter);
+                refusal.isCeiling() ? "Verification codes are temporarily unavailable" : "Too many OTP requests",
+                retryAfter);
+    }
+
+    private void requireAllowedCountry(PhoneNumber parsed) {
+        String region = PHONE_NUMBERS.getRegionCodeForNumber(parsed);
+        if (region == null || !allowedCountries.contains(region)) {
+            refused(Refusal.COUNTRY);
+            throw new UnsupportedPhoneCountryException("Verification codes cannot be sent to this country");
+        }
     }
 
     private Duration remaining(Counter counter) {
@@ -169,12 +232,17 @@ public class SmsSendGuard {
         metrics.counter("gua.identity.sms.refused", "reason", refusal.tagValue()).increment();
     }
 
-    private static String regionOf(String e164PhoneNumber) {
+    private static PhoneNumber parse(String phoneNumber) {
+        PhoneNumber parsed;
         try {
-            return PHONE_NUMBERS.getRegionCodeForNumber(PHONE_NUMBERS.parse(e164PhoneNumber, null));
+            parsed = PHONE_NUMBERS.parse(phoneNumber, null);
         } catch (NumberParseException ex) {
-            throw new InvalidPhoneNumberException("Phone number could not be parsed");
+            throw new InvalidPhoneNumberException("Phone number is not valid");
         }
+        if (!PHONE_NUMBERS.isValidNumber(parsed)) {
+            throw new InvalidPhoneNumberException("Phone number is not valid");
+        }
+        return parsed;
     }
 
     private static Set<String> allowedCountries(List<String> configured) {

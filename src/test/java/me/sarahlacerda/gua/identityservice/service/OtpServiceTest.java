@@ -82,6 +82,19 @@ class OtpServiceTest {
     }
 
     @Test
+    void anAccountSendIsAdmittedForTheAccountAndStoredUnderThePerPhoneKey() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("123456");
+
+        otpService.sendAccountOtp(PHONE, "127.0.0.1", null);
+
+        verify(sendGuard).admitForAccount(PHONE, "127.0.0.1");
+        Mockito.verifyNoMoreInteractions(sendGuard);
+        verify(valueOperations).set(eq(CODE_KEY), eq("123456"), eq(properties.getOtp().getTtl()));
+        verify(smsSender).send(eq(PHONE), anyString());
+    }
+
+    @Test
     void sendOtpResetsTheGuessBudgetBeforeStoringTheNewCode() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("123456");
@@ -330,8 +343,8 @@ class OtpServiceTest {
         verify(valueOperations, never()).set(eq(CODE_KEY), anyString(), any());
         verify(redisTemplate).delete("otp:attempts:pin-change:chal-1");
         verify(redisTemplate, never()).delete(ATTEMPTS_KEY);
-        // Same send limits as the public path: namespacing the code is not an exemption.
-        verify(sendGuard).admit(PHONE, "127.0.0.1");
+        // Namespacing the code is not an exemption from the send limits; it is the account's own number.
+        verify(sendGuard).admitForAccount(PHONE, "127.0.0.1");
         verify(smsSender).send(eq(PHONE), anyString());
     }
 

@@ -63,13 +63,13 @@ class PhoneChangeOtpServiceTest {
         verify(smsSender).send(eq(NEW_E164),
                 eq("Your Gua verification code is 123456. Never share this code with anyone. Gua support will never ask you for it."));
         // Send limits keyed on the new number + IP.
-        verify(sendGuard).admit(NEW_E164, "1.2.3.4");
+        verify(sendGuard).admitForAccount(NEW_E164, "1.2.3.4");
     }
 
     @Test
     void aRefusedSendStoresAndTextsNothing() {
         doThrow(new UnsupportedPhoneCountryException("Verification codes cannot be sent to this country"))
-                .when(sendGuard).admit(NEW_E164, "1.2.3.4");
+                .when(sendGuard).admitForAccount(NEW_E164, "1.2.3.4");
 
         assertThatThrownBy(() -> service.send(CHALLENGE, NEW_E164, "1.2.3.4", null))
                 .isInstanceOf(UnsupportedPhoneCountryException.class);

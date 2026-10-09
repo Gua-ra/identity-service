@@ -14,6 +14,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
@@ -177,8 +178,9 @@ class OtpServiceReviewLoginTest {
         enabled().sendLoginOtp(REVIEW_PHONE, "127.0.0.1", "pt-BR");
 
         verifyNoInteractions(smsSender);
-        // The same limits as every other send to this number.
-        verify(sendGuard).admit(REVIEW_PHONE, "127.0.0.1");
+        // The per-number and per-address limits, and no SMS ceiling, since nothing is texted.
+        verify(sendGuard).admitWithoutSms(REVIEW_PHONE, "127.0.0.1");
+        verifyNoMoreInteractions(sendGuard);
         // A fresh random code with a fresh guess budget and the normal lifetime.
         verify(redisTemplate).delete(ATTEMPTS_KEY);
         verify(valueOperations).set(CODE_KEY, ISSUED, properties.getOtp().getTtl());
@@ -192,7 +194,7 @@ class OtpServiceReviewLoginTest {
     @Test
     void aRateLimitedReviewSendIsRefusedLikeAnyOtherAndStoresNothing() {
         doThrow(new OtpRateLimitedException("Too many OTP requests", Duration.ofMinutes(5))).when(sendGuard)
-                .admit(REVIEW_PHONE, "127.0.0.1");
+                .admitWithoutSms(REVIEW_PHONE, "127.0.0.1");
 
         assertThatThrownBy(() -> enabled().sendLoginOtp(REVIEW_PHONE, "127.0.0.1", null))
                 .isInstanceOf(OtpRateLimitedException.class);

@@ -64,7 +64,7 @@ public class PhoneChangeOtpService {
      * challenge-namespaced key, and texts it to {@code newE164}.
      */
     public void send(String challengeId, String newE164, String requesterIp, String language) {
-        sendGuard.admit(newE164, requesterIp);
+        sendGuard.admitForAccount(newE164, requesterIp);
         String code = codeGenerator.generateNumericCode(properties.getOtp().getCodeLength());
         String messageBody = SmsTemplates.forLanguage(properties.getOtp(), language).formatted(code);
 

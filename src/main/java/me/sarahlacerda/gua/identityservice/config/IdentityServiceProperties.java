@@ -51,12 +51,22 @@ public class IdentityServiceProperties {
         @Min(1)
         private int maxRequestsPerIpPerHour = 10;
 
-        /** SMS sends across every number and address, in a window opened by the first send. */
+        /**
+         * SMS sends to numbers without an account, across every number and address, in a window
+         * opened by the first send.
+         */
         @Min(1)
-        private int maxSendsPerHour = 60;
+        private int maxSignUpSendsPerHour = 60;
 
         @Min(1)
-        private int maxSendsPerDay = 300;
+        private int maxSignUpSendsPerDay = 300;
+
+        /** SMS sends for existing accounts, counted apart from the sign-up ceilings. */
+        @Min(1)
+        private int maxAccountSendsPerHour = 120;
+
+        @Min(1)
+        private int maxAccountSendsPerDay = 600;
 
         /**
          * ISO 3166-1 alpha-2 regions a code may be texted to. Matched on the region of the number,

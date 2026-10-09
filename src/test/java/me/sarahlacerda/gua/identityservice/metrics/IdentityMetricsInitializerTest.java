@@ -84,7 +84,8 @@ class IdentityMetricsInitializerTest {
                 .contains("gua_identity_login_total")
                 .contains("gua_identity_otp_verify_total")
                 .contains("gua_identity_sms_send_total")
-                .contains("gua_identity_sms_refused_total{reason=\"daily_ceiling\"}");
+                .contains("gua_identity_sms_refused_total{reason=\"sign_up_daily_ceiling\"}")
+                .contains("gua_identity_sms_refused_total{reason=\"account_daily_ceiling\"}");
     }
 
     @Test

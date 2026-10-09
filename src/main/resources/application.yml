@@ -5,9 +5,12 @@ identity:
     max-requests-per-phone-per-hour: ${IDENTITY_OTP_MAX_PHONE_PER_HOUR:5}
     max-requests-per-ip-per-hour: ${IDENTITY_OTP_MAX_IP_PER_HOUR:10}
     # Ceilings on SMS sent across every number and address, so the spend stays bounded however many
-    # addresses and numbers a caller rotates through. Raise them before raising the per-address limit.
-    max-sends-per-hour: ${IDENTITY_OTP_MAX_SENDS_PER_HOUR:60}
-    max-sends-per-day: ${IDENTITY_OTP_MAX_SENDS_PER_DAY:300}
+    # addresses and numbers a caller rotates through. Numbers without an account and existing accounts
+    # have separate ceilings. Raise the sign-up ceilings before raising the per-address limit.
+    max-sign-up-sends-per-hour: ${IDENTITY_OTP_MAX_SIGN_UP_SENDS_PER_HOUR:60}
+    max-sign-up-sends-per-day: ${IDENTITY_OTP_MAX_SIGN_UP_SENDS_PER_DAY:300}
+    max-account-sends-per-hour: ${IDENTITY_OTP_MAX_ACCOUNT_SENDS_PER_HOUR:120}
+    max-account-sends-per-day: ${IDENTITY_OTP_MAX_ACCOUNT_SENDS_PER_DAY:600}
     # Regions (ISO 3166-1 alpha-2, comma separated) a code may be texted to. A number is matched on its
     # own region, so +1 numbers from the Caribbean are refused unless their region is listed.
     allowed-countries: ${IDENTITY_OTP_ALLOWED_COUNTRIES:BR,CA,US}
