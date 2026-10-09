@@ -35,9 +35,9 @@ import me.sarahlacerda.gua.identityservice.exception.UnsupportedPhoneCountryExce
  * per-address, per-number, hourly and daily counters must all have room.
  *
  * <p>
- * Sends for existing accounts and sends to numbers without one have separate hourly and daily
- * ceilings, so traffic that needs no account cannot use up the budget existing accounts sign in
- * with.
+ * Sends to numbers without an account count against separate sign-up ceilings, so a sign-up
+ * flood cannot use up the account ceilings. Unauthenticated sends to numbers that have an
+ * account, such as repeated sign-in requests, still count against the account ceilings.
  */
 @Component
 public class SmsSendGuard {
