@@ -44,7 +44,7 @@ public class ContactDiscoveryService {
      * Matches the submitted phone numbers against discoverable Gua accounts on behalf of
      * {@code userId}. Entries that are not valid E.164 are silently skipped (address books are
      * messy; one bad entry must not fail the sync), duplicates are collapsed, and
-     * batches above the configured cap are rejected. Every other call spends one of the
+     * batches above the configured cap are rejected. A call within the cap spends one of the
      * account's hourly lookups.
      */
     public List<ContactMatch> match(String userId, List<String> phoneNumbers) {
