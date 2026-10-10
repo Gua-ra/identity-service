@@ -12,6 +12,7 @@ import java.util.Set;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import lombok.Getter;
 import lombok.Setter;
@@ -49,6 +50,30 @@ public class IdentityServiceProperties {
 
         @Min(1)
         private int maxRequestsPerIpPerHour = 10;
+
+        /**
+         * SMS sends to numbers without an account, across every number and address, in a window
+         * opened by the first send.
+         */
+        @Min(1)
+        private int maxSignUpSendsPerHour = 60;
+
+        @Min(1)
+        private int maxSignUpSendsPerDay = 300;
+
+        /** SMS sends for existing accounts, counted apart from the sign-up ceilings. */
+        @Min(1)
+        private int maxAccountSendsPerHour = 120;
+
+        @Min(1)
+        private int maxAccountSendsPerDay = 600;
+
+        /**
+         * ISO 3166-1 alpha-2 regions a code may be texted to. Matched on the region of the number,
+         * so +1 numbers outside the listed regions (Caribbean, for example) are refused.
+         */
+        @NotEmpty
+        private List<String> allowedCountries = new ArrayList<>(List.of("BR", "CA", "US"));
 
         /**
          * Wrong guesses one code may absorb before it is deleted. Counted per phone
@@ -103,6 +128,10 @@ public class IdentityServiceProperties {
 
         /** Max phone numbers accepted per /directory/lookup request. */
         private int maxLookupBatch = 1000;
+
+        /** /directory/lookup calls per account in an hour, whatever address they come from. */
+        @Min(1)
+        private int maxLookupsPerAccountPerHour = 60;
     }
 
     /**

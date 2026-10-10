@@ -17,8 +17,11 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import me.sarahlacerda.gua.identityservice.exception.OtpRateLimitedException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneChangeCooldownException;
+import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
 import me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException;
+import me.sarahlacerda.gua.identityservice.exception.UnsupportedPhoneCountryException;
 import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 
 @WebMvcTest(controllers = RestExceptionHandlerTest.FailingController.class)
@@ -75,6 +78,31 @@ class RestExceptionHandlerTest {
             .andExpect(jsonPath("$.code").value("phone_change_cooldown"));
     }
 
+    @Test
+    void aRefusedSendCarriesTheWaitRoundedUpToWholeSeconds() throws Exception {
+        mockMvc.perform(get("/_test/sms-ceiling"))
+            .andExpect(status().isTooManyRequests())
+            .andExpect(jsonPath("$.code").value("rate_limited"))
+            .andExpect(jsonPath("$.retryAfterSeconds").value(3541))
+            .andExpect(header().string("Retry-After", "3541"));
+    }
+
+    @Test
+    void aRateLimitWithNoKnownWaitHasNoRetryAfter() throws Exception {
+        mockMvc.perform(get("/_test/reauth-budget"))
+            .andExpect(status().isTooManyRequests())
+            .andExpect(jsonPath("$.code").value("rate_limited"))
+            .andExpect(jsonPath("$.retryAfterSeconds").doesNotExist())
+            .andExpect(header().doesNotExist("Retry-After"));
+    }
+
+    @Test
+    void aDestinationOutsideTheAllowedCountriesIsABadRequestWithItsOwnCode() throws Exception {
+        mockMvc.perform(get("/_test/unsupported-country"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("phone_country_not_supported"));
+    }
+
     /** Error bodies that carry no wait do not grow the field. */
     @Test
     void anUnrelatedErrorBodyIsUnchanged() throws Exception {
@@ -93,6 +121,22 @@ class RestExceptionHandlerTest {
         @GetMapping("/_test/change-cooldown")
         public String changeCooldown() {
             throw new PhoneChangeCooldownException("Phone change cooldown active", 3600);
+        }
+
+        @GetMapping("/_test/sms-ceiling")
+        public String smsCeiling() {
+            throw new OtpRateLimitedException("Verification codes are temporarily unavailable",
+                    java.time.Duration.ofMillis(3_540_001));
+        }
+
+        @GetMapping("/_test/reauth-budget")
+        public String reauthBudget() {
+            throw new RateLimiterException("Too many attempts to confirm your number; try again later");
+        }
+
+        @GetMapping("/_test/unsupported-country")
+        public String unsupportedCountry() {
+            throw new UnsupportedPhoneCountryException("Verification codes cannot be sent to this country");
         }
 
         @GetMapping("/_test/redis-down")

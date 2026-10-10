@@ -27,6 +27,7 @@ import me.sarahlacerda.gua.identityservice.domain.VerifyOtpResult;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.IdentityOrchestrationService;
+import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
 import me.sarahlacerda.gua.identityservice.service.RegistrationGuard;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService.DeviceMetadata;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -51,7 +52,7 @@ class OtpControllerTest {
     void setUp() {
         objectMapper = new ObjectMapper();
         OtpController controller = new OtpController(orchestrationService, authenticatedUserAccessor,
-                registrationGuard);
+                registrationGuard, new PhoneNumberNormalizer());
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new RestExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter())
@@ -70,6 +71,51 @@ class OtpControllerTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isAccepted());
 
         verify(orchestrationService).sendOtp("+12025550123", "127.0.0.1", "pt-BR");
+    }
+
+    @Test
+    void sendOtpPassesTheCanonicalNumberToTheGateAndTheSend() throws Exception {
+        OtpSendRequest request = new OtpSendRequest();
+        request.setPhone("tel:+55-11-99999-8888");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/otp/send")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(request)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isAccepted());
+
+        verify(registrationGuard).assertOtpAllowed("+5511999998888");
+        verify(orchestrationService).sendOtp("+5511999998888", "127.0.0.1", null);
+    }
+
+    @Test
+    void sendOtpRefusesAnInvalidNumberBeforeTheGateAndTheSend() throws Exception {
+        OtpSendRequest request = new OtpSendRequest();
+        request.setPhone("+5500000000000");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/otp/send")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(request)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code",
+                        is("invalid_phone_number")));
+
+        org.mockito.Mockito.verifyNoInteractions(registrationGuard, orchestrationService);
+    }
+
+    @Test
+    void verifyOtpRedeemsTheCodeUnderTheCanonicalNumber() throws Exception {
+        OtpVerifyRequest request = new OtpVerifyRequest();
+        request.setPhone("+1 (202) 555-0199");
+        request.setCode("123456");
+        when(orchestrationService.verifyOtpAndSignIn(eq("+12025550199"), eq("123456"), any(), any()))
+                .thenReturn(VerifyOtpResult.newUser("signup-token-abc"));
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/otp/verify")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(request)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+
+        verify(orchestrationService).verifyOtpAndSignIn(eq("+12025550199"), eq("123456"), any(), any());
     }
 
     @Test
