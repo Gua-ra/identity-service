@@ -9,7 +9,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -44,6 +46,16 @@ class RateLimiterTest {
         assertThatThrownBy(() -> rateLimiter.checkRate("key", 5, Duration.ofMinutes(1)))
             .isInstanceOf(RateLimiterException.class)
             .hasMessageContaining("Rate limit exceeded");
+    }
+
+    @Test
+    void aRefusalCarriesTheTimeLeftInTheWindow() {
+        when(valueOperations.increment("key")).thenReturn(6L);
+        when(redisTemplate.getExpire("key", TimeUnit.MILLISECONDS)).thenReturn(42_000L);
+
+        assertThatThrownBy(() -> rateLimiter.checkRate("key", 5, Duration.ofMinutes(1)))
+            .isInstanceOfSatisfying(RateLimiterException.class,
+                refused -> assertThat(refused.getRetryAfter()).isEqualTo(Duration.ofSeconds(42)));
     }
 
     @Test

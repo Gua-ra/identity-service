@@ -85,11 +85,11 @@ public class AccountReauthService {
 
     /**
      * Sends the reauthentication OTP, once the submitted number is shown to be the account's.
-     * The send itself stays inside the ordinary per-phone and per-address OTP limits.
+     * The send stays inside the per-phone and per-address OTP limits and the account ceilings.
      */
     public void startReauth(String userId, String submittedPhone, String requesterIp, String language) {
         String phone = requireOwnPhone(userId, submittedPhone, "REAUTH_START", requesterIp);
-        otpService.sendOtp(phone, requesterIp, language);
+        otpService.sendAccountOtp(phone, requesterIp, language);
         log.info("Issued reauth OTP for {}", userId);
     }
 

@@ -4,6 +4,7 @@ import org.springframework.stereotype.Component;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import me.sarahlacerda.gua.identityservice.service.SmsSendGuard;
 import me.sarahlacerda.gua.identityservice.service.SmsSender;
 
 /**
@@ -15,6 +16,7 @@ import me.sarahlacerda.gua.identityservice.service.SmsSender;
  *   <li>{@code gua_identity_login_total{result="success"}}</li>
  *   <li>{@code gua_identity_otp_verify_total{result="valid"|"invalid"|"exhausted",flow=&lt;where the code was spent&gt;}}</li>
  *   <li>{@code gua_identity_sms_send_total{provider=&lt;wired sender&gt;,result="sent"|"failed"}}</li>
+ *   <li>{@code gua_identity_sms_refused_total{reason=&lt;the limit that refused the send&gt;}}</li>
  * </ul>
  * Micrometer counters are otherwise created lazily on first increment (see
  * {@code IdentityOrchestrationService} and {@code OtpService}), so a freshly
@@ -60,5 +62,8 @@ public class IdentityMetricsInitializer {
         String provider = SmsSender.providerTag(smsSender);
         Counter.builder("gua.identity.sms.send").tag("provider", provider).tag("result", "sent").register(metrics);
         Counter.builder("gua.identity.sms.send").tag("provider", provider).tag("result", "failed").register(metrics);
+        for (SmsSendGuard.Refusal refusal : SmsSendGuard.Refusal.values()) {
+            Counter.builder("gua.identity.sms.refused").tag("reason", refusal.tagValue()).register(metrics);
+        }
     }
 }
