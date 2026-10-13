@@ -2,6 +2,7 @@ package me.sarahlacerda.gua.identityservice.controller;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 
@@ -17,6 +18,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import me.sarahlacerda.gua.identityservice.account.genesis.InvalidGenesisException;
 import me.sarahlacerda.gua.identityservice.exception.AccountRecoveryCooldownException;
@@ -316,8 +318,29 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("validation_error", description));
         }
 
+        @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+        public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .body(new ErrorResponse("bad_request", "A request parameter has the wrong type."));
+        }
+
+        /**
+         * Spring's own refusals (unknown path, wrong method, unsupported media type, missing
+         * parameter) implement {@link org.springframework.web.ErrorResponse} and carry their 4xx
+         * status. Answering them as 500 makes every scanner probe look like a server failure.
+         */
         @ExceptionHandler(Exception.class)
         public ResponseEntity<ErrorResponse> handleGeneric(Exception ex) {
+                if (ex instanceof org.springframework.web.ErrorResponse refusal
+                                && refusal.getStatusCode().is4xxClientError()) {
+                        HttpStatus known = HttpStatus.resolve(refusal.getStatusCode().value());
+                        log.debug("Request refused with {}", refusal.getStatusCode(), ex);
+                        return ResponseEntity.status(refusal.getStatusCode())
+                                        .headers(refusal.getHeaders())
+                                        .body(new ErrorResponse(
+                                                        known != null ? known.name().toLowerCase(Locale.ROOT) : "client_error",
+                                                        known != null ? known.getReasonPhrase() : "Request refused"));
+                }
                 log.error("Unhandled exception", ex);
                 return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                                 .body(new ErrorResponse("server_error", "Unexpected error"));
