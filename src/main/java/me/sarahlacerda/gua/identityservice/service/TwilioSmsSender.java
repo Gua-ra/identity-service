@@ -14,6 +14,7 @@ import com.twilio.type.PhoneNumber;
 
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.SmsProperties.TwilioProperties;
+import me.sarahlacerda.gua.identityservice.exception.SmsDeliveryException;
 
 @Component
 @Primary
@@ -46,8 +47,11 @@ public class TwilioSmsSender implements SmsSender {
                 Message.creator(to, new PhoneNumber(fromNumber), messageBody).create();
             }
         } catch (ApiException ex) {
-            log.error("Failed to send SMS via Twilio to {}: {}", maskPhoneNumber(e164PhoneNumber), ex.getMessage());
-            throw ex;
+            // Twilio's message names the recipient, so only its error code and status leave here.
+            log.error("Failed to send SMS via Twilio to {}: error {} (HTTP {})", maskPhoneNumber(e164PhoneNumber),
+                ex.getCode(), ex.getStatusCode());
+            throw new SmsDeliveryException("Twilio refused the SMS: error " + ex.getCode() + " (HTTP "
+                + ex.getStatusCode() + ")");
         }
     }
 

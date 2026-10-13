@@ -147,7 +147,7 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
             updated.add(Map.of("medium", t.medium(), "address", t.address()));
         }
         updated.add(Map.of("medium", "msisdn", "address", phone));
-        putThreepids(userId, updated, "link", phone);
+        putThreepids(userId, updated, "link");
     }
 
     @Override
@@ -165,7 +165,7 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
         if (!removed) {
             return;
         }
-        putThreepids(userId, updated, "unlink", phone);
+        putThreepids(userId, updated, "unlink");
     }
 
     private List<ThreePid> fetchThreepids(String userId) {
@@ -181,14 +181,14 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
         return details == null ? List.of() : Optional.ofNullable(details.threepids()).orElse(List.of());
     }
 
-    private void putThreepids(String userId, List<Map<String, String>> threepids, String op, String phone) {
+    private void putThreepids(String userId, List<Map<String, String>> threepids, String op) {
         Map<String, Object> body = Map.of("threepids", threepids);
         adminClient.put()
                 .uri(builder -> builder.path("/_synapse/admin/v2/users/{userId}").build(encode(userId)))
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(Void.class)
-                .doOnError(ex -> log.warn("Failed to {} phone {} for {}: {}", op, phone, userId, ex.getMessage()))
+                .doOnError(ex -> log.warn("Failed to {} a phone for {}: {}", op, userId, ex.getMessage()))
                 .block();
     }
 
