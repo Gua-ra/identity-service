@@ -108,6 +108,7 @@ These files hold development secrets and are intentionally gitignored. The dev s
 | `docker/.identity-pepper` | Server-side pepper used to hash phone numbers for directory lookup. |
 | `docker/.oidc-jwt-secret` | Local OIDC signing material for the dev stack. |
 | `docker/mas/mas.conf.yaml` | MAS configuration including its signing/encryption secrets and upstream-OIDC client credentials. |
+| `docker/synapse/data/homeserver.yaml` | Synapse configuration, including the secret it shares with MAS. |
 
 If `OIDC_RSA_PRIVATE_KEY` / `OIDC_RSA_PUBLIC_KEY` are not set, the service generates an ephemeral RSA signing key at startup and logs a warning. That is fine for local development, but tokens will not survive a restart.
 
