@@ -39,6 +39,9 @@ class RateLimitConfigurationTest {
     @CsvSource({
             "/otp/verify, 10, PT1M",
             "/signin/verify-pin, 10, PT1M",
+            // The phone step: with the web login gate on, a refusal is an existence check that
+            // costs a directory read and a homeserver admin call, and the SMS caps count only sends.
+            "/login/phone, 10, PT1M",
             "/login/otp, 10, PT1M",
             "/login/pin, 10, PT1M",
             "/login/passkey/auth/options, 20, PT1M",

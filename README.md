@@ -501,7 +501,7 @@ Returning users are not blocked as long as their directory row resolves: that nu
 
 **Web or native.** MAS can append `gua_downstream=web|native` to the upstream authorize request (fork settings `forward_downstream_client` and `downstream_client_web_origin`; `native` means the downstream client's `client_uri` host differs from the web origin). A login session is exempt only when the marker equals `idp.login.registration.native-client-marker` (default `native`) exactly. An absent, empty or unrecognised marker is treated as web, and the REST endpoints, which carry no marker, always are.
 
-**Limits.** The marker travels in a browser redirect, so the user can edit it, and MAS derives it from a `client_uri` that a dynamically registered client sets for itself. Treat the native exemption as a convenience for the beta apps, not a security boundary; SMS rate limits remain the defence against credit burn. An unforgeable signal needs a MAS-side change, such as a signed or PAR-carried downstream claim.
+**Limits.** The marker travels in a browser redirect, so the user can edit it, and MAS derives it from a `client_uri` that a dynamically registered client sets for itself. Treat the native exemption as a convenience for the beta apps, not a security boundary; SMS rate limits remain the defence against credit burn. An unforgeable signal needs a MAS-side change, such as a signed or PAR-carried downstream claim. A refusal also tells the caller whether the number has an account, so `POST /login/phone` carries its own per-address [rate limit](#-rate-limiting) like `POST /otp/send`.
 
 ### Store review login
 
@@ -567,6 +567,7 @@ Every public endpoint is protected by a **Resilience4j**-based rate limiter, so 
 | `POST /account/phone/change/complete` | 10 | 1 hour |
 | `POST /signup/complete` | 10 | 1 min |
 | `POST /signin/verify-pin` | 10 | 1 min |
+| `POST /login/phone` | 10 | 1 min |
 | `POST /login/otp` | 10 | 1 min |
 | `POST /login/pin` | 10 | 1 min |
 | `POST /login/passkey/auth/options` | 20 | 1 min |
