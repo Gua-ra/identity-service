@@ -98,7 +98,7 @@ class AccountReauthServiceTest {
 
         service.startReauth(USER, PHONE, "1.2.3.4", "en-US");
 
-        verify(otpService).sendOtp(PHONE, "1.2.3.4", "en-US");
+        verify(otpService).sendAccountOtp(PHONE, "1.2.3.4", "en-US");
         // Nothing was written: no pending-phone record, no raw number.
         verify(valueOperations, never()).set(any(), any());
         // And the attempt reserved for the comparison was given back, so confirming your own
@@ -135,7 +135,7 @@ class AccountReauthServiceTest {
 
         service.startReauth(USER, "2025550123", "1.2.3.4", null);
 
-        verify(otpService).sendOtp(PHONE, "1.2.3.4", null);
+        verify(otpService).sendAccountOtp(PHONE, "1.2.3.4", null);
     }
 
     /**
@@ -179,7 +179,7 @@ class AccountReauthServiceTest {
 
         service.startReauth(USER, PHONE, "1.2.3.4", null);
 
-        verify(otpService).sendOtp(PHONE, "1.2.3.4", null);
+        verify(otpService).sendAccountOtp(PHONE, "1.2.3.4", null);
     }
 
     /** The admin API is not reliably reachable under MAS; a failure there is a miss, not a pass. */

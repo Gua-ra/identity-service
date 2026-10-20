@@ -1,6 +1,7 @@
 package me.sarahlacerda.gua.identityservice.service;
 
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -30,7 +31,9 @@ public class RateLimiter {
         }
 
         if (currentCount != null && currentCount > limit) {
-            throw new RateLimiterException("Rate limit exceeded for key: " + key);
+            Long remainingMillis = redisTemplate.getExpire(key, TimeUnit.MILLISECONDS);
+            throw new RateLimiterException("Rate limit exceeded",
+                    remainingMillis != null && remainingMillis > 0 ? Duration.ofMillis(remainingMillis) : window);
         }
     }
 }

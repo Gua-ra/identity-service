@@ -11,7 +11,6 @@ import io.micrometer.core.instrument.MeterRegistry;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.exception.InvalidOtpException;
 import me.sarahlacerda.gua.identityservice.exception.OtpRateLimitedException;
-import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
 import me.sarahlacerda.gua.identityservice.metrics.OtpVerifyFlow;
 
 @Service
@@ -19,8 +18,6 @@ public class OtpService {
 
     private static final String OTP_KEY_PREFIX = "otp:code:";
     private static final String ATTEMPTS_KEY_PREFIX = "otp:attempts:";
-    private static final String PHONE_RATE_KEY_PREFIX = "otp:rate:phone:";
-    private static final String IP_RATE_KEY_PREFIX = "otp:rate:ip:";
     /** Which live code a review sign-in issued; see {@link #sendLoginOtp}. */
     private static final String REVIEW_LOGIN_KEY_PREFIX = "otp:review-login:";
     /** Wrong review codes in the current lockout window; see {@link #verifyLoginOtp}. */
@@ -31,7 +28,7 @@ public class OtpService {
     private final IdentityServiceProperties properties;
     private final OtpCodeGenerator codeGenerator;
     private final SmsSender smsSender;
-    private final RateLimiter rateLimiter;
+    private final SmsSendGuard sendGuard;
     private final MeterRegistry metrics;
     private final ReviewLogin reviewLogin;
     private final String smsProvider;
@@ -41,7 +38,7 @@ public class OtpService {
         IdentityServiceProperties properties,
         OtpCodeGenerator codeGenerator,
         SmsSender smsSender,
-        RateLimiter rateLimiter,
+        SmsSendGuard sendGuard,
         MeterRegistry metrics,
         ReviewLogin reviewLogin
     ) {
@@ -49,7 +46,7 @@ public class OtpService {
         this.properties = properties;
         this.codeGenerator = codeGenerator;
         this.smsSender = smsSender;
-        this.rateLimiter = rateLimiter;
+        this.sendGuard = sendGuard;
         this.metrics = metrics;
         this.reviewLogin = reviewLogin;
         // e.g. TwilioSmsSender -> "twilio", LoggingSmsSender -> "logging". Lets the SMS-usage metric
@@ -58,15 +55,26 @@ public class OtpService {
     }
 
     public void sendOtp(String e164PhoneNumber, String requesterIp, String language) {
-        send(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), e164PhoneNumber, requesterIp, language);
+        sendGuard.admit(e164PhoneNumber, requesterIp);
+        send(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), e164PhoneNumber, language);
+    }
+
+    /**
+     * {@link #sendOtp} for a number already shown to be the signed-in account's own, counted
+     * against the account ceilings whatever the directory says about the number.
+     */
+    public void sendAccountOtp(String e164PhoneNumber, String requesterIp, String language) {
+        sendGuard.admitForAccount(e164PhoneNumber, requesterIp);
+        send(codeKey(e164PhoneNumber), attemptsKey(e164PhoneNumber), e164PhoneNumber, language);
     }
 
     /**
      * The interactive sign-in's send: {@link #sendOtp} for every number except the store review
-     * number ({@link ReviewLogin}). That one gets the same rate limits, a fresh random code under
-     * the same key with the same TTL and a fresh guess budget, takes about as long as a real send,
-     * and texts nothing. The random code is what every other reader of the per-phone key sees, so
-     * reauthentication and the REST sign-in still need a code nobody was sent.
+     * number ({@link ReviewLogin}). That one gets the same per-number and per-address limits, a
+     * fresh random code under the same key with the same TTL and a fresh guess budget, takes about
+     * as long as a real send, and texts nothing, so it spends no SMS ceiling. The random code is
+     * what every other reader of the per-phone key sees, so reauthentication and the REST sign-in
+     * still need a code nobody was sent.
      */
     public void sendLoginOtp(String e164PhoneNumber, String requesterIp, String language) {
         if (!reviewLogin.isReviewNumber(e164PhoneNumber)) {
@@ -74,7 +82,7 @@ public class OtpService {
             return;
         }
         try {
-            enforceRateLimits(e164PhoneNumber, requesterIp);
+            sendGuard.admitWithoutSms(e164PhoneNumber, requesterIp);
         } catch (OtpRateLimitedException ex) {
             reviewLogin.record(e164PhoneNumber, ReviewLogin.Outcome.SEND_RATE_LIMITED);
             throw ex;
@@ -139,12 +147,13 @@ public class OtpService {
      * written under {@code otp:code:{scope}:{scopeId}}, which the unauthenticated
      * {@code POST /otp/send} cannot write, so it can neither plant a code there ahead of
      * the flow nor have one of its own codes accepted by it. Everything else is the same
-     * as {@link #sendOtp}: the same per-phone and per-IP send limits, the same code
+     * as {@link #sendAccountOtp}: the same {@link SmsSendGuard} limits, the same code
      * length and TTL, the same SMS metrics, and the same fresh guess budget per code.
      */
     public void sendScopedOtp(OtpScope scope, String scopeId, String e164PhoneNumber, String requesterIp,
             String language) {
-        send(scopedCodeKey(scope, scopeId), scopedAttemptsKey(scope, scopeId), e164PhoneNumber, requesterIp, language);
+        sendGuard.admitForAccount(e164PhoneNumber, requesterIp);
+        send(scopedCodeKey(scope, scopeId), scopedAttemptsKey(scope, scopeId), e164PhoneNumber, language);
     }
 
     /** Redeems a scoped code under the same per-code guess cap as {@link #verifyOtp}. */
@@ -162,9 +171,7 @@ public class OtpService {
         redisTemplate.delete(scopedAttemptsKey(scope, scopeId));
     }
 
-    private void send(String codeKey, String attemptsKey, String e164PhoneNumber, String requesterIp,
-            String language) {
-        enforceRateLimits(e164PhoneNumber, requesterIp);
+    private void send(String codeKey, String attemptsKey, String e164PhoneNumber, String language) {
         String code = codeGenerator.generateNumericCode(properties.getOtp().getCodeLength());
         String messageBody = SmsTemplates.forLanguage(properties.getOtp(), language).formatted(code);
 
@@ -304,18 +311,6 @@ public class OtpService {
 
     private static String scopedAttemptsKey(OtpScope scope, String scopeId) {
         return ATTEMPTS_KEY_PREFIX + scope.keySegment() + ":" + scopeId;
-    }
-
-    private void enforceRateLimits(String e164PhoneNumber, String requesterIp) {
-        Duration window = Duration.ofHours(1);
-        try {
-            rateLimiter.checkRate(PHONE_RATE_KEY_PREFIX + e164PhoneNumber, properties.getOtp().getMaxRequestsPerPhonePerHour(), window);
-            if (StringUtils.hasText(requesterIp)) {
-                rateLimiter.checkRate(IP_RATE_KEY_PREFIX + requesterIp, properties.getOtp().getMaxRequestsPerIpPerHour(), window);
-            }
-        } catch (RateLimiterException ex) {
-            throw new OtpRateLimitedException("Too many OTP requests", ex);
-        }
     }
 
     /**

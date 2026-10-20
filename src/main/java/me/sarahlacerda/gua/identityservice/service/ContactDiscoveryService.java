@@ -1,5 +1,6 @@
 package me.sarahlacerda.gua.identityservice.service;
 
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,8 +24,8 @@ import me.sarahlacerda.gua.identityservice.exception.LookupBatchTooLargeExceptio
  * necessarily public key) is reversible by dictionary, while shipping the secret
  * pepper to clients would let anyone with a database dump reverse the at-rest
  * digests. Enumeration abuse is mitigated by authentication, the per-request
- * batch cap and the endpoint rate limit, plus the per-account discoverable
- * opt-out.
+ * batch cap, the endpoint rate limit, a per-account lookup budget that does not
+ * reset with the caller's address, and the per-account discoverable opt-out.
  */
 @Service
 @RequiredArgsConstructor
@@ -32,23 +33,28 @@ public class ContactDiscoveryService {
 
     /** E.164: leading +, no leading zero, 7–15 digits total. */
     private static final Pattern E164 = Pattern.compile("^\\+[1-9]\\d{6,14}$");
+    private static final String ACCOUNT_LOOKUPS_KEY_PREFIX = "directory:lookup:account:";
 
     private final DirectoryService directoryService;
     private final PhoneNumberHasher phoneNumberHasher;
     private final IdentityServiceProperties properties;
+    private final RateLimiter rateLimiter;
 
     /**
-     * Matches the submitted phone numbers against discoverable Gua accounts.
-     * Entries that are not valid E.164 are silently skipped (address books are
+     * Matches the submitted phone numbers against discoverable Gua accounts on behalf of
+     * {@code userId}. Entries that are not valid E.164 are silently skipped (address books are
      * messy; one bad entry must not fail the sync), duplicates are collapsed, and
-     * batches above the configured cap are rejected.
+     * batches above the configured cap are rejected. A call within the cap spends one of the
+     * account's hourly lookups.
      */
-    public List<ContactMatch> match(List<String> phoneNumbers) {
+    public List<ContactMatch> match(String userId, List<String> phoneNumbers) {
         int maxBatch = properties.getDirectory().getMaxLookupBatch();
         if (phoneNumbers.size() > maxBatch) {
             throw new LookupBatchTooLargeException(
                     "At most " + maxBatch + " phone numbers can be matched per request");
         }
+        rateLimiter.checkRate(ACCOUNT_LOOKUPS_KEY_PREFIX + userId,
+                properties.getDirectory().getMaxLookupsPerAccountPerHour(), Duration.ofHours(1));
         Map<String, String> phoneByDigest = new LinkedHashMap<>();
         for (String phone : phoneNumbers) {
             if (phone != null && E164.matcher(phone).matches()) {

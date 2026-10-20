@@ -4,6 +4,16 @@ identity:
     ttl: ${IDENTITY_OTP_TTL:PT5M}
     max-requests-per-phone-per-hour: ${IDENTITY_OTP_MAX_PHONE_PER_HOUR:5}
     max-requests-per-ip-per-hour: ${IDENTITY_OTP_MAX_IP_PER_HOUR:10}
+    # Ceilings on SMS sent across every number and address, so the spend stays bounded however many
+    # addresses and numbers a caller rotates through. Numbers without an account and existing accounts
+    # have separate ceilings. Raise the sign-up ceilings before raising the per-address limit.
+    max-sign-up-sends-per-hour: ${IDENTITY_OTP_MAX_SIGN_UP_SENDS_PER_HOUR:60}
+    max-sign-up-sends-per-day: ${IDENTITY_OTP_MAX_SIGN_UP_SENDS_PER_DAY:300}
+    max-account-sends-per-hour: ${IDENTITY_OTP_MAX_ACCOUNT_SENDS_PER_HOUR:120}
+    max-account-sends-per-day: ${IDENTITY_OTP_MAX_ACCOUNT_SENDS_PER_DAY:600}
+    # Regions (ISO 3166-1 alpha-2, comma separated) a code may be texted to. A number is matched on its
+    # own region, so +1 numbers from the Caribbean are refused unless their region is listed.
+    allowed-countries: ${IDENTITY_OTP_ALLOWED_COUNTRIES:BR,CA,US}
     max-verify-attempts: ${IDENTITY_OTP_MAX_VERIFY_ATTEMPTS:5}
     sms-template: ${IDENTITY_OTP_SMS_TEMPLATE:Your Gua verification code is %s. Never share this code with anyone. Gua support will never ask you for it.}
     # Keys are lower-case tags, matched exactly and then by primary language (see SmsTemplates).
@@ -27,6 +37,8 @@ identity:
     # account). Blank in dev; pin in every long-lived environment. Not a secret.
     pepper-fingerprint: ${IDENTITY_DIRECTORY_PEPPER_FINGERPRINT:}
     max-lookup-batch: ${IDENTITY_DIRECTORY_MAX_LOOKUP_BATCH:1000}
+    # Per account, from any address. The /directory/lookup endpoint limit below is per account and address.
+    max-lookups-per-account-per-hour: ${IDENTITY_DIRECTORY_MAX_LOOKUPS_PER_ACCOUNT_PER_HOUR:60}
   security:
     pin-reset-cooldown: ${IDENTITY_SECURITY_PIN_RESET_COOLDOWN:PT168H}
     max-pin-attempts: ${IDENTITY_SECURITY_MAX_PIN_ATTEMPTS:5}
