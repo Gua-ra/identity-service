@@ -77,6 +77,13 @@ public class OidcProperties {
         private boolean requirePkce;
 
         /**
+         * Whether access tokens issued to this client authenticate the bearer API. Off, they reach
+         * only {@code /userinfo}, which is all a relying party such as the authentication service
+         * needs.
+         */
+        private boolean apiAccess;
+
+        /**
          * Registry ids of the homeservers whose accounts this client may report deleted: the ids under
          * {@code identity.routing.homeservers}, or {@code default} for the legacy single homeserver.
          * Empty: none. A public client may report nothing, whatever this lists.

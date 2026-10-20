@@ -49,7 +49,8 @@ public class OidcClientService {
                 List.copyOf(registration.getRedirectUris()),
                 Set.copyOf(registration.getAllowedScopes()),
                 publicClient || registration.isRequirePkce(),
-                publicClient ? Set.of() : Set.copyOf(registration.getHomeserverIds())
+                publicClient ? Set.of() : Set.copyOf(registration.getHomeserverIds()),
+                registration.isApiAccess()
             );
             map.put(client.clientId(), client);
         }
@@ -66,6 +67,16 @@ public class OidcClientService {
             throw new OidcInvalidRequestException("invalid_client", "Unknown client_id");
         }
         return client;
+    }
+
+    /**
+     * Whether a token issued to this client may authenticate a call to the bearer API. False for an
+     * unknown client and for one registered without {@code api-access}, whose tokens reach only
+     * {@code /userinfo}.
+     */
+    public boolean grantsApiAccess(String clientId) {
+        RegisteredClient client = clientId == null ? null : clientsById.get(clientId);
+        return client != null && client.apiAccess();
     }
 
     public void validateRedirectUri(RegisteredClient client, String redirectUri) {
@@ -176,6 +187,8 @@ public class OidcClientService {
     /**
      * @param homeserverIds registry ids of the homeservers whose accounts this client may report deleted;
      *                      always empty for a public client
+     * @param apiAccess     whether tokens issued to this client authenticate the bearer API, or only
+     *                      {@code /userinfo}
      */
     public record RegisteredClient(
         String clientId,
@@ -184,6 +197,7 @@ public class OidcClientService {
         List<String> redirectUris,
         Set<String> allowedScopes,
         boolean requirePkce,
-        Set<String> homeserverIds
+        Set<String> homeserverIds,
+        boolean apiAccess
     ) {}
 }

@@ -48,6 +48,10 @@ public class SecurityConfig {
         private static final List<String> OPEN_GET_ENDPOINTS = List.of(
                         "/.well-known/**",
                         "/oauth2/**",
+                        // Authenticated in the handler by the access token itself, for every registered
+                        // client. The bearer check would refuse the relying party's token, which is valid
+                        // here and nowhere else on the API.
+                        "/userinfo",
                         "/login/**",
                         "/swagger-ui/**",
                         "/swagger-ui.html",
