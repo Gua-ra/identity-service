@@ -16,15 +16,13 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.repository.AccountGenesisRepository;
 
 /**
- * Gives every account that predates account genesis a bootstrap accountId (ADM-001 L5 path B1).
+ * Gives every account that predates account genesis a bootstrap accountId.
  *
- * <p>Idempotent and resumable. It walks accounts in user-id order in batches, skips the ones that
- * already hold a genesis row, and mints one for the rest; a second run therefore mints nothing, and a
- * run interrupted halfway continues from where the ordering left off rather than starting over. Each
- * account is minted in its own transaction, so one failure costs one account, not the batch.
+ * <p>Idempotent and resumable: it walks accounts in user-id order in batches, skips the ones that
+ * already hold a genesis row and mints one for the rest. Each account is minted in its own
+ * transaction, so one failure costs one account, not the batch.
  *
- * <p>Gated by {@code identity.genesis.bootstrap-backfill.enabled}, separately from the master switch,
- * so existing accounts can be filled in before or after new signups start getting ids.
+ * <p>Gated by {@code identity.genesis.bootstrap-backfill.enabled}, separately from the master switch.
  */
 @Component
 @RequiredArgsConstructor

@@ -46,7 +46,7 @@ docker/.identity-pepper
 docker/.oidc-jwt-secret
 docker/mas/mas.conf.yaml
 
-# Never commit MAS/Synapse config backups — they contain secrets
+# Never commit MAS/Synapse config backups: they contain secrets
 docker/mas/*.bak
 docker/synapse/data/*.bak
 *.pre-delegation.bak

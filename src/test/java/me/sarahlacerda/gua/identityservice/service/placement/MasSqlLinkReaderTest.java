@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.nio.file.Files;
@@ -20,11 +19,9 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Home
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The SQL fallback read path, against an embedded database standing in for a MAS.
- *
- * <p>The phone column is the point of this class. The deployed MAS configuration puts the account's
- * phone number in {@code upstream_oauth_links.human_account_name}, so a comparison job that selected it,
- * even accidentally through a wildcard, would pull phone numbers into this service's logs and metrics.
+ * The SQL fallback read path, against an embedded database standing in for a MAS. The deployed MAS
+ * configuration puts the account's phone number in {@code upstream_oauth_links.human_account_name},
+ * so the reader must never select it, even through a wildcard.
  */
 class MasSqlLinkReaderTest {
 
@@ -102,8 +99,7 @@ class MasSqlLinkReaderTest {
         MasSqlLinkReader aliasReader = new MasSqlLinkReader(aliased, new ObjectMapper(),
                 (url, username, password) -> DriverManager.getConnection(url));
 
-        // This reader used to fall back to the local registry id while the comparison used the alias,
-        // so the two disagreed and every account on such a homeserver was misclassified.
+        // The reader must resolve the roster id through the alias map, like the comparison does.
         assertThat(aliasReader.linksFor("@alice:example.test").get(0).federationId())
                 .isEqualTo(PlacementTestFixtures.FEDERATION_ID);
     }
@@ -118,8 +114,8 @@ class MasSqlLinkReaderTest {
     }
 
     /**
-     * The structural half: the column name does not appear in the reader at all, and no statement in it
-     * uses a wildcard that would start returning the column if the table were reordered.
+     * The structural half: the column name does not appear in the reader's SQL, and no statement uses a
+     * wildcard that would start returning the column.
      */
     @Test
     void theReaderSourceNeitherNamesThePhoneColumnNorSelectsAWildcard() throws Exception {
@@ -128,7 +124,7 @@ class MasSqlLinkReaderTest {
         assertThat(source).isRegularFile();
         String code = Files.readString(source);
 
-        // The javadoc names it once to say it must never be read; no SQL line may.
+        // The class comment names the column once. No SQL line may.
         List<String> sqlLines = code.lines()
                 .map(String::trim)
                 .filter(line -> line.toUpperCase(java.util.Locale.ROOT).startsWith("SELECT")
@@ -156,8 +152,7 @@ class MasSqlLinkReaderTest {
                 .isEqualTo(Map.of(PlacementTestFixtures.FEDERATION_ID, "add"));
 
         updateClaimsImports("{\"localpart\":{\"action\":\"require\"}}");
-        // Absent means fail, which is the MAS default; reporting it as "unset" would hide the difference
-        // that the exit criteria turn on.
+        // Absent means fail, which is the MAS default.
         assertThat(reader.localpartOnConflictByHomeserver())
                 .isEqualTo(Map.of(PlacementTestFixtures.FEDERATION_ID, "fail"));
     }

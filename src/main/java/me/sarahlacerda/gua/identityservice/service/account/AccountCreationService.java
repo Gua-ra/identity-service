@@ -11,14 +11,12 @@ import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 
 /**
- * Creates the local records of a brand-new account as one unit: the directory row, this deployment's
- * routing choice, and the account's genesis row.
+ * Creates the local records of a new account as one transaction: the directory row, this
+ * deployment's routing choice, and the account's genesis row.
  *
- * <p>The three are one transaction because ADM-008 decision 6 puts the attach-proof verification inside
- * the account-creation transaction. A handle that was presented and fails to attach therefore fails the
- * whole signup: no directory row is left behind, and no account exists that silently fell back to a
- * bootstrap id. A signup that presents no handle at all takes the bootstrap branch, which is not a
- * failure.
+ * <p>The attach-proof verification runs inside that transaction, so a handle that was presented and
+ * fails to attach fails the whole signup: no directory row is left behind and nothing falls back to
+ * a bootstrap id. A signup that presents no handle takes the bootstrap branch, which is not a failure.
  */
 @Service
 @RequiredArgsConstructor
@@ -27,10 +25,7 @@ public class AccountCreationService {
     private final DirectoryService directoryService;
     private final AccountGenesisService accountGenesisService;
 
-    /**
-     * What the login session knows about an account genesis when the profile step is submitted. The
-     * handle and the challenge come from the server-side session; only the proof comes from the client.
-     */
+    /** Handle and challenge come from the server-side session. Only the proof comes from the client. */
     public record GenesisAttachment(String attachHandle, String challengeB64, String proofB64, boolean nativeClient) {
 
         public boolean hasHandle() {
@@ -46,9 +41,8 @@ public class AccountCreationService {
     /**
      * Writes the directory row, records the routing choice, and settles the account's accountId.
      *
-     * @param attachment the session's genesis state; {@code null} when the feature is switched off, in
-     *                   which case no genesis row is written at all and the behaviour is exactly what it
-     *                   was before the feature existed
+     * @param attachment the session's genesis state; {@code null} when the feature is off, in which
+     *                   case no genesis row is written
      */
     @Transactional
     public void createAccount(String phoneDigest, String maskedPhone, String userId, String displayName,

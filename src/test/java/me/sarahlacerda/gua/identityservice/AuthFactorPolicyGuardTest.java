@@ -9,29 +9,18 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 /**
- * Freezes the decisions behind the step-up bar, the OTP namespacing, the sign-in factor gate
- * and the delayed account recovery, because each of them is one plausible-looking edit away
- * from either a bypass or a lockout and none of them is visible in the behaviour of a single
- * method.
+ * Source-text guards for the step-up bar, the OTP namespacing, the sign-in factor gate and the
+ * delayed account recovery. Each is one plausible edit away from a bypass or a lockout, and none is
+ * visible in the behaviour of a single method.
  */
 class AuthFactorPolicyGuardTest {
 
     private static final Path MAIN = Path.of("src", "main", "java", "me", "sarahlacerda", "gua", "identityservice");
 
     /**
-     * The step-up bar is read off the assertion that was actually presented. A ceremony
-     * that asked for user verification is not the same thing as a response that performed
-     * it, and the stored request is attacker-adjacent state.
-     *
-     * <p>
-     * Scoped to the method that redeems an assertion, because a match anywhere in the file
-     * was not a guard at all: those two strings also appear in comments and in the ceremony
-     * builders, so every way of switching the check off left them sitting there and this test
-     * went on passing. What holds the bar now is behaviour, in
-     * {@code PasskeyServiceStepUpTest}: an assertion whose {@code isUserVerified()} is false
-     * is refused for a step-up and still accepted for a sign-in. This test is the narrower
-     * claim that survives being a text match, which is that the flag is read off the response
-     * in the one place where reading it off the stored request instead would mean something.
+     * The step-up bar is read off the assertion that was presented, not off what the stored ceremony
+     * asked for. Scoped to the method that redeems an assertion; the behaviour is pinned by
+     * {@code PasskeyServiceStepUpTest}.
      */
     @Test
     void theStepUpPathChecksTheUserVerifiedFlagOnTheAssertionItself() throws IOException {
@@ -45,10 +34,8 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * Deliberate non-change. A counter that legitimately never moves is normal for a
-     * passkey held in a synced credential manager, so validating it would lock those
-     * accounts out of their own credential, and the counter is not what the step-up bar
-     * rests on.
+     * Deliberately not validated: a counter that never moves is normal for a passkey held in a synced
+     * credential manager, so validating it would lock those accounts out.
      */
     @Test
     void signatureCounterValidationStaysOff() throws IOException {
@@ -57,11 +44,7 @@ class AuthFactorPolicyGuardTest {
         assertThat(source).contains("validateSignatureCounter(false)");
     }
 
-    /**
-     * Sign-in keeps the lower bar. Raising it would refuse an authenticator that cannot
-     * verify a user and push those accounts onto another factor, for no gain: sign-in is
-     * not where an assertion stands in for a knowledge factor.
-     */
+    /** Sign-in keeps the lower bar: raising it would refuse an authenticator that cannot verify a user. */
     @Test
     void signInAssertionsAreNotRaisedToTheStepUpBar() throws IOException {
         String source = read(MAIN.resolve("service/security/PasskeyService.java"));
@@ -76,10 +59,8 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * The PIN change may not verify against the per-phone key the unauthenticated public send
-     * writes; it goes through the scoped API, which keys the code to the flow. And the account
-     * recovery sends no code at all: the OTP step that made it available already proved the
-     * number, and a second SMS would only be one more message an attacker can trigger.
+     * The PIN change may not verify against the per-phone key the unauthenticated public send writes;
+     * it goes through the scoped API. The account recovery sends no code at all.
      */
     @Test
     void thePinFlowsDoNotVerifyAgainstThePerPhoneOtpKey() throws IOException {
@@ -123,10 +104,8 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * Precedence, frozen as source order because that is where it lives. Reordering these
-     * branches is a one-line edit that no single method's behaviour makes obvious, and each
-     * possible order fails differently: the PIN first makes the stronger factor pointless,
-     * the refusal first locks everyone out.
+     * Precedence, frozen as source order. Each wrong order fails differently: the PIN first makes the
+     * stronger factor pointless, the refusal first locks everyone out.
      */
     @Test
     void theStepUpTriesThePasskeyFirstThenThePinThenRefuses() throws IOException {
@@ -142,18 +121,15 @@ class AuthFactorPolicyGuardTest {
         // The ownership check sits inside the passkey branch, ahead of the point where the
         // assertion is treated as accepted.
         assertThat(ownership).isGreaterThan(passkeyBranch).isLessThan(pinBranch);
-        // Demoted below the passkey, never deleted: it is the only thing that keeps a
-        // credential that has become unusable from being an account that cannot be used.
+        // The PIN branch sits below the passkey and is never deleted.
         assertThat(pinBranch).isGreaterThan(passkeyBranch);
         // And the refusal is last, so neither branch can fall past it into a token-only path.
         assertThat(hardBlock).isGreaterThan(pinBranch);
     }
 
     /**
-     * The step-up never asks whether the account HAS a passkey, only whether this caller
-     * produced one. The existence check carries no signal about whether the credential can be
-     * used on the device in front of the user, so requiring it, or skipping a factor because
-     * of it, converts a broken credential into a closed account.
+     * The step-up never asks whether the account has a passkey, only whether this caller produced one.
+     * Requiring one because it exists would turn a broken credential into a closed account.
      */
     @Test
     void theStepUpNeverConsultsPasskeyRegistration() throws IOException {
@@ -180,9 +156,8 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * No self-attested downgrade. A field saying which factors the caller cannot use would be
-     * free for anyone holding a session to set, so it could only ever be a request for the
-     * weaker factor. The natural shape for one is a boolean on the step-up request.
+     * No self-attested downgrade: a field saying which factors the caller cannot use could only be a
+     * request for the weaker factor.
      */
     @Test
     void theStepUpRequestCarriesNoWayToClaimAFactorIsUnavailable() throws IOException {
@@ -192,11 +167,7 @@ class AuthFactorPolicyGuardTest {
         assertThat(source).doesNotContain("Boolean");
     }
 
-    /**
-     * The decision sites delegate rather than each deriving the answer. "Does this account
-     * need a PIN step" was decided in three services and "does it already have a passkey" in
-     * two controllers, and any one of them could be edited into disagreeing with the others.
-     */
+    /** The decision sites delegate to AuthFactorPolicy instead of each deriving the answer. */
     @Test
     void theFactorQuestionsAreAnsweredInOnePlace() throws IOException {
         String login = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
@@ -213,10 +184,9 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * Recovery is not gated on holding a stronger factor: an account whose passkey broke would
-     * then have no way back. What recovery does with a passkey is remove it on completion, which
-     * is not a gate. And the service that holds the PIN primitives still does not consult
-     * passkeys at all; the orchestration that knows about both lives in AccountRecoveryService.
+     * Recovery is not gated on holding a stronger factor: an account whose passkey broke would then
+     * have no way back. Recovery removes passkeys on completion, which is not a gate. The service that
+     * holds the PIN primitives does not consult passkeys at all.
      */
     @Test
     void recoveryIsNotGatedOnHoldingAPasskey() throws IOException {
@@ -235,22 +205,14 @@ class AuthFactorPolicyGuardTest {
         assertThat(recovery).doesNotContain("passkeyHeld");
         assertThat(recovery).doesNotContain("passkeyRegistered");
         assertThat(recovery).doesNotContain("hasPin");
-        // E1: the passkeys go, inside the completing transaction.
+        // The passkeys are removed inside the completing transaction.
         assertThat(methodBody(recovery, "public int complete(")).contains("passkeyService.removeAllForUser(userId)");
     }
 
     /**
-     * R2: setting a first PIN from a bearer session alone is retired. It used to be deliberately
-     * free of any step-up, on the reasoning that an account whose passkey stopped working needs
-     * to be able to acquire the fallback. That reasoning had the wrong actor in mind: a session
-     * is what an attacker gets, and a PIN set from one is a second way in that outlives the
-     * session. The account whose passkey stopped working now has two ways through that do not
-     * hand a session holder a factor: the enrollment step-up, which asks for the strongest thing
-     * the account can produce, and, when it can produce none, the delayed recovery, which waits.
-     *
-     * <p>
-     * The handler takes no body and touches nothing, so an older client is told where to go
-     * rather than failing validation on a payload that was never going to be stored.
+     * Setting a first PIN from a bearer session alone is retired: a PIN set from a session is a second
+     * way in that outlives the session. The handler takes no body and touches nothing, so an older
+     * client is told where to go.
      */
     @Test
     void theBearerFirstPinIsRetiredInFavourOfTheEnrollmentStepUp() throws IOException {
@@ -265,9 +227,8 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * Both enrollment entry points park at the step-up, and neither drops a session straight
-     * into a step that stores a factor. This is the whole of R2 on the server side: what the
-     * bearer token buys is a session that has still proved nothing.
+     * Both enrollment entry points park at the step-up, and neither drops a session straight into a
+     * step that stores a factor.
      */
     @Test
     void factorEnrollmentStartsAtTheStepUpAndNotAtASetupStep() throws IOException {
@@ -293,13 +254,8 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * Only the step-up moves an enrollment session to a step that stores a factor, and the
-     * steps that store one refuse a session that has not been through it.
-     *
-     * <p>
-     * The phase alone would already say so, since the accept method below is the only writer of
-     * those phases for an enrollment. The second check exists because "a bearer session never
-     * adds a factor" is too important to rest on one route being the only one that sets a phase.
+     * Only the step-up moves an enrollment session to a step that stores a factor, and the steps that
+     * store one refuse a session that has not been through it.
      */
     @Test
     void anEnrollmentStoresNoFactorBeforeTheStepUp() throws IOException {
@@ -326,11 +282,8 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * The SMS proof is confined to the one case the owner allowed it in: an account that holds
-     * no factor at all. Anywhere else it would let a code sent to the number stand in for the
-     * factor the account already has, which is the SIM-swap downgrade the factor gate exists to
-     * refuse. It establishes a LOGIN factor and nothing else: no account-authority transition is
-     * reachable from here.
+     * The SMS proof is confined to an account that holds no factor at all. Anywhere else it would let
+     * a code sent to the number stand in for the factor the account already has.
      */
     @Test
     void theSmsStepUpIsOnlyForAnAccountThatHoldsNoFactor() throws IOException {
@@ -351,11 +304,7 @@ class AuthFactorPolicyGuardTest {
         }
     }
 
-    /**
-     * An enrollment session issues no authorization code, whatever step it finishes at. It
-     * carries no OIDC request at all, so a code is not merely unnecessary there, it is a sign-in
-     * for a client that never asked for one.
-     */
+    /** An enrollment session issues no authorization code, whatever step it finishes at. */
     @Test
     void anEnrollmentSessionNeverIssuesAnAuthorizationCode() throws IOException {
         String source = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
@@ -379,10 +328,7 @@ class AuthFactorPolicyGuardTest {
         }
     }
 
-    /**
-     * An enrollment touches no account genesis and no account-authority transition. SMS may
-     * establish a LOGIN factor there; it may never adopt or move an account's root.
-     */
+    /** An enrollment touches no account genesis and no account-authority transition. */
     @Test
     void anEnrollmentSessionNeverTouchesAccountGenesis() throws IOException {
         String login = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
@@ -406,9 +352,8 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * An enrollment session cannot satisfy a recovery. Recovery is the way back for someone who
-     * cannot get in; an enrollment belongs to someone who is already signed in, and letting it
-     * count would turn a held session into a way to take the account.
+     * An enrollment session cannot satisfy a recovery: it belongs to someone already signed in, and
+     * letting it count would turn a held session into a way to take the account.
      */
     @Test
     void anEnrollmentSessionNeverSatisfiesRecovery() throws IOException {
@@ -422,15 +367,9 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * The factor report on the interactive login state is allow-listed by phase, and the allow
-     * list holds no step that a caller reaches by typing a phone number.
-     *
-     * <p>
-     * Reporting it at the phone or OTP step would be an enumeration oracle: those sessions hold
-     * a submitted number and nothing proved, so "does this account hold a passkey" asked there
-     * is answerable about anybody, by anybody, for one unverified request. An allow list is the
-     * shape that fails safe. Two exclusions would leave a phase added later reporting by default
-     * because nobody remembered to add it to the list.
+     * The factor report on the interactive login state is allow-listed by phase, and the allow list
+     * holds no step a caller reaches by typing a phone number. Reporting it there would let anyone
+     * probe any number.
      */
     @Test
     void theLoginStateReportsFactorsOnlyFromPhasesThatHaveResolvedTheSubject() throws IOException {
@@ -454,9 +393,8 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * The bearer-gated status endpoint answers for whoever the token says, and takes nothing
-     * from the caller to key it by. The same report behind a submitted identifier would be the
-     * same oracle in a different place.
+     * The bearer-gated status endpoint answers for whoever the token says and takes nothing from the
+     * caller to key it by.
      */
     @Test
     void theBearerFactorReportIsKeyedOnlyByTheAuthenticatedSubject() throws IOException {
@@ -475,23 +413,9 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * A caller-named enrollment redirect reaches a session through the allowlist and no other
-     * way, and nothing else the caller sends can change where the sheet returns to.
-     *
-     * <p>
-     * Each build of the apps answers its own scheme and an app's bearer is a homeserver token,
-     * which names no OIDC client of ours, so the build is the only party that can say which
-     * build is asking. The value therefore has to be able to come from the caller. What must not
-     * follow is a bearer endpoint that honours any redirect it is handed, which would hand a
-     * session's completion wherever the caller asked. The bound is an operator-written
-     * allowlist: the caller chooses among the deployment's own entries, and the entry, not the
-     * submitted string, is what gets stamped.
-     *
-     * <p>
-     * The behaviour is pinned by {@code SecurityControllerTest} (allowlisted, refused, absent,
-     * and the client-registration path). This test is the structural half: that there is one
-     * resolver, one place that stamps the session, and one door a submitted value can come
-     * through.
+     * A caller-named enrollment redirect reaches a session through the allowlist and no other way. The
+     * configured entry, not the submitted string, is what gets stamped. Behaviour is pinned by
+     * {@code SecurityControllerTest}; this is the structural half.
      */
     @Test
     void aCallerNamedEnrollmentRedirectReachesASessionOnlyThroughTheAllowlist() throws IOException {
@@ -533,9 +457,8 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * The sign-in assertion reaches the PIN step, which is where the people who would most want
-     * it end up, and never the profile step, which belongs to a session that matched no account.
-     * An assertion accepted there would be an assertion reaching account creation.
+     * The sign-in assertion reaches the PIN step and never the profile step, which belongs to a
+     * session that matched no account.
      */
     @Test
     void theSignInAssertionReachesThePinStepAndNeverTheProfileStep() throws IOException {
@@ -548,11 +471,7 @@ class AuthFactorPolicyGuardTest {
         assertThat(phases).doesNotContain("Phase.PASSKEY_SETUP");
     }
 
-    /**
-     * An enrollment session carries no OIDC request and so has no authorization code to issue.
-     * It is kept out of the sign-in ceremony by name, not only by which step it happens to be
-     * sitting on, so widening the phase set again cannot quietly turn one into a login.
-     */
+    /** An enrollment session is kept out of the sign-in ceremony by name, not only by its phase. */
     @Test
     void anEnrollmentSessionIsRefusedTheSignInCeremonyByName() throws IOException {
         String source = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
@@ -565,16 +484,15 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * Signup order: the passkey is offered first and the PIN step is what an account holding no
-     * factor falls back to. The PIN must stay REACHABLE, because a device with no usable
-     * authenticator would otherwise have no way to get a factor, and it must stay MANDATORY,
-     * because leaving it without a PIN would finish the sign-in on the phone OTP alone (D2).
+     * Signup order: the passkey is offered first and the PIN step is the fallback. The PIN must stay
+     * reachable (a device with no usable authenticator needs a way to get a factor) and mandatory
+     * (skipping it would finish the sign-in on the phone OTP alone).
      */
     @Test
     void signupOffersThePasskeyFirstAndKeepsThePinStepReachable() throws IOException {
         String source = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
 
-        // The profile step no longer names the PIN at all: it hands over to the routing below.
+        // The profile step does not name the PIN: it hands over to the routing below.
         String profile = methodBody(source, "public ResponseEntity<LoginStateResponse> submitProfile(");
         assertThat(profile).contains("offerPasskeyBeforePin(sessionId, session)");
         assertThat(profile).doesNotContain("Phase.PIN_SETUP");
@@ -605,11 +523,7 @@ class AuthFactorPolicyGuardTest {
         assertThat(pinSetup).contains("complete(sessionId, session)");
     }
 
-    /**
-     * Every state-changing step still carries the double-submit check. The flow was reordered,
-     * not loosened, and a step that quietly lost its CSRF check would be reachable from any
-     * page the user's browser can be made to load.
-     */
+    /** Every state-changing step carries the double-submit CSRF check. */
     @Test
     void everyStateChangingLoginStepStillChecksTheCsrfToken() throws IOException {
         String source = read(MAIN.resolve("controller/oidc/LoginFlowController.java"));
@@ -636,9 +550,8 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * D1: nothing issues an authorization code to a session that has not authenticated with a
-     * factor. The check is the first thing completion does, ahead of recording the sign-in and
-     * issuing the code, so no route can reach either past it.
+     * Nothing issues an authorization code to a session that has not authenticated with a factor. The
+     * check is the first thing completion does.
      */
     @Test
     void completionRefusesASessionThatHasNotAuthenticatedWithAFactor() throws IOException {
@@ -653,11 +566,8 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * E2: the marker that makes the authentication service end every other session is set for a
-     * completed recovery and nothing else. One assignment of the RECOVERY factor, in the recovery
-     * completion; one place it becomes the authorization flag; one place it becomes the claim. The
-     * only other way to the flag is a sign-out a completed recovery still owes, which only the
-     * recovery completion records, and which is settled where the claim is issued.
+     * The claim that makes the authentication service end every other session is set for a completed
+     * recovery and nothing else, or for a sign-out a completed recovery still owes.
      */
     @Test
     void theEndOtherSessionsMarkerIsOnlyEverSetForARecovery() throws IOException {
@@ -690,9 +600,8 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * Sign-in routing reads what is STORED. Reading the deployment-gated answer instead would let
-     * switching passkeys off turn every passkey-only account into one an SMS code finishes by
-     * choosing a PIN.
+     * Sign-in routing reads what is stored. Reading the deployment-gated answer would let switching
+     * passkeys off turn a passkey-only account into one an SMS code finishes by choosing a PIN.
      */
     @Test
     void signInRoutingReadsTheStoredCredentialNotTheDeploymentSwitch() throws IOException {
@@ -756,10 +665,7 @@ class AuthFactorPolicyGuardTest {
         assertThat(methodBody(userSecurity, "IdentityUser lockOrCreateUser(")).contains("findByUserIdForUpdate");
     }
 
-    /**
-     * E3: the unauthenticated reset is retired. Its handler takes nothing and touches nothing, and
-     * the paths are not listed among the open endpoints.
-     */
+    /** The unauthenticated PIN reset is retired: its handler takes nothing and touches nothing. */
     @Test
     void theRetiredPinResetDoesNothingButRefuse() throws IOException {
         String security = read(MAIN.resolve("controller/security/SecurityController.java"));
@@ -775,20 +681,8 @@ class AuthFactorPolicyGuardTest {
     }
 
     /**
-     * Returns the source of one method, from its signature to the first line that closes at
-     * method indentation, so ordering assertions cannot accidentally match text elsewhere in
-     * the file.
-     */
-    /**
-     * The body of a named method, from its signature to its matching closing brace.
-     *
-     * <p>
-     * Brace-counted rather than cut at the first line closing at four spaces. The cheap
-     * version returned a fragment the moment a method grew an inner block that closed at that
-     * indentation, and every {@code doesNotContain} over a fragment passes for the wrong
-     * reason: the text is absent because the method was truncated, not because the code is
-     * not there. Double-quoted strings are skipped so a brace inside a log format or a
-     * message cannot unbalance the count.
+     * The body of a named method, from its signature to its matching closing brace. Brace-counted, and
+     * double-quoted strings are skipped so a brace inside a message cannot unbalance the count.
      */
     private static String methodBody(String source, String signature) {
         int start = source.indexOf(signature);

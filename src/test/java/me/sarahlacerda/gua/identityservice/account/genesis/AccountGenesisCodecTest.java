@@ -9,8 +9,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Every rule ADM-008 decision 1 states for {@code AccountGenesis}, suite 0x01, and the rule that the
- * accountId covers the bytes as received.
+ * Every decoder rule for {@code AccountGenesis}, suite 0x01, and the rule that the accountId covers
+ * the bytes as received.
  */
 class AccountGenesisCodecTest {
 
@@ -116,8 +116,7 @@ class AccountGenesisCodecTest {
 
     @Test
     void anAllZeroKeyIsRejectedEvenThoughItDecodesToAPoint() {
-        // The all-zero encoding is a valid low-order point, which is why ADM-008 states the rule
-        // separately from point decoding.
+        // The all-zero encoding is a valid low-order point, so the all-zero rule is separate from point decoding.
         assertThat(Ed25519Keys.isOnCurve(new byte[32])).isTrue();
 
         byte[] zeroAuthority = valid();

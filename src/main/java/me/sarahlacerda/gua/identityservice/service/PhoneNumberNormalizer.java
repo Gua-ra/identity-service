@@ -11,16 +11,13 @@ import com.google.i18n.phonenumbers.Phonenumber.PhoneNumber;
 import me.sarahlacerda.gua.identityservice.exception.InvalidPhoneNumberException;
 
 /**
- * Normalizes raw, client-supplied phone numbers to canonical E.164 at the
- * backend boundary so a missing country code can never key OTP / the phone
- * digest under a different value and silently create a duplicate account.
+ * Normalizes client-supplied phone numbers to canonical E.164 at the backend boundary, so a missing
+ * country code cannot key the OTP or the phone digest under a different value and create a duplicate
+ * account.
  *
- * <p>
- * A bare national number (no leading {@code +}) is interpreted against the
- * {@value #DEFAULT_REGION} default region — the same region the clients assume
- * (Canada/US, {@code +1}). Anything that cannot be parsed to a valid number is
- * rejected with {@link InvalidPhoneNumberException} rather than being passed
- * through unnormalized.
+ * <p>A bare national number (no leading {@code +}) is parsed against the {@value #DEFAULT_REGION}
+ * default region, the same region the clients assume. Anything that cannot be parsed to a valid
+ * number is rejected with {@link InvalidPhoneNumberException}.
  */
 @Component
 public class PhoneNumberNormalizer {
@@ -31,11 +28,9 @@ public class PhoneNumberNormalizer {
     private final PhoneNumberUtil phoneNumberUtil = PhoneNumberUtil.getInstance();
 
     /**
-     * Parses {@code rawPhone} (with the {@value #DEFAULT_REGION} default region for
-     * numbers lacking a country code) and returns it in canonical E.164 form.
+     * Returns {@code rawPhone} in canonical E.164 form.
      *
-     * @throws InvalidPhoneNumberException if the input is blank, unparseable, or not
-     *                                     a valid phone number
+     * @throws InvalidPhoneNumberException if the input is blank, unparseable or not a valid phone number
      */
     public String toE164(String rawPhone) {
         if (!StringUtils.hasText(rawPhone)) {

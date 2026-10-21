@@ -38,12 +38,8 @@ public class SignupTokenService {
     }
 
     /**
-     * Returns the phone associated with the token without deleting it. Used so
-     * callers can
-     * validate the rest of the signup payload (username availability, PIN strength,
-     * etc.)
-     * and surface friendly errors without burning the single-use token, then call
-     * {@link #consume(String)} only on the success path.
+     * Returns the phone associated with the token without deleting it, so callers can validate the rest
+     * of the signup payload and call {@link #consume(String)} only on the success path.
      */
     public String peek(String token) {
         if (!StringUtils.hasText(token)) {

@@ -20,12 +20,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The published golden vectors (docs/specs/genesis-vectors.v1.json) are the contract the iOS and
- * Android ports and gua-resolver verify against, so every byte of them is recomputed here: canonical
- * bytes, object hashes, accountIds, the two deterministic proof signatures, and every case a conforming
- * decoder must refuse together with the rule that refuses it.
+ * Android ports and gua-resolver verify against, so every byte is recomputed here: canonical bytes,
+ * object hashes, accountIds, the two deterministic proof signatures, and every case a conforming
+ * decoder must refuse with the rule that refuses it.
  *
- * <p>The keys are the RFC 8032 section 7.1 test constants, which is what lets the signatures be
- * reproducible. They are published values and sign nothing real.
+ * <p>The keys are the published RFC 8032 section 7.1 test constants and sign nothing real.
  */
 class GenesisVectorsTest {
 

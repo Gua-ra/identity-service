@@ -54,14 +54,11 @@ import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 
 /**
- * End-to-end OIDC authorization-code flow over real HTTP against Postgres and
- * Redis. Every authorization code is obtained the only way the service issues
- * one: {@code GET /oauth2/authorize} parks a login session, then the
- * {@code /login/**} steps (phone, OTP, PIN or PIN setup, profile, passkey skip)
- * are walked until {@code /login/**} hands back the redirect carrying the code.
- * No step completes a sign-in on the OTP alone.
- * The OTP is read from the Redis key {@code otp:code:<E.164>} written by
- * {@code OtpService}, so no SMS provider is involved.
+ * End-to-end OIDC authorization-code flow over real HTTP against Postgres and Redis. Every
+ * authorization code is obtained the only way the service issues one: {@code GET /oauth2/authorize}
+ * parks a login session, then the {@code /login/**} steps are walked until the redirect carrying
+ * the code comes back. The OTP is read from the Redis key {@code otp:code:<E.164>}, so no SMS
+ * provider is involved.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -120,7 +117,7 @@ class AuthFlowIntegrationTest {
         registry.add("oidc.issuer", () -> "http://localhost");
         registry.add("idp.login.ui-url", () -> LOGIN_UI);
         registry.add("idp.login.cookie-name", () -> LOGIN_COOKIE);
-        // Keep the flow independent of the beta web-allowlist gate.
+        // Keep the flow independent of the web allowlist gate.
         registry.add("idp.login.registration.web-allowlist-enabled", () -> "false");
     }
 
@@ -166,10 +163,8 @@ class AuthFlowIntegrationTest {
         wireMock.stubFor(get(urlPathMatching("/_synapse/admin/v2/users/.*"))
                 .willReturn(notFound()));
 
-        // Every test method here calls the API from localhost, so they all share one
-        // requester-address OTP budget (10/hour) that production spreads over real
-        // callers. Clear only that counter between methods; each test still uses its
-        // own phone number, so the per-phone budget stays exercised as shipped.
+        // All tests call from localhost and share the per-address OTP budget, so that counter is cleared
+        // between methods.
         Set<String> requesterBudgets = redisTemplate.keys("otp:rate:ip:*");
         if (requesterBudgets != null && !requesterBudgets.isEmpty()) {
             redisTemplate.delete(requesterBudgets);
@@ -329,10 +324,7 @@ class AuthFlowIntegrationTest {
         assertThat(subjectOf(exchangeCode(query.get("code"), secondVerifier))).isEqualTo(firstSubject);
     }
 
-    /**
-     * D2 over real HTTP: a new account cannot leave PIN setup without a PIN, and no code is
-     * issued however the step is left.
-     */
+    /** A new account cannot leave PIN setup without a PIN, and no code is issued however the step is left. */
     @Test
     void aNewAccountCannotSkipThePinAndNoCodeIsIssued() throws Exception {
         String phone = "+16042250006";
@@ -389,16 +381,10 @@ class AuthFlowIntegrationTest {
     }
 
     /**
-     * R1 end to end, on an account created the only way accounts are created: through the real
-     * interactive signup. The signed-in user confirms the number on their own account and the
-     * reauthentication proceeds; a number that is not theirs is refused in words that say nothing
-     * about whose it is, and no code is sent to it.
-     *
-     * <p>
-     * This is the case identity-service#44 was about. The old flow asked the homeserver which
-     * phone was linked to the account, and an account created through signup has no such binding,
-     * so phone change, deactivation and identity reset were unreachable for exactly the accounts
-     * a user can actually create.
+     * Reauthentication end to end, on an account created through the real interactive signup. The
+     * signed-in user confirms the number on their own account and the reauthentication proceeds; a
+     * number that is not theirs is refused in words that say nothing about whose it is, and no code is
+     * sent to it.
      */
     @Test
     void anInteractiveSignupCanReauthenticateWithItsOwnNumber() throws Exception {
@@ -440,8 +426,8 @@ class AuthFlowIntegrationTest {
     }
 
     /**
-     * R2 through the real security chain: a bearer session on its own cannot set a first PIN, and
-     * the flow it is sent to hands back a one-time URL whose session has proved nothing yet.
+     * Through the real security chain: a bearer session on its own cannot set a first PIN, and the
+     * flow it is sent to hands back a one-time URL whose session has proved nothing yet.
      */
     @Test
     void aBearerSessionIsSentToTheEnrollmentFlowToAddAFactor() throws Exception {
@@ -487,7 +473,7 @@ class AuthFlowIntegrationTest {
         assertThat(tooEarly.getBody()).containsEntry("code", "unexpected_step");
     }
 
-    /** E3 through the real security chain: an unauthenticated call is told the path is gone. */
+    /** Through the real security chain: an unauthenticated call to the retired reset is told the path is gone. */
     @Test
     void theRetiredPinResetEndpointsAnswerGoneWithoutABearerToken() {
         for (String path : List.of("/security/pin/reset", "/security/pin/reset/complete")) {
@@ -501,13 +487,10 @@ class AuthFlowIntegrationTest {
     }
 
     /**
-     * Regression for ADM-001 L1a: the removed non-interactive branch of
-     * {@code GET /oauth2/authorize} accepted {@code phone_number} and
-     * {@code otp_code} as query parameters, verified the OTP, auto-provisioned an
-     * account and redirected back to the client with a code. The same URL must now
-     * be treated exactly like an interactive request: redirect to the login UI with
-     * a parked session at the phone step, the OTP left untouched, no account
-     * created and no authorization code minted.
+     * A {@code GET /oauth2/authorize} carrying the legacy {@code phone_number} and {@code otp_code}
+     * query parameters must be treated exactly like an interactive request: redirect to the login UI
+     * with a parked session at the phone step, the OTP left untouched, no account created and no
+     * authorization code minted.
      */
     @Test
     void legacyOtpQueryParametersNeverYieldAnAuthorizationCode() throws Exception {
@@ -697,9 +680,8 @@ class AuthFlowIntegrationTest {
 
         private HttpHeaders headers() {
             HttpHeaders headers = new HttpHeaders();
-            // RestTemplate lists XML first when jackson-dataformat-xml is on the classpath (the
-            // Twilio SDK brings it), and the server honours that, which turns every number in the
-            // body into a string. The web and the apps ask for JSON, so this does too.
+            // RestTemplate prefers XML when jackson-dataformat-xml is on the classpath, so JSON is requested
+            // explicitly.
             headers.setAccept(List.of(MediaType.APPLICATION_JSON));
             headers.add(HttpHeaders.COOKIE, LOGIN_COOKIE + "=" + cookie);
             if (csrf != null) {

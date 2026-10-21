@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.nio.charset.StandardCharsets;
@@ -50,10 +49,6 @@ final class PlacementTestFixtures {
     /**
      * A configured homeserver with no explicit {@code federationId}, so its roster id comes from the
      * alias map or from its own local id.
-     *
-     * <p>This shape matters because every other fixture here sets an explicit federation id, which is
-     * exactly why a bug that only appeared without one went unnoticed: the MAS readers resolved the
-     * roster id one way and the comparison resolved it another, and the two only diverge on this path.
      */
     static HomeserverConfig homeserverWithoutFederationId(String localId, String domain, String signingKey) {
         return homeserver(localId, domain, null, signingKey);

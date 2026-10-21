@@ -50,10 +50,8 @@ class RestExceptionHandlerTest {
     }
 
     /**
-     * The wire shape of the fresh-2FA refusal. Both clients already carry the
-     * {@code twofa_cooldown_active} code and read {@code retryAfterSeconds} from the body
-     * with the header as a fallback, so this is the contract they were written against
-     * rather than a new one.
+     * The wire shape of the fresh-2FA refusal: clients read {@code retryAfterSeconds} from the body,
+     * with the header as a fallback.
      */
     @Test
     void aFreshFactorRefusalCarriesTheCodeAndTheWaitBothClientsRead() throws Exception {

@@ -184,13 +184,10 @@ public class RestExceptionHandler {
         }
 
         /**
-         * The fresh-2FA hold: the account PIN is too new to be spent as the phone-change
-         * step-up factor. Answered as 400 with {@code twofa_cooldown_active} and the
-         * remaining seconds in the body, which is the shape both clients already parse;
-         * {@code Retry-After} carries the same number for anything that reads headers.
-         * Deliberately not the 425 the per-account phone-change cooldown uses: that is a
-         * different refusal, and conflating them would tell a client to wait out the wrong
-         * one.
+         * The account PIN is too new to be spent as the phone-change step-up factor. Answered as 400
+         * {@code twofa_cooldown_active} with the remaining seconds in the body, which clients parse;
+         * {@code Retry-After} carries the same number. Deliberately not the 425 the per-account
+         * phone-change cooldown uses, which is a different refusal.
          */
         @ExceptionHandler(TwoFactorCooldownException.class)
         public ResponseEntity<ErrorResponse> handleTwoFactorCooldown(TwoFactorCooldownException ex) {
@@ -231,9 +228,8 @@ public class RestExceptionHandler {
         }
 
         /**
-         * The number typed at a reauthentication step is not the one on the caller's account.
-         * One status, one code and one message for every way of being wrong, so the answer
-         * cannot be read as "this number belongs to somebody else".
+         * The number typed at a reauthentication step is not the one on the caller's account. One
+         * status, code and message for every mismatch, so the answer never reveals who owns the number.
          */
         @ExceptionHandler(ReauthPhoneMismatchException.class)
         public ResponseEntity<ErrorResponse> handleReauthPhoneMismatch(ReauthPhoneMismatchException ex) {
@@ -295,9 +291,8 @@ public class RestExceptionHandler {
         }
 
         /**
-         * A request whose body is missing or is not readable as JSON. Without this the
-         * catch-all below turns a malformed request into a 500, which blames the server
-         * for the caller's mistake and tells the caller nothing.
+         * A request whose body is missing or is not readable as JSON. Without this the catch-all
+         * below would answer 500 for a caller's mistake.
          */
         @ExceptionHandler(HttpMessageNotReadableException.class)
         public ResponseEntity<ErrorResponse> handleUnreadableBody(HttpMessageNotReadableException ex) {
@@ -328,10 +323,7 @@ public class RestExceptionHandler {
                         AccountRecoveryState recovery) {
         }
 
-        /**
-         * {@code retryAfterSeconds} is omitted from the JSON unless a handler sets it, so
-         * every existing error body is byte-for-byte what it was.
-         */
+        /** {@code retryAfterSeconds} is omitted from the JSON unless a handler sets it. */
         @JsonInclude(JsonInclude.Include.NON_NULL)
         public record ErrorResponse(String code, String message, Instant timestamp, Long retryAfterSeconds) {
                 public ErrorResponse(String code, String message) {

@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.account.genesis;
 
 import java.nio.charset.StandardCharsets;
@@ -8,7 +7,7 @@ import java.time.Instant;
 import java.util.Arrays;
 
 /**
- * The canonical codec for a generation-1 placement record (ADM-008 encoding tables).
+ * Canonical codec for a generation-1 placement record.
  *
  * <pre>
  * off     len   field
@@ -25,16 +24,11 @@ import java.util.Arrays;
  * 66+n          end
  * </pre>
  *
- * <p>Fixed layout with a single one-byte length prefix on the one variable field, big-endian, no
- * delimiters: the same two ADM-001 L4 rules the genesis objects obey, for the same reason. The decoder
- * refuses an unknown version or generation, a wrong length, a length prefix that does not agree with the
- * buffer, a non-printable or over-long homeserver id, an origin byte that disagrees with the class byte
- * inside the accountId, and a window that is inverted or longer than the 400 days ADM-008 decision 7
- * fixes. Bytes are kept verbatim on the decoded object so a verifier checks the signature against what
- * arrived rather than against a re-encoding.
- *
- * <p>There is no identifier, phone, phone hash or Matrix user id in this layout, and no room for one:
- * every offset is accounted for above. See {@link PlacementRecord} for why that is load-bearing.
+ * <p>Big-endian, no delimiters, one length-prefixed field. The decoder refuses an unknown version or
+ * generation, a wrong length, a length prefix that disagrees with the buffer, a non-printable or
+ * over-long homeserver id, an origin byte that disagrees with the class byte inside the accountId, and
+ * a window that is inverted or longer than 400 days. The decoded record keeps the received bytes, so a
+ * verifier checks the signature against what arrived.
  */
 public final class PlacementRecordCodec {
 
@@ -47,7 +41,7 @@ public final class PlacementRecordCodec {
     private static final int OFFSET_HOMESERVER_LENGTH = 41;
     private static final int OFFSET_HOMESERVER_ID = 42;
 
-    /** ADM-008 decision 7: validity is 400 days. A longer window is refused, not clamped. */
+    /** Maximum validity. A longer window is refused, not clamped. */
     public static final Duration MAX_VALIDITY = Duration.ofDays(400);
 
     private PlacementRecordCodec() {
@@ -56,7 +50,7 @@ public final class PlacementRecordCodec {
     /**
      * Strictly decodes canonical bytes.
      *
-     * @throws InvalidGenesisException on any rule above; the reason is a stable machine-readable token
+     * @throws InvalidGenesisException on any rule above, with a stable machine-readable reason
      */
     public static PlacementRecord decode(byte[] bytes) {
         if (bytes == null || bytes.length < PlacementRecord.LENGTH_WITHOUT_HOMESERVER_ID + 1) {
@@ -81,8 +75,8 @@ public final class PlacementRecordCodec {
 
         byte origin = bytes[OFFSET_ORIGIN];
         if (origin != accountId.rootClass()) {
-            // The record's audit marker and the one baked into the id must agree, or a bootstrap
-            // account could be published as a rooted one (ADM-001 L5's third audit marker).
+            // The record's audit marker and the class byte baked into the id must agree, or a bootstrap
+            // account could be published as a rooted one.
             throw new InvalidGenesisException("origin_class_mismatch",
                     "the origin byte disagrees with the accountId root class");
         }
@@ -134,8 +128,7 @@ public final class PlacementRecordCodec {
             throw new IllegalArgumentException("homeserver id must be 1 to "
                     + PlacementRecord.MAX_HOMESERVER_ID_LENGTH + " bytes");
         }
-        // Round-trips through the same check the decoder applies, so an id this service cannot read back
-        // is refused at signing time rather than by the far end.
+        // Applies the decoder's check so an unreadable id is refused at signing time.
         decodeHomeserverId(homeserverIdBytes);
         if (!notAfter.isAfter(notBefore)) {
             throw new IllegalArgumentException("notAfter must be after notBefore");
@@ -182,8 +175,7 @@ public final class PlacementRecordCodec {
             value = (value << 8) | (bytes[offset + i] & 0xFFL);
         }
         if (value < 0) {
-            // Epoch milliseconds are unsigned on the wire; a value with the top bit set is not a time
-            // this service can represent, and must not wrap into a negative Instant.
+            // Wire timestamps are unsigned. A value with the top bit set must not wrap into a negative Instant.
             throw new InvalidGenesisException("timestamp_out_of_range", field + " is out of range");
         }
         return value;

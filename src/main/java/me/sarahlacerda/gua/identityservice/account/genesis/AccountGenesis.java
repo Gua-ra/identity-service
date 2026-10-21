@@ -1,12 +1,12 @@
 package me.sarahlacerda.gua.identityservice.account.genesis;
 
 /**
- * A decoded {@code AccountGenesis} (ADM-008 suite 0x01), together with the exact bytes it was decoded
- * from. Immutable: every accessor hands back a copy, so nothing downstream can mutate the bytes the
+ * A decoded account genesis (suite 0x01) together with the exact bytes it was decoded from.
+ * Immutable: every accessor returns a copy, so nothing downstream can mutate the bytes the
  * accountId is derived from.
  *
- * <p>It commits the initial authority key, the algorithm identifiers and the initial recovery authority
- * and framework, and it holds no identifier and no homeserver (ADM-001 L4).
+ * <p>It commits the authority key, the algorithm identifiers and the recovery authority. It holds no
+ * identifier and no homeserver.
  */
 public final class AccountGenesis {
 
@@ -21,7 +21,7 @@ public final class AccountGenesis {
     /** Ed25519 authority, Ed25519 recovery, SHA-256. */
     public static final int SUITE_ED25519_SHA256 = 0x01;
 
-    /** One committed recovery authority key (ADM-008 decision 4). */
+    /** One committed recovery authority key. */
     public static final int RECOVERY_FRAMEWORK_COMMITTED_KEY = 0x01;
 
     public static final int ENTROPY_LENGTH = 16;
@@ -75,7 +75,6 @@ public final class AccountGenesis {
         return canonicalBytes.clone();
     }
 
-    /** Genesis-rooted accountId over the received bytes. */
     public AccountId accountId() {
         return AccountId.derive(AccountId.CLASS_GENESIS, canonicalBytes);
     }
