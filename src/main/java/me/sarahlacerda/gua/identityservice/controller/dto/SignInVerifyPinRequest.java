@@ -3,9 +3,12 @@ package me.sarahlacerda.gua.identityservice.controller.dto;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
-import lombok.Data;
+import lombok.Getter;
+import lombok.Setter;
 
-@Data
+/** No {@code toString}: the PIN and its challenge token must never reach a log line. */
+@Getter
+@Setter
 @Schema(description = "Second leg of the phone sign-in flow for users with two-step verification enabled.")
 public class SignInVerifyPinRequest {
 

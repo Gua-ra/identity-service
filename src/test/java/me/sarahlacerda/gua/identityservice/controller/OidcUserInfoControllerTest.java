@@ -56,7 +56,7 @@ class OidcUserInfoControllerTest {
                 "user-123",
                 "+15551234567",
                 "Alice",
-                Set.of("openid", "profile"),
+                Set.of("openid", "profile", "phone"),
                 "mas"));
         org.mockito.Mockito.when(directoryService.findMaskedPhoneByUserId("user-123"))
                 .thenReturn(java.util.Optional.of("\u2022\u2022\u2022\u20224567"));
@@ -70,6 +70,19 @@ class OidcUserInfoControllerTest {
                 .andExpect(jsonPath("$.phone_number").value("+15551234567"))
                 .andExpect(jsonPath("$.phone_number_masked").value("\u2022\u2022\u2022\u20224567"))
                 .andExpect(jsonPath("$.name").value("Alice"));
+    }
+
+    /** D3: a token issued without the phone scope carries no number, so userinfo reports none. */
+    @Test
+    void userInfoOmitsThePhoneNumberWithoutThePhoneScope() throws Exception {
+        String accessToken = tokenService.issueTokens(new OidcAuthorization(
+                "user-123", "+15551234567", "Alice", Set.of("openid", "profile"), "mas")).accessToken();
+
+        mockMvc.perform(get("/userinfo").header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sub").value("user-123"))
+                .andExpect(jsonPath("$.phone_number").doesNotExist())
+                .andExpect(jsonPath("$.phone_number_masked").value("\u2022\u2022\u2022\u20224567"));
     }
 
     static class TestConfiguration {

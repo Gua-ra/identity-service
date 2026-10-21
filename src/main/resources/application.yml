@@ -5,10 +5,13 @@ identity:
     max-requests-per-phone-per-hour: ${IDENTITY_OTP_MAX_PHONE_PER_HOUR:5}
     max-requests-per-ip-per-hour: ${IDENTITY_OTP_MAX_IP_PER_HOUR:10}
     max-verify-attempts: ${IDENTITY_OTP_MAX_VERIFY_ATTEMPTS:5}
-    sms-template: ${IDENTITY_OTP_SMS_TEMPLATE:Your Gua verification code is %s. Never share this code with anyone. Gua will never ask you for it.}
+    sms-template: ${IDENTITY_OTP_SMS_TEMPLATE:Your Gua verification code is %s. Never share this code with anyone. Gua support will never ask you for it.}
+    # Keys are lower-case tags, matched exactly and then by primary language (see SmsTemplates).
     localized-sms-templates:
       en: ${IDENTITY_OTP_SMS_TEMPLATE_EN:Your Gua verification code is %s. Never share this code with anyone. Gua support will never ask you for it.}
       pt-br: ${IDENTITY_OTP_SMS_TEMPLATE_PT_BR:Seu código de verificação Gua é %s. Nunca compartilhe este código com ninguém. O suporte Gua nunca vai pedir esse código.}
+      # Bare pt and every other pt-* get the Brazilian text, and follow its override.
+      pt: ${IDENTITY_OTP_SMS_TEMPLATE_PT_BR:Seu código de verificação Gua é %s. Nunca compartilhe este código com ninguém. O suporte Gua nunca vai pedir esse código.}
       es: ${IDENTITY_OTP_SMS_TEMPLATE_ES:Tu código de verificación de Gua es %s. Nunca compartas este código con nadie. El equipo de soporte de Gua nunca te lo pedirá.}
       fr: ${IDENTITY_OTP_SMS_TEMPLATE_FR:Votre code de vérification Gua est %s. Ne partagez jamais ce code. Le support Gua ne vous le demandera jamais.}
   matrix:
@@ -92,6 +95,9 @@ identity:
         enabled: ${IDENTITY_PLACEMENT_MAS_ADMIN_API_ENABLED:false}
       sql:
         enabled: ${IDENTITY_PLACEMENT_MAS_SQL_ENABLED:false}
+  # The store review login has no properties here. It reads only the GUA_REVIEW_LOGIN_* environment
+  # variables (ReviewLoginProperties), and any identity.review-login property, from any source and in
+  # any spelling, refuses startup. See README "Store review login".
   rate-limits:
     enabled: ${IDENTITY_RATE_LIMITS_ENABLED:true}
     default-config:
@@ -116,6 +122,13 @@ identity:
         limit-for-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_GENESIS_LIMIT:10}
         refresh-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_GENESIS_REFRESH:PT1M}
         timeout-duration: ${IDENTITY_RATE_LIMIT_ACCOUNT_GENESIS_TIMEOUT:PT0S}
+      # The authentication service's account-deletion notice. Open, and each call costs a bcrypt check
+      # of the client secret, so it is bounded per address. A flood can delay deletions, never cause one.
+      - path: /oauth2/account-deleted
+        methods: [POST]
+        limit-for-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_DELETED_LIMIT:60}
+        refresh-period: ${IDENTITY_RATE_LIMIT_ACCOUNT_DELETED_REFRESH:PT1M}
+        timeout-duration: ${IDENTITY_RATE_LIMIT_ACCOUNT_DELETED_TIMEOUT:PT0S}
       - path: /signup/complete
         methods: [POST]
         limit-for-period: ${IDENTITY_RATE_LIMIT_SIGNUP_COMPLETE_LIMIT:10}
@@ -288,12 +301,18 @@ oidc:
     key-id: ${OIDC_JWK_KEY_ID:oidc-signing-key}
     private-key: ${OIDC_RSA_PRIVATE_KEY:}
     public-key: ${OIDC_RSA_PUBLIC_KEY:}
+  # POST /oauth2/account-deleted. Off: 503 to everyone. A confidential client's secret is all a notice
+  # needs, so a deployment turns this on only once every such secret is held by its client alone.
+  account-deletion-notices-enabled: ${OIDC_ACCOUNT_DELETION_NOTICES_ENABLED:false}
   clients:
     - client-id: ${OIDC_CLIENT_MAS_ID:mas}
       client-secret: ${OIDC_CLIENT_MAS_SECRET:}
       redirect-uris: ${OIDC_CLIENT_MAS_REDIRECTS:http://localhost:8080/upstream/account/callback/oidc,http://localhost:8081/upstream/account/callback/oidc}
       allowed-scopes: openid,profile,phone
       require-pkce: ${OIDC_CLIENT_MAS_REQUIRE_PKCE:false}
+      # Registry ids of the homeservers this MAS serves, whose accounts it may report deleted. "default"
+      # is the legacy single homeserver; a deployment with identity.routing.homeservers lists its own ids.
+      homeserver-ids: ${OIDC_CLIENT_MAS_HOMESERVER_IDS:default}
     - client-id: ${OIDC_CLIENT_GUA_IOS_ID:gua-ios}
       redirect-uris: ${OIDC_CLIENT_GUA_IOS_REDIRECTS:global.gua:/oidc}
       allowed-scopes: openid,profile,phone

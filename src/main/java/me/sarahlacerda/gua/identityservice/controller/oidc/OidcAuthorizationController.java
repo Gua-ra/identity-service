@@ -1,9 +1,7 @@
 package me.sarahlacerda.gua.identityservice.controller.oidc;
 
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Locale;
@@ -36,6 +34,8 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 import me.sarahlacerda.gua.identityservice.exception.OidcInvalidRequestException;
+import me.sarahlacerda.gua.identityservice.service.LanguageTags;
+import me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthorization;
@@ -63,6 +63,7 @@ public class OidcAuthorizationController {
     private final LoginSessionService loginSessionService;
     private final LoginFlowProperties loginProperties;
     private final IdentityServiceProperties identityProperties;
+    private final AccountGenesisService accountGenesisService;
 
     /**
      * Prefix of the structured login hint the first-party clients send. Parsed only while
@@ -99,7 +100,9 @@ public class OidcAuthorizationController {
             @Parameter(description = "Optional login hint forwarded verbatim by MAS. Either an E.164 phone number to pre-fill the login UI, or the reserved value `passkey` (case-insensitive), which records a passkey sign-in intent on the session and is never treated as a phone number.") @RequestParam(value = "login_hint", required = false) String loginHint,
             @Parameter(description = "OIDC prompt parameter. `login` requests re-authentication of an already signed-in user (login-only).") @RequestParam(value = "prompt", required = false) String prompt,
             @Parameter(description = "OIDC id_token_hint: a previously issued ID token identifying the already-authenticated user for re-authentication.") @RequestParam(value = "id_token_hint", required = false) String idTokenHint,
-            @Parameter(description = "Downstream client MAS is authenticating for (`web` for the web client, `native` for the apps). Forwarded by MAS and used to gate web signups behind the registration allowlist. Only the configured native marker (default `native`) exempts the flow; an absent or any other value is treated as web.") @RequestParam(value = "gua_downstream", required = false) String guaDownstream) {
+            @Parameter(description = "Downstream client MAS is authenticating for (`web` for the web client, `native` for the apps). Forwarded by MAS and used to gate web signups behind the registration allowlist. Only the configured native marker (default `native`) exempts the flow; an absent or any other value is treated as web.") @RequestParam(value = "gua_downstream", required = false) String guaDownstream,
+            @Parameter(description = "OIDC ui_locales: BCP 47 tags separated by spaces, in preference order. The first well-formed one (else the Accept-Language header) becomes the login language, is reported as `locale` by /login/context, and is passed to the login UI as `ui_locales`.") @RequestParam(value = "ui_locales", required = false) String uiLocales,
+            @RequestHeader(value = HttpHeaders.ACCEPT_LANGUAGE, required = false) String acceptLanguage) {
         if (!"code".equals(responseType)) {
             throw new OidcInvalidRequestException("unsupported_response_type", "Only response_type=code is supported");
         }
@@ -138,6 +141,9 @@ public class OidcAuthorizationController {
         // Re-authentication (prompt=login / id_token_hint): pin the session to that subject so the flow
         // is login-only. The phone must already belong to this user and signup can never be reached.
         session.setReauthUserId(resolveReauthUserId(prompt, idTokenHint));
+        // The app's language, as MAS forwards it, or the browser's when nothing was forwarded.
+        String locale = LanguageTags.resolve(uiLocales, acceptLanguage);
+        session.setLocale(locale);
         session.setCsrfToken(loginSessionService.newToken());
         String sessionId = loginSessionService.create(session);
 
@@ -151,12 +157,12 @@ public class OidcAuthorizationController {
 
         return ResponseEntity.status(HttpStatus.FOUND)
                 .header(HttpHeaders.SET_COOKIE, cookie.toString())
-                .location(URI.create(loginProperties.getUiUrl()))
+                .location(URI.create(LanguageTags.withUiLocales(loginProperties.getUiUrl(), locale)))
                 .build();
     }
 
     @PostMapping(value = "/oauth2/token", consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
-    @Operation(summary = "Exchange an authorization code for tokens", description = "Validates the authorization code, client authentication, and PKCE verifier, then returns RS256-signed access and ID tokens.")
+    @Operation(summary = "Exchange an authorization code for tokens", description = "Validates the authorization code, client authentication, and PKCE verifier, then returns RS256-signed access and ID tokens. A code whose account has since been deleted is refused with invalid_grant.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Token exchange succeeded", content = @Content(schema = @Schema(implementation = OidcTokenResponse.class))),
             @ApiResponse(responseCode = "400", description = "Invalid grant request", content = @Content),
@@ -175,7 +181,8 @@ public class OidcAuthorizationController {
                     "Only authorization_code grant is supported");
         }
 
-        ClientCredentials credentials = resolveClientCredentials(authorizationHeader, clientIdParam, clientSecretParam);
+        OidcClientCredentials credentials = OidcClientCredentials.resolve(authorizationHeader, clientIdParam,
+                clientSecretParam);
         RegisteredClient client = clientService.requireClient(credentials.clientId());
         clientService.authenticateClient(client, credentials.clientSecret());
 
@@ -196,26 +203,12 @@ public class OidcAuthorizationController {
         clientService.verifyPkce(authorizationCode.codeChallenge(), codeVerifier);
 
         OidcAuthorization authorization = authorizationCode.authorization();
+        // A code issued before its account was deleted is spent here and yields nothing.
+        if (accountGenesisService.isDeleted(authorization.userId())) {
+            throw new OidcInvalidRequestException("invalid_grant", "Authorization code is unknown or already used");
+        }
         OidcTokenResponse tokens = tokenService.issueTokens(authorization);
         return ResponseEntity.ok(tokens);
-    }
-
-    private static ClientCredentials resolveClientCredentials(String authorizationHeader, String clientIdParam,
-            String clientSecretParam) {
-        if (authorizationHeader != null && authorizationHeader.regionMatches(true, 0, "Basic ", 0, 6)) {
-            String token = authorizationHeader.substring(6).trim();
-            try {
-                String decoded = new String(Base64.getDecoder().decode(token), StandardCharsets.UTF_8);
-                int sep = decoded.indexOf(':');
-                if (sep < 0) {
-                    throw new OidcInvalidRequestException("invalid_request", "Malformed Basic authorization header");
-                }
-                return new ClientCredentials(decoded.substring(0, sep), decoded.substring(sep + 1));
-            } catch (IllegalArgumentException ex) {
-                throw new OidcInvalidRequestException("invalid_request", "Malformed Basic authorization header");
-            }
-        }
-        return new ClientCredentials(clientIdParam, clientSecretParam);
     }
 
     /**
@@ -344,8 +337,5 @@ public class OidcAuthorizationController {
             }
         }
         return value.startsWith("+") ? value : null;
-    }
-
-    private record ClientCredentials(String clientId, String clientSecret) {
     }
 }

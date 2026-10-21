@@ -37,6 +37,13 @@ public class OidcProperties {
     @Valid
     private List<ClientRegistration> clients = new ArrayList<>();
 
+    /**
+     * Whether {@code POST /oauth2/account-deleted} acts on notices. Off, it answers 503 before reading any
+     * credential. On only where every confidential client's secret is held by that client alone: the
+     * secret is all a notice needs to delete an account on the client's homeservers.
+     */
+    private boolean accountDeletionNoticesEnabled = false;
+
     @Getter
     @Setter
     public static class Signing {
@@ -68,6 +75,14 @@ public class OidcProperties {
 
         /** When true, PKCE is mandatory even if a secret is configured. Always true for public clients. */
         private boolean requirePkce;
+
+        /**
+         * Registry ids of the homeservers whose accounts this client may report deleted: the ids under
+         * {@code identity.routing.homeservers}, or {@code default} for the legacy single homeserver.
+         * Empty: none. A public client may report nothing, whatever this lists.
+         */
+        @NotNull
+        private List<String> homeserverIds = new ArrayList<>();
     }
 }
 

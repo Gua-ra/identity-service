@@ -42,7 +42,7 @@ public class SignupController {
     private final IdentityOrchestrationService orchestrationService;
 
     @GetMapping("/check-username")
-    @Operation(summary = "Check whether a username is available", description = "Real-time availability check used by the signup UI. Validates format and reserved-name rules, then queries Matrix for an existing account. Does not consume the signup token or mutate any state.", security = {})
+    @Operation(summary = "Check whether a username is available", description = "Real-time availability check used by the signup UI. Validates format and reserved-name rules, then reports the username taken when the directory holds it, a deleted account held it, or the homeserver already has the user. Does not consume the signup token or mutate any state.", security = {})
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Availability result returned", content = @Content(schema = @Schema(implementation = UsernameAvailabilityResponse.class))),
             @ApiResponse(responseCode = "400", description = "Username format invalid or reserved", content = @Content)

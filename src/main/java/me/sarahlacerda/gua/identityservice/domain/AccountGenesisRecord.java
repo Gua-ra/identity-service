@@ -15,12 +15,15 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * One account's genesis row: the object its accountId is derived from and the account it is
- * attached to.
+ * One account's genesis row: the object its accountId is derived from, and the account it is attached to
+ * (ADM-008 decision 2, ADM-001 L3 and L5).
  *
- * <p>The row is local to identity-service and never replicated, so the MXID to accountId link stays
- * private. An accountId is permanent: deactivating an account leaves this row in place, and no code
- * path updates {@link #origin}.
+ * <p>The row is local to identity-service and is not replicated: the MXID to accountId link stays
+ * private here. Nothing in Phase 3 reads it for routing or for login.
+ *
+ * <p>An accountId is permanent. Deleting an account turns this row into a {@link State#DELETED} tombstone
+ * rather than removing it (L3), and no code path updates {@link #origin}: a bootstrap account is not
+ * adopted into a rooted one in this phase.
  */
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -28,11 +31,11 @@ import lombok.Setter;
 @Table(name = "account_genesis")
 public class AccountGenesisRecord {
 
-    /** Where the account's identity is rooted. An audit marker. */
+    /** Where the account's identity is rooted. The audit marker ADM-001 L5 requires. */
     public enum Origin {
         /** Rooted in an {@code AccountGenesis} the client registered and proved possession of. */
         GENESIS,
-        /** No committed authority key; root class byte 0x00 inside the id. */
+        /** Bootstrap path B1: no committed authority key, root class byte 0x00 inside the id. */
         BOOTSTRAP
     }
 
@@ -40,7 +43,12 @@ public class AccountGenesisRecord {
         /** Registered, not yet attached to an account. Carries an attach handle and an expiry. */
         PENDING,
         /** Attached to the account named by {@link #userId}. */
-        ATTACHED
+        ATTACHED,
+        /**
+         * Tombstone of a deleted account. Keeps {@link #userId} reserved for good and carries no
+         * attach handle and no expiry. Nothing that resolves a live account reads it.
+         */
+        DELETED
     }
 
     @Id
@@ -74,9 +82,11 @@ public class AccountGenesisRecord {
     private String authorityKeyB64;
 
     /**
-     * SHA-256 hex of the single-use attach handle; the handle itself is never stored. Settable together
-     * with {@link #expiresAt}: re-registering the same genesis while pending rotates both. Every other
-     * field is fixed at construction, and {@link #origin} has no mutator.
+     * SHA-256 hex of the single-use attach handle; the handle itself is never stored.
+     *
+     * <p>Settable, with {@link #expiresAt}: re-registering the same genesis while it is still pending
+     * rotates both. Every other field is fixed at construction, and {@link #origin} above all: it is the
+     * audit marker ADM-001 L5 rests on, so it has no mutator at all and no query updates it.
      */
     @Setter
     @Column(name = "attach_handle_hash", length = 64)
@@ -109,6 +119,7 @@ public class AccountGenesisRecord {
         this.attachedAt = attachedAt;
     }
 
+    /** A registered but unattached {@code AccountGenesis}. */
     public static AccountGenesisRecord pendingGenesis(String accountId, short version, short suite, String genesisB64,
             String authorityKeyB64, String attachHandleHash, Instant expiresAt) {
         return new AccountGenesisRecord(accountId, null, Origin.GENESIS, State.PENDING, version, suite, genesisB64,
@@ -130,6 +141,16 @@ public class AccountGenesisRecord {
             String genesisB64, Instant attachedAt) {
         return new AccountGenesisRecord(accountId, userId, Origin.BOOTSTRAP, State.ATTACHED, version, suite,
                 genesisB64, null, null, null, attachedAt);
+    }
+
+    /**
+     * The tombstone of a deleted account that never held a genesis row: a bootstrap id minted at
+     * deletion so the account's user id stays reserved. Never attached, so {@link #attachedAt} is null.
+     */
+    public static AccountGenesisRecord deletedBootstrap(String accountId, String userId, short version, short suite,
+            String genesisB64) {
+        return new AccountGenesisRecord(accountId, userId, Origin.BOOTSTRAP, State.DELETED, version, suite,
+                genesisB64, null, null, null, null);
     }
 
     @PrePersist

@@ -265,4 +265,57 @@ class AccountGenesisServiceTest {
         assertThat(service.bootstrap("@alice:example.org").value()).isEqualTo(existingId);
         verify(repository, never()).save(any());
     }
+
+    @Test
+    void reRegisteringTheGenesisOfADeletedAccountIsAConflict() {
+        AccountGenesisRecord tombstone = AccountGenesisRecord.deletedBootstrap(accountId.value(),
+                "@alice:example.org", (short) 1, (short) 1, b64(canonicalBytes));
+        when(repository.findById(accountId.value())).thenReturn(Optional.of(tombstone));
+
+        assertThatThrownBy(() -> service.register(b64(canonicalBytes), validProof()))
+                .isInstanceOf(GenesisRegistrationException.class)
+                .extracting(e -> ((GenesisRegistrationException) e).getCode())
+                .isEqualTo("genesis_already_attached");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void markDeletedTurnsAnExistingRowIntoATombstoneAndInsertsNothing() {
+        when(repository.markDeleted("@alice:example.org", State.DELETED)).thenReturn(1);
+
+        service.markDeleted("@alice:example.org");
+
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void markDeletedInsertsADeletedBootstrapRowForAnAccountThatHeldNone() {
+        when(repository.markDeleted("@alice:example.org", State.DELETED)).thenReturn(0);
+        when(repository.saveAndFlush(any())).thenAnswer(call -> call.getArgument(0));
+        properties.getGenesis().setEnabled(false);
+
+        service.markDeleted("@alice:example.org");
+
+        ArgumentCaptor<AccountGenesisRecord> saved = ArgumentCaptor.forClass(AccountGenesisRecord.class);
+        verify(repository).saveAndFlush(saved.capture());
+        AccountGenesisRecord row = saved.getValue();
+        assertThat(row.getUserId()).isEqualTo("@alice:example.org");
+        assertThat(row.getState()).isEqualTo(State.DELETED);
+        assertThat(row.getOrigin()).isEqualTo(Origin.BOOTSTRAP);
+        assertThat(row.getAttachHandleHash()).isNull();
+        assertThat(row.getExpiresAt()).isNull();
+        assertThat(row.getAttachedAt()).isNull();
+        assertThat(AccountId.parse(row.getAccountId()).rootClass()).isEqualTo(AccountId.CLASS_BOOTSTRAP);
+    }
+
+    @Test
+    void isDeletedReadsTheTombstoneWhateverTheFlagsSay() {
+        properties.getGenesis().setEnabled(false);
+        when(repository.existsByUserIdAndState("@alice:example.org", State.DELETED)).thenReturn(true);
+
+        assertThat(service.isDeleted("@alice:example.org")).isTrue();
+        assertThat(service.isDeleted("@bob:example.org")).isFalse();
+        assertThat(service.isDeleted(null)).isFalse();
+        assertThat(service.isAnyDeleted(java.util.List.of())).isFalse();
+    }
 }

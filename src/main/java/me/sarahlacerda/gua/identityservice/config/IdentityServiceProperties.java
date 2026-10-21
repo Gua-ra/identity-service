@@ -59,7 +59,7 @@ public class IdentityServiceProperties {
         private int maxVerifyAttempts = 5;
 
         @NotBlank
-        private String smsTemplate = "Your Gua verification code is %s. Never share this code with anyone. Gua will never ask you for it.";
+        private String smsTemplate = "Your Gua verification code is %s. Never share this code with anyone. Gua support will never ask you for it.";
 
         @NotNull
         private Map<String, String> localizedSmsTemplates = new HashMap<>();

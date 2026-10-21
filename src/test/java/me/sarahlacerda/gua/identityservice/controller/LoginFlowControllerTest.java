@@ -4,10 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -47,6 +49,7 @@ import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
 import me.sarahlacerda.gua.identityservice.service.RegistrationGuard;
+import me.sarahlacerda.gua.identityservice.service.ReviewLogin;
 import me.sarahlacerda.gua.identityservice.service.account.AccountCreationService;
 import me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService;
 import me.sarahlacerda.gua.identityservice.service.UsernamePolicy;
@@ -111,6 +114,17 @@ class LoginFlowControllerTest {
                 AccountGenesisService accountGenesisService) {
             return new AccountCreationService(directoryService, accountGenesisService);
         }
+
+        // The real shared username check, so the directory and userExists stubs below decide it as
+        // they did before it existed. The mocked genesis service reports no deleted account.
+        @org.springframework.context.annotation.Bean
+        me.sarahlacerda.gua.identityservice.service.UsernameAvailability usernameAvailability(
+                DirectoryService directoryService, AccountGenesisService accountGenesisService,
+                me.sarahlacerda.gua.identityservice.service.routing.HomeserverRegistry homeserverRegistry,
+                MatrixAdminClient matrixAdminClient) {
+            return new me.sarahlacerda.gua.identityservice.service.UsernameAvailability(directoryService,
+                    accountGenesisService, homeserverRegistry, matrixAdminClient);
+        }
     }
 
     private static final String SID = "session-id";
@@ -164,6 +178,12 @@ class LoginFlowControllerTest {
     private TokenRevocationService tokenRevocationService;
     @MockitoBean
     private EndOtherSessionsService endOtherSessionsService;
+    // A mock answers false for every number: the store review login is off, as on any deployment
+    // that does not configure it.
+    @MockitoBean
+    private ReviewLogin reviewLogin;
+    @MockitoBean
+    private me.sarahlacerda.gua.identityservice.service.routing.HomeserverRegistry homeserverRegistry;
 
     @BeforeEach
     void setUp() {
@@ -219,6 +239,26 @@ class LoginFlowControllerTest {
     }
 
     @Test
+    void contextReportsTheLoginLanguage() throws Exception {
+        LoginSession session = session(Phase.PHONE);
+        session.setLocale("pt-BR");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.locale").value("pt-BR"));
+    }
+
+    @Test
+    void contextOmitsTheLanguageWhenNoneWasGiven() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.locale").doesNotExist());
+    }
+
+    @Test
     void contextExposesPasskeyIntent() throws Exception {
         LoginSession session = session(Phase.PHONE);
         session.setIntent(LoginSession.Intent.PASSKEY);
@@ -251,13 +291,80 @@ class LoginFlowControllerTest {
                                 org.hamcrest.Matchers.containsString("SameSite=Lax"))));
     }
 
+    /**
+     * A browser opened the link, so an expired one lands on the sign-in page in the user's
+     * language, where GET /login/context reports login_session_expired, rather than on raw JSON.
+     */
     @Test
-    void openPasskeyEnrollmentRejectsExpiredToken() throws Exception {
+    void anExpiredEnrollmentLinkRedirectsToTheSigninPageInTheRequestLanguage() throws Exception {
+        when(properties.getUiUrl()).thenReturn("/signin");
         when(loginSessionService.consumeEnrollToken("tok-1")).thenReturn(Optional.empty());
 
-        mockMvc.perform(get("/login/passkey/enroll/{token}", "tok-1"))
-                .andExpect(status().isGone())
-                .andExpect(jsonPath("$.code").value("enroll_link_expired"));
+        mockMvc.perform(get("/login/passkey/enroll/{token}", "tok-1")
+                .header("Accept-Language", "pt-BR,pt;q=0.9,en;q=0.8"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin?ui_locales=pt-BR"))
+                .andExpect(header().doesNotExist("Set-Cookie"));
+
+        verify(loginSessionService, never()).find(any());
+    }
+
+    @Test
+    void openEnrollmentCarriesTheUiLocalesOfItsUrl() throws Exception {
+        stubEnrollmentHandoff();
+        LoginSession session = session(Phase.ENROLL_STEP_UP);
+        session.setLocale("en");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(get("/login/enroll/{token}", "tok-1")
+                .param("ui_locales", "pt-BR")
+                .header("Accept-Language", "en-US"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin?ui_locales=pt-BR"));
+
+        // Saved, so GET /login/context and the step-up code use the same language.
+        ArgumentCaptor<LoginSession> saved = ArgumentCaptor.forClass(LoginSession.class);
+        verify(loginSessionService).save(eq(SID), saved.capture());
+        assertEquals("pt-BR", saved.getValue().getLocale());
+    }
+
+    @Test
+    void openEnrollmentKeepsTheLanguageTheAppStartedItIn() throws Exception {
+        stubEnrollmentHandoff();
+        LoginSession session = session(Phase.ENROLL_STEP_UP);
+        session.setLocale("es");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        // The web view reports the system language; the app's own request said es.
+        mockMvc.perform(get("/login/enroll/{token}", "tok-1")
+                .header("Accept-Language", "en-US,en;q=0.9"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin?ui_locales=es"));
+
+        verify(loginSessionService, never()).save(any(), any());
+    }
+
+    @Test
+    void openEnrollmentFallsBackToTheWebViewLanguage() throws Exception {
+        stubEnrollmentHandoff();
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.ENROLL_STEP_UP)));
+
+        mockMvc.perform(get("/login/enroll/{token}", "tok-1")
+                .header("Accept-Language", "fr-CA,fr;q=0.9"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin?ui_locales=fr-CA"))
+                .andExpect(header().string("Set-Cookie", org.hamcrest.Matchers.containsString("gua_login=" + SID)));
+
+        ArgumentCaptor<LoginSession> saved = ArgumentCaptor.forClass(LoginSession.class);
+        verify(loginSessionService).save(eq(SID), saved.capture());
+        assertEquals("fr-CA", saved.getValue().getLocale());
+    }
+
+    private void stubEnrollmentHandoff() {
+        when(properties.isCookieSecure()).thenReturn(true);
+        when(properties.getSessionTtl()).thenReturn(Duration.ofMinutes(10));
+        when(properties.getUiUrl()).thenReturn("/signin");
+        when(loginSessionService.consumeEnrollToken("tok-1")).thenReturn(Optional.of(SID));
     }
 
     @Test
@@ -273,7 +380,42 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.phase").value("OTP_SENT"))
                 .andExpect(jsonPath("$.maskedPhone").value("\u2022\u2022\u2022\u20224567"));
 
-        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("pt-BR"));
+    }
+
+    @Test
+    void submitPhoneWithoutALanguageTextsInTheLanguageTheLoginStartedIn() throws Exception {
+        LoginSession session = session(Phase.PHONE);
+        session.setLocale("pt-BR");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        mockMvc.perform(post("/login/phone")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phoneNumber\":\"" + PHONE + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.locale").value("pt-BR"));
+
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("pt-BR"));
+    }
+
+    @Test
+    void submitPhoneWithALanguageReplacesTheOneTheLoginStartedIn() throws Exception {
+        LoginSession session = session(Phase.PHONE);
+        session.setLocale("pt-BR");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+        // The user switched the page to Spanish.
+        mockMvc.perform(post("/login/phone")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phoneNumber\":\"" + PHONE + "\",\"locale\":\"es\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.locale").value("es"));
+
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("es"));
     }
 
     @Test
@@ -291,7 +433,7 @@ class LoginFlowControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("invalid_phone_number"));
 
-        verify(otpService, org.mockito.Mockito.never()).sendOtp(any(), any(), any());
+        org.mockito.Mockito.verifyNoInteractions(otpService);
     }
 
     @Test
@@ -308,7 +450,62 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.phase").value("OTP_SENT"));
 
         // OTP is keyed by the normalized E.164 value, not the raw national input.
-        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("en-CA"));
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("en-CA"));
+    }
+
+    /**
+     * The store review login applies to the sign-in's OTP only. A re-authentication of a signed-in
+     * user is a step-up, so it keeps the plain send and verify, which never consult it.
+     */
+    @Test
+    void aReauthenticationSendsAndVerifiesThePlainOtpNotTheSignInOne() throws Exception {
+        LoginSession atPhone = session(Phase.PHONE);
+        atPhone.setReauthUserId("u1");
+
+        performPhone(atPhone).andExpect(status().isOk());
+
+        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService, org.mockito.Mockito.never()).sendLoginOtp(any(), any(), any());
+
+        LoginSession atOtp = session(Phase.OTP_SENT);
+        atOtp.setReauthUserId("u1");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(atOtp));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(DirectoryEntry.builder()
+                .phoneDigest("digest").userId("u1").username("alice").displayName("Alice").build()));
+        when(userSecurityService.hasPin("u1")).thenReturn(true);
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\" 123456 \"}"))
+                .andExpect(status().isOk());
+
+        verify(otpService).verifyOtp(PHONE, "123456");
+        verify(otpService, org.mockito.Mockito.never()).verifyLoginOtp(any(), any());
+    }
+
+    @Test
+    void aSignInSendsAndVerifiesTheSignInOtp() throws Exception {
+        performPhone(session(Phase.PHONE)).andExpect(status().isOk());
+
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService, org.mockito.Mockito.never()).sendOtp(any(), any(), any());
+
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
+        stubPhoneUnknown();
+
+        mockMvc.perform(post("/login/otp")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\" 123456 \"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PROFILE_REQUIRED"));
+
+        verify(otpService).verifyLoginOtp(PHONE, "123456");
+        verify(otpService, org.mockito.Mockito.never()).verifyOtp(any(), any());
     }
 
     @Test
@@ -393,7 +590,7 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.phase").value("PASSKEY_SETUP"))
                 .andExpect(jsonPath("$.redirectUrl").doesNotExist());
 
-        verify(otpService).verifyOtp(PHONE, "123456");
+        verify(otpService).verifyLoginOtp(PHONE, "123456");
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
@@ -492,6 +689,98 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phase").value("PIN_REQUIRED"))
                 .andExpect(jsonPath("$.newUser").value(false));
+    }
+
+    // --- Deleted accounts ---------------------------------------------------------
+
+    /** A session bound to an account deleted since it began is ended at its next request. */
+    @Test
+    void aSessionWhoseAccountWasDeletedIsEndedAndAnswered410() throws Exception {
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("@alice:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(accountGenesisService.isDeleted("@alice:dev.local")).thenReturn(true);
+
+        mockMvc.perform(post("/login/pin")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pin\":\"123456\"}"))
+                .andExpect(status().isGone())
+                .andExpect(jsonPath("$.code").value("account_deleted"));
+
+        verify(loginSessionService).delete(SID);
+        verify(userSecurityService, never()).validatePinOrThrow(any(), any());
+        verify(authorizationService, never()).issueCode(any(), any(), any());
+    }
+
+    @Test
+    void aReauthenticationOfADeletedAccountIsEnded() throws Exception {
+        LoginSession session = session(Phase.PHONE);
+        session.setReauthUserId("@alice:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(accountGenesisService.isDeleted("@alice:dev.local")).thenReturn(true);
+
+        mockMvc.perform(get("/login/context").cookie(cookie()))
+                .andExpect(status().isGone())
+                .andExpect(jsonPath("$.code").value("account_deleted"));
+    }
+
+    /** A deletion that commits while the PIN request is in flight still issues no code. */
+    @Test
+    void completeRefusesAnAccountDeletedDuringTheRequest() throws Exception {
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("@alice:dev.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.isEnabled()).thenReturn(false);
+        when(accountGenesisService.isDeleted("@alice:dev.local")).thenReturn(false, true);
+
+        mockMvc.perform(post("/login/pin")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pin\":\"123456\"}"))
+                .andExpect(status().isGone())
+                .andExpect(jsonPath("$.code").value("account_deleted"));
+
+        verify(userSecurityService, never()).recordSuccessfulLogin(any());
+        verify(authorizationService, never()).issueCode(any(), any(), any());
+    }
+
+    /** The homeserver may still bind the number to a deleted account; that number signs up afresh. */
+    @Test
+    void thePhoneBindingFallbackIgnoresADeletedAccount() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.empty());
+        when(matrixAdminClient.findUserIdByPhone(PHONE)).thenReturn(Optional.of("@alice:dev.local"));
+        when(accountGenesisService.isDeleted("@alice:dev.local")).thenReturn(true);
+
+        performOtp()
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PROFILE_REQUIRED"))
+                .andExpect(jsonPath("$.newUser").value(true));
+
+        verify(directoryService, never()).upsertByDigest(any(), any(), any(), any());
+        verify(accountGenesisService, never()).bootstrap(any());
+    }
+
+    @Test
+    void submitProfileRefusesTheUsernameOfADeletedAccount() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PROFILE_REQUIRED)));
+        when(usernamePolicy.normalizeAndValidate("Alice")).thenReturn("alice");
+        when(matrixProvisioningService.buildUserId(eq("alice"), any())).thenReturn("@alice:gua.local");
+        when(accountGenesisService.isAnyDeleted(org.mockito.ArgumentMatchers.anyCollection())).thenReturn(true);
+
+        mockMvc.perform(post("/login/profile")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"Alice\",\"displayName\":\"Alice A\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("username_taken"));
+
+        verify(directoryService, never()).upsertByDigest(any(), any(), any(), any());
     }
 
     @Test
@@ -807,7 +1096,7 @@ class LoginFlowControllerTest {
                 .andExpect(jsonPath("$.redirectUrl").value(CALLBACK + "?code=auth-code&state=xyz"));
 
         // OTP is bypassed entirely for a proven existing user.
-        verify(otpService, org.mockito.Mockito.never()).verifyOtp(any(), any());
+        org.mockito.Mockito.verifyNoInteractions(otpService);
         // The stored username is what MAS is told.
         assertEquals("alice", issuedAuthorization().preferredUsername());
     }
@@ -1230,7 +1519,7 @@ class LoginFlowControllerTest {
                         "This number is not approved for web sign-up yet. Gua Web is available to Gua beta testers only."));
 
         // The credit-burn protection: no SMS is ever dispatched for a blocked number.
-        verify(otpService, org.mockito.Mockito.never()).sendOtp(any(), any(), any());
+        org.mockito.Mockito.verifyNoInteractions(otpService);
     }
 
     @Test
@@ -1248,7 +1537,7 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phase").value("OTP_SENT"));
 
-        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("pt-BR"));
     }
 
     @Test
@@ -1261,7 +1550,7 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phase").value("OTP_SENT"));
 
-        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("pt-BR"));
     }
 
     @Test
@@ -1275,7 +1564,7 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phase").value("OTP_SENT"));
 
-        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("pt-BR"));
     }
 
     @Test
@@ -1293,7 +1582,7 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phase").value("OTP_SENT"));
 
-        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("pt-BR"));
     }
 
     @Test
@@ -1306,7 +1595,7 @@ class LoginFlowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.phase").value("OTP_SENT"));
 
-        verify(otpService).sendOtp(eq(PHONE), anyString(), eq("pt-BR"));
+        verify(otpService).sendLoginOtp(eq(PHONE), anyString(), eq("pt-BR"));
     }
 
     @Test
@@ -2269,6 +2558,176 @@ class LoginFlowControllerTest {
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 
+    /**
+     * The store review number's sign-in code is a fixed value printed in the store's review
+     * instructions. It never opens the delayed recovery, which would replace the account's PIN
+     * without anyone knowing it.
+     */
+    @Test
+    void recoveryIsNeverOfferedToTheStoreReviewNumber() throws Exception {
+        when(reviewLogin.isReviewNumber(PHONE)).thenReturn(true);
+
+        for (LoginSession session : List.of(pinRequiredSessionAfterOtp(), passkeyRequiredSession())) {
+            when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+            mockMvc.perform(get("/login/context").cookie(cookie()))
+                    .andExpect(status().isOk())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                            .string(org.hamcrest.Matchers.containsString("\"recovery\":null")));
+            postJson("/login/recovery/start", "{}")
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.code").value("recovery_unavailable"));
+            postJson("/login/recovery/complete", "{\"newPin\":\"284917\"}")
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.code").value("recovery_unavailable"));
+        }
+
+        org.mockito.Mockito.verifyNoInteractions(accountRecoveryService, tokenRevocationService);
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    // --- The store review account never holds a passkey -----------------
+
+    /**
+     * The review account's way in is the review code and its PIN, both rotated by the operator. A
+     * passkey would sign in with neither and survive every rotation, so signup takes the review
+     * number straight to the PIN step instead of offering one.
+     */
+    @Test
+    void theStoreReviewNumberGoesStraightToThePinStepAtSignup() throws Exception {
+        when(reviewLogin.isReviewNumber(PHONE)).thenReturn(true);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PROFILE_REQUIRED)));
+        when(usernamePolicy.normalizeAndValidate("Review")).thenReturn("review");
+        when(directoryService.isUsernameTaken("review")).thenReturn(false);
+        when(matrixProvisioningService.buildUserId(eq("review"), any())).thenReturn("@review:gua.local");
+        when(matrixAdminClient.userExists("@review:gua.local")).thenReturn(false);
+        when(passkeyService.isEnabled()).thenReturn(true);
+
+        postJson("/login/profile", "{\"username\":\"Review\",\"displayName\":\"Review\"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+    }
+
+    /** The same for an older review account that holds no factor yet. */
+    @Test
+    void anOlderStoreReviewAccountWithNoFactorGoesStraightToThePinStep() throws Exception {
+        when(reviewLogin.isReviewNumber(PHONE)).thenReturn(true);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
+        when(phoneNumberHasher.digest(PHONE)).thenReturn("digest");
+        DirectoryEntry entry = DirectoryEntry.builder().phoneDigest("digest").userId("@review:gua.local")
+                .username("review").displayName("Review").build();
+        when(directoryService.findByDigest("digest")).thenReturn(Optional.of(entry));
+        when(passkeyService.isEnabled()).thenReturn(true);
+
+        postJson("/login/otp", "{\"code\":\"123456\"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("PIN_SETUP"));
+    }
+
+    /** After its PIN the review account is done: it is not offered the passkey every other account is. */
+    @Test
+    void theStoreReviewNumberIsNotOfferedAPasskeyAfterItsPin() throws Exception {
+        when(reviewLogin.isReviewNumber(PHONE)).thenReturn(true);
+        LoginSession session = session(Phase.PIN_REQUIRED);
+        session.setUserId("@review:gua.local");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(passkeyService.isEnabled()).thenReturn(true);
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        postJson("/login/pin", "{\"pin\":\"123456\"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"))
+                .andExpect(jsonPath("$.redirectUrl").value(CALLBACK + "?code=auth-code&state=xyz"));
+
+        verify(userSecurityService).validatePinOrThrow("@review:gua.local", "123456");
+        assertEquals(SessionFactor.PIN, session.getAuthenticatedFactor());
+    }
+
+    /**
+     * A review session that reaches the setup step anyway, from a sign-in or from settings, is
+     * refused there, before any ceremony starts or any credential is stored.
+     */
+    @Test
+    void passkeyRegistrationIsRefusedForTheStoreReviewAccount() throws Exception {
+        LoginSession signIn = session(Phase.PASSKEY_SETUP);
+        signIn.setUserId("@review:gua.local");
+        signIn.setAuthenticatedFactor(SessionFactor.PIN);
+        when(reviewLogin.isReviewNumber(PHONE)).thenReturn(true);
+
+        LoginSession enrollment = enrollSessionPastStepUp(LoginSession.EnrollTarget.PASSKEY);
+        enrollment.setUserId("@review:gua.local");
+        when(reviewLogin.isReviewAccount("@review:gua.local")).thenReturn(true);
+
+        for (LoginSession session : List.of(signIn, enrollment)) {
+            when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+            postJson("/login/passkey/register/options", "{}")
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.code").value("passkey_not_allowed"));
+            postJson("/login/passkey/register/verify", "{\"credential\":{\"id\":\"cred-1\"}}")
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.code").value("passkey_not_allowed"));
+        }
+
+        verify(passkeyService, org.mockito.Mockito.never()).startRegistration(any(), any());
+        verify(passkeyService, org.mockito.Mockito.never()).finishRegistration(any(), any(), any());
+        verify(loginFactorEnrollmentService, org.mockito.Mockito.never()).registerPasskey(any(), any(), any());
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+    }
+
+    /**
+     * A passkey that resolves to the review account signs nothing in, from any step, so one
+     * registered before this rule, or by any other route, is worthless.
+     */
+    @Test
+    void aPasskeySignInThatResolvesToTheStoreReviewAccountIsRefused() throws Exception {
+        when(reviewLogin.isReviewAccount("@review:gua.local")).thenReturn(true);
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@review:gua.local", REGISTERED_LONG_AGO));
+
+        LoginSession atPin = session(Phase.PIN_REQUIRED);
+        atPin.setUserId("@review:gua.local");
+        for (LoginSession session : List.of(session(Phase.PHONE), session(Phase.OTP_SENT), atPin)) {
+            when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+
+            postJson("/login/passkey/auth/verify", "{\"credential\":{\"id\":\"cred-1\"}}")
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.code").value("passkey_not_allowed"));
+            assertEquals(null, session.getAuthenticatedFactor());
+        }
+
+        verify(directoryService, org.mockito.Mockito.never()).findByUserId(any());
+        verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
+        verify(userSecurityService, org.mockito.Mockito.never()).recordSuccessfulLogin(any());
+    }
+
+    /**
+     * The refusal follows the account a passkey resolves to, never the number a session holds
+     * unproved, so typing the review number tells nobody anything: another account's passkey
+     * still signs that account in from the phone and code steps.
+     */
+    @Test
+    void typingTheStoreReviewNumberDoesNotChangeAnotherAccountsPasskeySignIn() throws Exception {
+        when(reviewLogin.isReviewNumber(PHONE)).thenReturn(true);
+        ObjectNode options = JsonNodeFactory.instance.objectNode();
+        options.put("challenge", "abc");
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.OTP_SENT)));
+        when(passkeyService.startAuthentication(SID)).thenReturn(options);
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local", REGISTERED_LONG_AGO));
+        DirectoryEntry entry = DirectoryEntry.builder()
+                .phoneDigest("digest").userId("@alice:dev.local").username("alice").displayName("Alice").build();
+        when(directoryService.findByUserId("@alice:dev.local")).thenReturn(List.of(entry));
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+
+        postJson("/login/passkey/auth/options", "{}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.publicKey.challenge").value("abc"));
+        postJson("/login/passkey/auth/verify", "{\"credential\":{\"id\":\"cred-1\"}}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+    }
+
     @Test
     void startingRecoveryOpensTheEpisodeAndReturnsTheState() throws Exception {
         when(loginSessionService.find(SID)).thenReturn(Optional.of(passkeyRequiredSession()));
@@ -2282,7 +2741,7 @@ class LoginFlowControllerTest {
 
         verify(accountRecoveryService).start("@alice:dev.local", "••••4567", "127.0.0.1");
         // Recovery sends no SMS.
-        verify(otpService, org.mockito.Mockito.never()).sendOtp(any(), any(), any());
+        org.mockito.Mockito.verifyNoInteractions(otpService);
         verify(authorizationService, org.mockito.Mockito.never()).issueCode(any(), any(), any());
     }
 

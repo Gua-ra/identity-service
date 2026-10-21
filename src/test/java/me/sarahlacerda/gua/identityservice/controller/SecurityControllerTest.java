@@ -24,6 +24,7 @@ import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver;
 import me.sarahlacerda.gua.identityservice.service.DirectoryService;
+import me.sarahlacerda.gua.identityservice.service.ReviewLogin;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSession;
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryService;
@@ -58,6 +59,10 @@ class SecurityControllerTest {
     @Mock
     private AccountRecoveryService accountRecoveryService;
 
+    // A mock answers false for every account: the store review login is off.
+    @Mock
+    private ReviewLogin reviewLogin;
+
     private MockMvc mockMvc;
     private ObjectMapper objectMapper;
     private IdentityServiceProperties properties;
@@ -76,7 +81,7 @@ class SecurityControllerTest {
                 // Real policy over the mocked services, so the factor report and the enrollment
                 // guard are the ones the application computes.
                 new AuthFactorPolicy(userSecurityService, passkeyService),
-                new AccountLocalpartResolver(directoryService), pinChangeService, accountRecoveryService);
+                new AccountLocalpartResolver(directoryService), pinChangeService, accountRecoveryService, reviewLogin);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new RestExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter())
@@ -110,7 +115,8 @@ class SecurityControllerTest {
                 org.mockito.ArgumentMatchers.eq("123456"),
                 org.mockito.ArgumentMatchers.isNull(),
                 org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.anyString())).thenReturn("chal-1");
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.isNull())).thenReturn("chal-1");
 
         PinChangeStartRequest request = new PinChangeStartRequest();
         request.setPhone("+12025550123");
@@ -133,7 +139,8 @@ class SecurityControllerTest {
                 org.mockito.ArgumentMatchers.isNull(),
                 org.mockito.ArgumentMatchers.eq("step-1"),
                 org.mockito.ArgumentMatchers.argThat(node -> node != null && "cred-1".equals(node.path("id").asText())),
-                org.mockito.ArgumentMatchers.anyString())).thenReturn("chal-2");
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.isNull())).thenReturn("chal-2");
 
         // No currentPin at all: with an assertion supplied the PIN is not a required field.
         String body = "{\"phone\":\"+12025550123\",\"passkeyStepUpId\":\"step-1\",\"passkeyCredential\":{\"id\":\"cred-1\"}}";
@@ -143,6 +150,27 @@ class SecurityControllerTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.challengeId")
                         .value("chal-2"));
+    }
+
+    @Test
+    void startPinChangeTextsTheCodeInTheRequestLanguage() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@user:domain");
+        org.mockito.Mockito.when(pinChangeService.start(
+                org.mockito.ArgumentMatchers.eq("@user:domain"),
+                org.mockito.ArgumentMatchers.eq("+12025550123"),
+                org.mockito.ArgumentMatchers.eq("123456"),
+                org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.eq("pt-BR"))).thenReturn("chal-3");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/pin/change/start")
+                .header("Accept-Language", "pt-BR,pt;q=0.9,en;q=0.8")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phone\":\"+12025550123\",\"currentPin\":\"123456\"}"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.challengeId")
+                        .value("chal-3"));
     }
 
     @Test
@@ -481,6 +509,24 @@ class SecurityControllerTest {
         verify(loginSessionService).create(org.mockito.ArgumentMatchers.any(LoginSession.class));
     }
 
+    /**
+     * The store review account signs in with its code and PIN only, and a passkey would outlive
+     * the rotation of both, so settings never hands it an enrollment link.
+     */
+    @Test
+    void startPasskeyEnrollmentIsRefusedForTheStoreReviewAccount() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@review:dev.local");
+        org.mockito.Mockito.when(reviewLogin.isReviewAccount("@review:dev.local")).thenReturn(true);
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/passkey/enroll/start")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code")
+                        .value("passkey_not_allowed"));
+
+        org.mockito.Mockito.verifyNoInteractions(loginSessionService, passkeyService);
+    }
+
     @Test
     void startPasskeyEnrollmentReturnsAbsoluteEnrollUrl() throws Exception {
         org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
@@ -529,6 +575,29 @@ class SecurityControllerTest {
         // No directory display name -> localpart fallback.
         org.junit.jupiter.api.Assertions.assertEquals("alice", created.getDisplayName());
         org.junit.jupiter.api.Assertions.assertEquals("alice", created.getPreferredUsername());
+    }
+
+    @Test
+    void anEnrollmentSessionKeepsTheLanguageTheAppStartedItIn() throws Exception {
+        org.mockito.Mockito.when(authenticatedUserAccessor.requireCurrentUserId()).thenReturn("@alice:dev.local");
+        org.mockito.Mockito.when(directoryService.findByUserId("@alice:dev.local"))
+                .thenReturn(java.util.List.of());
+        org.mockito.Mockito.when(loginSessionService.create(org.mockito.ArgumentMatchers.any(LoginSession.class)))
+                .thenReturn("sess-1");
+        org.mockito.Mockito.when(loginSessionService.createEnrollToken(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenReturn("tok-1");
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/security/passkey/enroll/start")
+                .header("Accept-Language", "fr-CA;q=1.0, en;q=0.9")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                // The URL itself carries no language; the handoff reads it off the session.
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.enrollUrl")
+                        .value("https://auth.example.com/login/enroll/tok-1"));
+
+        org.mockito.ArgumentCaptor<LoginSession> captor = org.mockito.ArgumentCaptor.forClass(LoginSession.class);
+        verify(loginSessionService).create(captor.capture());
+        org.junit.jupiter.api.Assertions.assertEquals("fr-CA", captor.getValue().getLocale());
     }
 
     @Test

@@ -5,6 +5,9 @@ import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import me.sarahlacerda.gua.identityservice.domain.DirectoryEntry;
 
@@ -24,4 +27,9 @@ public interface DirectoryEntryRepository extends JpaRepository<DirectoryEntry, 
     boolean existsByUsernameIgnoreCase(String username);
 
     void deleteByPhoneDigest(String phoneDigest);
+
+    /** Every row of one account, whichever numbers it holds. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("delete from DirectoryEntry e where e.userId = :userId")
+    int deleteAllByUserId(@Param("userId") String userId);
 }

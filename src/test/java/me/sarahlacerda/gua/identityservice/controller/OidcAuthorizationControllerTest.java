@@ -52,11 +52,16 @@ import me.sarahlacerda.gua.identityservice.service.oidc.OidcClientService.Regist
 import me.sarahlacerda.gua.identityservice.service.oidc.LoginSessionService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenResponse;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
+import me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService;
 import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 
 @WebMvcTest(OidcAuthorizationController.class)
 @AutoConfigureMockMvc(addFilters = false)
 class OidcAuthorizationControllerTest {
+
+    // The controller now also reads IdentityServiceProperties, which the slice already provides from
+    // @EnableConfigurationProperties. Account genesis is off in it by default, so the "gua:" login-hint
+    // grammar is not parsed here and every assertion below is the behaviour from before it existed.
 
     private static final String CALLBACK = "https://client.example.com/callback";
     private static final String PKCE_CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
@@ -82,7 +87,15 @@ class OidcAuthorizationControllerTest {
     @MockitoBean
     private EndpointRateLimiter endpointRateLimiter;
 
-    /** Present only so a test can assert that no OTP is verified on /oauth2/authorize. */
+    /** Answers isDeleted=false unless a test says otherwise: no account here was deleted. */
+    @MockitoBean
+    private AccountGenesisService accountGenesisService;
+
+    /**
+     * Not a dependency of the controller any more. Present in the slice only so the
+     * legacy-parameter regression can assert, explicitly, that no OTP is ever
+     * verified on {@code /oauth2/authorize}.
+     */
     @MockitoBean
     private OtpService otpService;
 
@@ -92,9 +105,9 @@ class OidcAuthorizationControllerTest {
     @BeforeEach
     void setUp() {
         confidentialClient = new RegisteredClient("mas", "$2a$10$abc", false,
-                List.of(CALLBACK), Set.of("openid", "profile", "phone"), false);
+                List.of(CALLBACK), Set.of("openid", "profile", "phone"), false, Set.of("default"));
         publicClient = new RegisteredClient("gua-ios", null, true,
-                List.of("global.gua:/oidc"), Set.of("openid", "profile", "phone"), true);
+                List.of("global.gua:/oidc"), Set.of("openid", "profile", "phone"), true, Set.of());
         when(clientService.requireClient("mas")).thenReturn(confidentialClient);
         when(clientService.requireClient("gua-ios")).thenReturn(publicClient);
     }
@@ -145,7 +158,78 @@ class OidcAuthorizationControllerTest {
         assertThat(session.getCodeChallenge()).isNull();
         assertThat(session.getIntent()).isEqualTo(LoginSession.Intent.PHONE);
         assertThat(session.getPhoneHint()).isNull();
+        assertThat(session.getLocale()).isNull();
         verifyNoInteractions(authorizationService);
+    }
+
+    // --- Login language -----------------------------------------------------------
+
+    @Test
+    void authorizePassesUiLocalesToTheLoginUi() throws Exception {
+        stubInteractiveFlow();
+
+        mockMvc.perform(authorizeRequest()
+                .param("ui_locales", "pt-BR")
+                .header("Accept-Language", "en-US,en;q=0.9"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin?ui_locales=pt-BR"));
+
+        assertThat(parkedSession().getLocale()).isEqualTo("pt-BR");
+    }
+
+    @Test
+    void authorizeFallsBackToTheAcceptLanguageHeader() throws Exception {
+        stubInteractiveFlow();
+
+        mockMvc.perform(authorizeRequest()
+                .header("Accept-Language", "en;q=0.5, es-419;q=0.9"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin?ui_locales=es-419"));
+
+        assertThat(parkedSession().getLocale()).isEqualTo("es-419");
+    }
+
+    @Test
+    void authorizeNormalizesTheTagItForwards() throws Exception {
+        stubInteractiveFlow();
+
+        // The ICU spelling, lower case, with a Unicode extension, then a second preference.
+        mockMvc.perform(authorizeRequest()
+                .param("ui_locales", "pt_br-u-ca-gregory fr"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin?ui_locales=pt-BR"));
+
+        assertThat(parkedSession().getLocale()).isEqualTo("pt-BR");
+    }
+
+    @Test
+    void authorizeSkipsAMalformedUiLocalesForTheHeader() throws Exception {
+        stubInteractiveFlow();
+
+        mockMvc.perform(authorizeRequest()
+                .param("ui_locales", "\"><script>")
+                .header("Accept-Language", "fr-CA"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "/signin?ui_locales=fr-CA"));
+    }
+
+    @Test
+    void authorizeKeepsTheQueryAnAbsoluteUiUrlAlreadyHas() throws Exception {
+        stubInteractiveFlow();
+        when(loginFlowProperties.getUiUrl()).thenReturn("https://gua.example/signin?theme=dark");
+
+        mockMvc.perform(authorizeRequest()
+                .param("ui_locales", "fr"))
+                .andExpect(status().isFound())
+                .andExpect(header().string("Location", "https://gua.example/signin?theme=dark&ui_locales=fr"));
+    }
+
+    private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder authorizeRequest() {
+        return get("/oauth2/authorize")
+                .param("response_type", "code")
+                .param("client_id", "mas")
+                .param("redirect_uri", CALLBACK)
+                .param("scope", "openid");
     }
 
     @Test
@@ -169,9 +253,13 @@ class OidcAuthorizationControllerTest {
     }
 
     /**
-     * A request that still carries the legacy OTP query parameters must be indistinguishable from an
-     * interactive request: same redirect to the login UI, same parked session at the phone step, no
-     * code, and neither the OTP service nor the authorization service is touched.
+     * Regression for ADM-001 L1a. The removed non-interactive branch verified an OTP
+     * supplied as a query parameter and redirected straight back to the client with
+     * an authorization code, so control of the SMS channel alone yielded a session.
+     * A request that still carries those parameters must be indistinguishable from
+     * an interactive request: same redirect to the login UI, same parked session at
+     * the phone step, no code anywhere, and neither the OTP service nor the
+     * authorization service is touched.
      */
     @Test
     void authorizeIgnoresLegacyOtpParametersAndNeverIssuesCode() throws Exception {
@@ -226,7 +314,13 @@ class OidcAuthorizationControllerTest {
         verifyNoInteractions(otpService);
     }
 
-    /** Keeps the removal visible as a named test: no path turns an OTP into an authorization code. */
+    /**
+     * The service no longer has any path that turns an OTP into an authorization
+     * code. The removal is already enforced at compile time (the controller cannot
+     * call a method that does not exist, and the request record it took is gone);
+     * this check keeps the removal visible as a named test so a reintroduction
+     * fails loudly rather than silently compiling.
+     */
     @Test
     void authorizationServiceHasNoOtpBackedCodeIssuancePath() {
         assertThat(Arrays.stream(OidcAuthorizationService.class.getDeclaredMethods()).map(Method::getName))
@@ -282,9 +376,11 @@ class OidcAuthorizationControllerTest {
     }
 
     /**
-     * The reserved login_hint {@code passkey} is an intent, not a phone number: the session parks at
-     * the phone step flagged PASSKEY, and the marker never lands in the phone hint. Matching ignores
-     * case and surrounding whitespace.
+     * The native apps send the reserved login_hint {@code passkey} when the user taps
+     * "Sign in with a passkey" and MAS forwards it verbatim. It is an intent, not a
+     * phone number: the session parks at the phone step as usual, flagged PASSKEY,
+     * and the marker never lands in the phone hint. Matching ignores case and
+     * surrounding whitespace.
      */
     @ParameterizedTest
     @ValueSource(strings = {"passkey", "PASSKEY", " passkey "})
@@ -377,6 +473,50 @@ class OidcAuthorizationControllerTest {
         verify(clientService).verifyPkce(Optional.empty(), null);
         verify(authorizationService).consumeAuthorizationCode("auth-code");
         verify(tokenService).issueTokens(authorization);
+    }
+
+    /** A code issued before its account was deleted is spent and yields no tokens. */
+    @Test
+    void tokenRefusesACodeWhoseAccountWasDeleted() throws Exception {
+        OidcAuthorization authorization = new OidcAuthorization(
+                "@alice:example.com", "+15551234567", "Alice", Set.of("openid"), "mas");
+        when(authorizationService.consumeAuthorizationCode("auth-code"))
+                .thenReturn(Optional.of(new OidcAuthorizationCode("auth-code", authorization, CALLBACK)));
+        when(accountGenesisService.isDeleted("@alice:example.com")).thenReturn(true);
+
+        mockMvc.perform(post("/oauth2/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "authorization_code")
+                .param("code", "auth-code")
+                .param("redirect_uri", CALLBACK)
+                .param("client_id", "mas")
+                .param("client_secret", "shh"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("invalid_grant"));
+
+        verify(tokenService, never()).issueTokens(any());
+    }
+
+    /** RFC 6749 section 2.3.1: the Basic user and password arrive form-urlencoded. */
+    @Test
+    void tokenDecodesAFormUrlencodedBasicSecret() throws Exception {
+        OidcAuthorization authorization = new OidcAuthorization(
+                "user-123", "+15551234567", null, Set.of("openid"), "mas");
+        when(authorizationService.consumeAuthorizationCode("auth-code"))
+                .thenReturn(Optional.of(new OidcAuthorizationCode("auth-code", authorization, CALLBACK)));
+        when(tokenService.issueTokens(authorization)).thenReturn(
+                new OidcTokenResponse("at", 600, "openid", "Bearer", "it"));
+
+        String basic = java.util.Base64.getEncoder().encodeToString("mas:s%2Bcr%2Ft%3D".getBytes());
+        mockMvc.perform(post("/oauth2/token")
+                .header("Authorization", "Basic " + basic)
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "authorization_code")
+                .param("code", "auth-code")
+                .param("redirect_uri", CALLBACK))
+                .andExpect(status().isOk());
+
+        verify(clientService).authenticateClient(confidentialClient, "s+cr/t=");
     }
 
     @Test

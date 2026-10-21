@@ -53,7 +53,9 @@ class RateLimitConfigurationTest {
             // Re-authentication: both check the submitted number against the account's own binding, and
             // verify checks a code on top.
             "/account/reauth/start, 5, PT1M",
-            "/account/reauth/verify, 10, PT1M"
+            "/account/reauth/verify, 10, PT1M",
+            // The account-deletion notice: open, and each call costs a bcrypt check of the client secret.
+            "/oauth2/account-deleted, 60, PT1M"
     })
     void credentialEndpointsHaveTheirOwnPerAddressRule(String path, int limit, Duration refresh) {
         runner.run(ctx -> {

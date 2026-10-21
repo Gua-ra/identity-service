@@ -66,6 +66,9 @@ class IdentityOrchestrationServiceTest {
         /** Account genesis is off by default here (the mock answers false). */
         @Mock
         private me.sarahlacerda.gua.identityservice.service.account.AccountGenesisService accountGenesisService;
+        /** No homeserver is registered unless a test says so, so only the target user id is checked for a tombstone. */
+        @Mock
+        private me.sarahlacerda.gua.identityservice.service.routing.HomeserverRegistry homeserverRegistry;
 
         private final UsernamePolicy usernamePolicy = new UsernamePolicy();
         private final io.micrometer.core.instrument.MeterRegistry meterRegistry =
@@ -82,7 +85,6 @@ class IdentityOrchestrationServiceTest {
                 service = new IdentityOrchestrationService(
                                 otpService,
                                 matrixProvisioningService,
-                                matrixAdminClient,
                                 signupTokenService,
                                 pinChallengeService,
                                 directoryService,
@@ -100,7 +102,11 @@ class IdentityOrchestrationServiceTest {
                                 new RegistrationGuard(loginFlowProperties, new PhoneNumberNormalizer(),
                                                 directoryService, phoneNumberHasher, matrixAdminClient),
                                 accountGenesisService,
-                                new me.sarahlacerda.gua.identityservice.service.security.PinPolicy());
+                                new me.sarahlacerda.gua.identityservice.service.security.PinPolicy(),
+                                // Real shared username check over the mocked directory, genesis and
+                                // homeserver collaborators, so the userExists stubs below still decide it.
+                                new UsernameAvailability(directoryService, accountGenesisService,
+                                                homeserverRegistry, matrixAdminClient));
         }
 
         @Test

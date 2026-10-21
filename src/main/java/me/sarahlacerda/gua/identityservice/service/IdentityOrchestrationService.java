@@ -8,7 +8,6 @@ import com.google.i18n.phonenumbers.PhoneNumberUtil;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.Nullable;
 import lombok.RequiredArgsConstructor;
-import me.sarahlacerda.gua.identityservice.client.matrix.MatrixAdminClient;
 import me.sarahlacerda.gua.identityservice.domain.MatrixSession;
 import me.sarahlacerda.gua.identityservice.domain.VerifyOtpResult;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
@@ -38,7 +37,6 @@ public class IdentityOrchestrationService {
 
     private final OtpService otpService;
     private final MatrixProvisioningService matrixProvisioningService;
-    private final MatrixAdminClient matrixAdminClient;
     private final SignupTokenService signupTokenService;
     private final PinChallengeService pinChallengeService;
     private final DirectoryService directoryService;
@@ -53,6 +51,7 @@ public class IdentityOrchestrationService {
     private final RegistrationGuard registrationGuard;
     private final AccountGenesisService accountGenesisService;
     private final PinPolicy pinPolicy;
+    private final UsernameAvailability usernameAvailability;
 
     public void sendOtp(String e164PhoneNumber, String requesterIp, String language) {
         otpService.sendOtp(e164PhoneNumber, requesterIp, language);
@@ -69,7 +68,8 @@ public class IdentityOrchestrationService {
         final Optional<DirectoryEntry> existingEntry = directoryService.findByDigest(digest);
 
         if (existingEntry.isEmpty()) {
-            // New user: defer Matrix provisioning until they choose a username and display name.
+            // New user: defer Matrix provisioning until they choose a username + display
+            // name.
             String signupToken = signupTokenService.issue(e164PhoneNumber);
             return VerifyOtpResult.newUser(signupToken);
         }
@@ -77,8 +77,11 @@ public class IdentityOrchestrationService {
         final DirectoryEntry entry = existingEntry.get();
         final String userId = entry.getUserId();
 
-        // This path cannot run a passkey ceremony or set a first factor, so such accounts are sent to the
-        // interactive sign-in.
+        // Same answer the interactive login flow gets, from the same component: this path
+        // and /login used to decide it separately and could drift. The SMS code never finishes a
+        // sign-in on its own. This path cannot run a passkey ceremony or set a first factor, so an
+        // account that needs either is sent to the interactive sign-in instead. Refused before
+        // any session is minted.
         AuthFactorPolicy.LoginPolicy loginPolicy = authFactorPolicy.loginPolicy(userId);
         if (loginPolicy.passkeyRequired()) {
             throw new LoginFlowException(HttpStatus.FORBIDDEN, "passkey_required",
@@ -90,8 +93,10 @@ public class IdentityOrchestrationService {
         }
         if (loginPolicy.pinStepRequired()) {
             if (!StringUtils.hasText(providedPin)) {
-                // Two-step verification: the client redeems this short-lived token at /signin/verify-pin with
-                // the PIN. The OTP has been consumed, so the token is the sole proof the phone was just verified.
+                // Two-step verification: issue a short-lived challenge token that the
+                // client redeems at /signin/verify-pin with the user's PIN. The OTP has
+                // been consumed and won't be re-checked; this token is the sole proof
+                // that the phone was just verified.
                 String challengeToken = pinChallengeService.issue(userId, e164PhoneNumber);
                 return VerifyOtpResult.pinRequired(challengeToken);
             }
@@ -107,8 +112,10 @@ public class IdentityOrchestrationService {
      * minting a Matrix session.
      */
     public MatrixSession verifySignInPin(String pinChallengeToken, String pin, DeviceMetadata deviceMetadata) {
-        // Peek first so a wrong PIN does not burn the verified-OTP proof. The failure count and lockout
-        // in UserSecurityService prevent brute force on a live token.
+        // Peek first so a wrong-PIN attempt doesn't burn the user's verified-OTP proof;
+        // the
+        // UserSecurityService failure-count + lockout policy prevents brute force on a
+        // live token.
         PinChallengeService.Challenge challenge = pinChallengeService.peek(pinChallengeToken);
         userSecurityService.validatePinOrThrow(challenge.userId(), pin);
 
@@ -120,6 +127,7 @@ public class IdentityOrchestrationService {
             throw new PhoneAlreadyLinkedException("Phone number no longer linked to this account");
         }
 
+        // Everything checks out: consume the token now so it can't be reused.
         pinChallengeService.consume(pinChallengeToken);
 
         VerifyOtpResult result = completeSignIn(entry, challenge.phone(), deviceMetadata);
@@ -132,7 +140,13 @@ public class IdentityOrchestrationService {
         @Nullable
         final String resolvedDisplayName = entry.getDisplayName();
 
-        // Deactivation drops the homeserver's linked threepids, so every sign-in re-links the phone.
+        // Always re-link the phone on sign-in. After a previous account deactivation
+        // the
+        // homeserver drops all linked threepids, so signing back in with the same phone
+        // must
+        // restore the binding. Otherwise downstream flows that look up the user's
+        // phone (e.g.
+        // /account/reauth/start) will fail with "no phone number linked".
         final MatrixSession session = matrixProvisioningService.ensureSessionForUser(
                 userId,
                 e164PhoneNumber,
@@ -155,14 +169,20 @@ public class IdentityOrchestrationService {
             String displayName,
             String providedPin,
             DeviceMetadata deviceMetadata) {
-        // Validate every recoverable input before consuming the single-use signup token, so the client can
-        // retry with it.
+        // Validate every recoverable input BEFORE consuming the single-use signup token
+        // so the
+        // client can correct mistakes (username taken, invalid format, etc.) and retry
+        // with the
+        // same token instead of having to redo the OTP flow.
         final String localpart = validateUsername(username);
         final String userId = matrixProvisioningService.buildUserId(localpart);
 
         final String phone = signupTokenService.peek(signupToken);
-        // Invite-only web gate (inert unless enabled). This REST path has no login session, so it is
-        // always treated as web. Checked before the token is consumed, so a refusal provisions nothing.
+        // Invite-only web gate (inert unless enabled). This REST path has no login
+        // session or downstream marker, so it is always treated as web: a new account
+        // is created only for an allowlisted phone, the same rule the interactive
+        // /login/profile step applies. Checked before the token is consumed, so a
+        // refusal provisions nothing.
         registrationGuard.assertAllowedForNewUser(phone);
         final String digest = phoneNumberHasher.digest(phone);
 
@@ -170,19 +190,22 @@ public class IdentityOrchestrationService {
             throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
         }
 
-        if (matrixAdminClient.userExists(userId)) {
+        if (usernameAvailability.isTaken(localpart, userId)) {
             throw new UsernameTakenException("Username already taken");
         }
 
         // Every account is created holding a factor, and this path can only give it a PIN. Checked
-        // before the token is consumed, so the client can retry with the same token.
+        // before the token is consumed, like every other recoverable input, so a client that sent
+        // none can ask the user for one and retry with the same token.
         if (!StringUtils.hasText(providedPin)) {
             throw new LoginFlowException(HttpStatus.BAD_REQUEST, "pin_required",
                     "Choose a PIN to protect your account.");
         }
         pinPolicy.validate(providedPin);
 
-        // Consume the token first so a duplicate request cannot race past the userExists check.
+        // All pre-flight checks passed; from here we commit the signup. Consume the
+        // token first so
+        // a duplicate request can't race past the userExists check.
         signupTokenService.consume(signupToken);
 
         final String resolvedDisplayName = StringUtils.hasText(displayName) ? displayName.trim() : localpart;
@@ -201,8 +224,15 @@ public class IdentityOrchestrationService {
             throw new PhoneAlreadyLinkedException("Phone number already linked to another account");
         }
 
-        // No login session exists to hold an attach challenge, so this path always mints a bootstrap id.
-        // A failure is logged and left to the backfill, because the signup has already committed.
+        // Every account gets an accountId. This REST path has no login session, so there is nowhere to
+        // hold the server-chosen challenge an attach proof must cover (ADM-008 decision 6), and a handle
+        // on its own must never attach. A signup here therefore always takes the bootstrap branch, which
+        // is not a failure; the interactive /login/profile step is where a genesis can be attached.
+        // Never a failure of the signup itself (ADM-008 decision 6). The account exists by this point:
+        // the Matrix user is provisioned and the directory row is committed, and this runs in its own
+        // transaction, so a database blip here would otherwise turn a completed signup into a 500 the
+        // caller cannot retry. Logged and dropped instead, the way the backfill treats one failing
+        // account; the next backfill run picks it up.
         if (accountGenesisService.isEnabled()) {
             try {
                 accountGenesisService.bootstrap(userId);
@@ -211,8 +241,10 @@ public class IdentityOrchestrationService {
             }
         }
 
-        // gua_identity_signup_total{result,country}: country is the ISO region of the phone (about 200
-        // values). Never tag with the phone or any per-user value.
+        // gua_identity_signup_total{result,country}: completed new-account
+        // registrations, tagged with the ISO region of the (E.164) phone for the
+        // Grafana registrations-by-country panel. country is low-cardinality (~200 ISO
+        // codes); never tag with the phone itself or any per-user value.
         metrics.counter("gua.identity.signup", "result", "success", "country", regionOf(phone)).increment();
         userSecurityService.recordSuccessfulLogin(userId);
         registerDeviceIfPresent(userId, session, deviceMetadata);
@@ -221,8 +253,10 @@ public class IdentityOrchestrationService {
     }
 
     /**
-     * Resolves the ISO 3166-1 alpha-2 region of an E.164 phone for the signup metric. Returns
-     * {@code "unknown"} when the number cannot be parsed or has no region.
+     * Resolves the ISO 3166-1 alpha-2 region of an E.164 phone for the
+     * registrations-by-country metric. Returns {@code "unknown"} when the number
+     * can't be parsed or has no region, keeping the {@code country} tag
+     * low-cardinality (~200 ISO codes) and free of any per-user value.
      */
     private static String regionOf(String e164PhoneNumber) {
         if (!StringUtils.hasText(e164PhoneNumber)) {
@@ -251,13 +285,16 @@ public class IdentityOrchestrationService {
     }
 
     /**
-     * Availability check used by the signup UI. Runs the same format and reserved-name checks as
-     * {@link #completeSignup} (throwing {@link InvalidUsernameException} on bad input) and returns
-     * {@code true} only when no Matrix account with that localpart exists. Does not mutate state.
+     * Lightweight availability check used by the signup UI for real-time
+     * validation.
+     * Runs the same format + reserved-name checks as {@link #completeSignup}
+     * (throwing
+     * {@link InvalidUsernameException} on bad input) and returns {@code true} only
+     * when {@link UsernameAvailability} finds the username free. Does not mutate state.
      */
     public boolean isUsernameAvailable(String rawUsername) {
         String localpart = validateUsername(rawUsername);
         String userId = matrixProvisioningService.buildUserId(localpart);
-        return !matrixAdminClient.userExists(userId);
+        return !usernameAvailability.isTaken(localpart, userId);
     }
 }
