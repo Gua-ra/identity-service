@@ -23,6 +23,9 @@ import jakarta.servlet.http.Cookie;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.mockito.ArgumentCaptor;
 
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
@@ -135,6 +138,9 @@ class LoginFlowControllerTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
 
     @MockitoBean
     private LoginSessionService loginSessionService;
@@ -3114,5 +3120,58 @@ class LoginFlowControllerTest {
         mockMvc.perform(get("/login/context").cookie(cookie()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.enrollment").value(true));
+    }
+
+    private double count(String name, String... tags) {
+        Counter counter = meterRegistry.find(name).tags(tags).counter();
+        return counter == null ? 0 : counter.count();
+    }
+
+    /** The app sign-in flow is where accounts are created, so it is what the signup meter must count. */
+    @Test
+    void aNewAccountFinishingSignInCountsAsASignupInItsCountry() throws Exception {
+        LoginSession session = session(Phase.PIN_SETUP);
+        session.setUserId("@sven:gua.local");
+        session.setPhoneNumber("+46701234567");
+        session.setNewUser(true);
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session));
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+        double signups = count("gua.identity.signup", "result", "success", "country", "SE");
+        double logins = count("gua.identity.login", "result", "success");
+
+        mockMvc.perform(post("/login/pin-setup")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pin\":\"123456\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+
+        assertEquals(signups + 1, count("gua.identity.signup", "result", "success", "country", "SE"));
+        assertEquals(logins, count("gua.identity.login", "result", "success"));
+    }
+
+    @Test
+    void aReturningAccountFinishingSignInCountsAsALogin() throws Exception {
+        when(loginSessionService.find(SID)).thenReturn(Optional.of(session(Phase.PHONE)));
+        when(passkeyService.finishAuthentication(eq(SID), any()))
+                .thenReturn(new PasskeyService.PasskeyAuthentication("@alice:dev.local", REGISTERED_LONG_AGO));
+        DirectoryEntry entry = DirectoryEntry.builder()
+                .phoneDigest("digest").userId("@alice:dev.local").username("alice").displayName("Alice").build();
+        when(directoryService.findByUserId("@alice:dev.local")).thenReturn(List.of(entry));
+        when(authorizationService.issueCode(any(), eq(CALLBACK), any())).thenReturn(issuedCode());
+        double logins = count("gua.identity.login", "result", "success");
+        double signups = meterRegistry.find("gua.identity.signup").counters().stream().mapToDouble(Counter::count).sum();
+
+        mockMvc.perform(post("/login/passkey/auth/verify")
+                .cookie(cookie())
+                .header("X-CSRF-Token", CSRF)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"credential\":{\"id\":\"cred-1\"}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phase").value("COMPLETED"));
+
+        assertEquals(logins + 1, count("gua.identity.login", "result", "success"));
+        assertEquals(signups, meterRegistry.find("gua.identity.signup").counters().stream().mapToDouble(Counter::count).sum());
     }
 }
