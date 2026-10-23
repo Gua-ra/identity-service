@@ -4,6 +4,7 @@ import org.springframework.stereotype.Component;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import me.sarahlacerda.gua.identityservice.exception.SmsRefusedException;
 import me.sarahlacerda.gua.identityservice.service.SmsSender;
 
 /**
@@ -14,6 +15,7 @@ import me.sarahlacerda.gua.identityservice.service.SmsSender;
  *   <li>{@code gua_identity_login_total{result="success"}}</li>
  *   <li>{@code gua_identity_otp_verify_total{result="valid"|"invalid"|"exhausted",flow=&lt;where the code was spent&gt;}}</li>
  *   <li>{@code gua_identity_sms_send_total{provider=&lt;wired sender&gt;,result="sent"|"failed"}}</li>
+ *   <li>{@code gua_identity_sms_refused_total{reason=&lt;why the provider refused the destination&gt;}}</li>
  * </ul>
  * Registration is idempotent: {@link MeterRegistry#counter} returns the same instances for the same
  * name and tags. Only tag values the increment call sites already produce are used, so tag
@@ -44,5 +46,10 @@ public class IdentityMetricsInitializer {
         String provider = SmsSender.providerTag(smsSender);
         Counter.builder("gua.identity.sms.send").tag("provider", provider).tag("result", "sent").register(metrics);
         Counter.builder("gua.identity.sms.send").tag("provider", provider).tag("result", "failed").register(metrics);
+        // A refusal also counts as result="failed" above; the reason lives on its own meter because
+        // every gua.identity.sms.send series, sent ones included, must keep the same tag keys.
+        for (SmsRefusedException.Reason reason : SmsRefusedException.Reason.values()) {
+            Counter.builder("gua.identity.sms.refused").tag("reason", reason.tagValue()).register(metrics);
+        }
     }
 }

@@ -7,10 +7,15 @@ import org.mockito.Mockito;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.data.redis.core.script.RedisScript;
 
 import java.time.Duration;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -44,6 +49,15 @@ class RateLimiterTest {
         assertThatThrownBy(() -> rateLimiter.checkRate("key", 5, Duration.ofMinutes(1)))
             .isInstanceOf(RateLimiterException.class)
             .hasMessageContaining("Rate limit exceeded");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void refundIsBestEffortWhenRedisFails() {
+        when(redisTemplate.execute(any(RedisScript.class), anyList()))
+            .thenThrow(new RedisConnectionFailureException("redis is down"));
+
+        assertThatCode(() -> rateLimiter.refund("key")).doesNotThrowAnyException();
     }
 
     @Test
