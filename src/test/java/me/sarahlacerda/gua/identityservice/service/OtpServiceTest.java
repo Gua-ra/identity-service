@@ -29,6 +29,8 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.exception.InvalidOtpException;
 import me.sarahlacerda.gua.identityservice.exception.OtpRateLimitedException;
 import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
+import me.sarahlacerda.gua.identityservice.exception.SmsRefusedException;
+import me.sarahlacerda.gua.identityservice.exception.SmsUnavailableException;
 import org.junit.jupiter.api.extension.ExtendWith;
 
 @ExtendWith(MockitoExtension.class)
@@ -327,6 +329,91 @@ class OtpServiceTest {
         verify(smsSender).send(PHONE, "Code Gua : 666666");
     }
 
+    // -------------------- provider refusals --------------------
+
+    @Test
+    void aRefusedSendGivesBackItsBudgetAndDropsTheCodeNobodyReceived() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("123456");
+        Mockito.doThrow(new SmsRefusedException(SmsRefusedException.Reason.DESTINATION_UNAVAILABLE))
+                .when(smsSender).send(eq(PHONE), anyString());
+
+        assertThatThrownBy(() -> otpService.sendOtp(PHONE, "127.0.0.1", null))
+                .isInstanceOf(SmsRefusedException.class);
+
+        verify(rateLimiter).refund("otp:rate:phone:" + PHONE);
+        verify(rateLimiter).refund("otp:rate:ip:127.0.0.1");
+        verify(redisTemplate).delete(CODE_KEY);
+        assertThat(smsCount("failed")).isEqualTo(1.0);
+        assertThat(smsCount("sent")).isZero();
+        assertThat(refusedCount("destination_unavailable")).isEqualTo(1.0);
+    }
+
+    @Test
+    void everyRefusalReasonIsCountedUnderItsOwnTag() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("123456");
+        for (SmsRefusedException.Reason reason : SmsRefusedException.Reason.values()) {
+            Mockito.doThrow(new SmsRefusedException(reason)).when(smsSender).send(eq(PHONE), anyString());
+
+            assertThatThrownBy(() -> otpService.sendOtp(PHONE, "127.0.0.1", null))
+                    .isInstanceOfSatisfying(SmsRefusedException.class,
+                            ex -> assertThat(ex.getReason()).isEqualTo(reason));
+
+            assertThat(refusedCount(reason.tagValue())).isEqualTo(1.0);
+        }
+        int reasons = SmsRefusedException.Reason.values().length;
+        verify(rateLimiter, times(reasons)).refund("otp:rate:phone:" + PHONE);
+        assertThat(smsCount("failed")).isEqualTo(reasons);
+    }
+
+    @Test
+    void aRefusedSendWithoutAnAddressRefundsTheNumberOnly() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("123456");
+        Mockito.doThrow(new SmsRefusedException(SmsRefusedException.Reason.RECIPIENT_OPTED_OUT))
+                .when(smsSender).send(eq(PHONE), anyString());
+
+        assertThatThrownBy(() -> otpService.sendOtp(PHONE, null, null)).isInstanceOf(SmsRefusedException.class);
+
+        verify(rateLimiter).checkRate(eq("otp:rate:phone:" + PHONE), anyInt(), any(Duration.class));
+        verify(rateLimiter).refund("otp:rate:phone:" + PHONE);
+        verifyNoMoreInteractions(rateLimiter);
+    }
+
+    @Test
+    void aRefusedScopedSendDropsTheScopedCodeAndGivesBackItsBudget() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("123456");
+        Mockito.doThrow(new SmsRefusedException(SmsRefusedException.Reason.INVALID_NUMBER))
+                .when(smsSender).send(eq(PHONE), anyString());
+
+        assertThatThrownBy(() -> otpService.sendScopedOtp(OtpScope.PIN_CHANGE, "chal-1", PHONE, "127.0.0.1", null))
+                .isInstanceOf(SmsRefusedException.class);
+
+        verify(redisTemplate).delete("otp:code:pin-change:chal-1");
+        verify(redisTemplate, never()).delete(CODE_KEY);
+        verify(rateLimiter).refund("otp:rate:phone:" + PHONE);
+        verify(rateLimiter).refund("otp:rate:ip:127.0.0.1");
+    }
+
+    @Test
+    void aProviderFailureStaysCountedAndKeepsTheCode() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("123456");
+        Mockito.doThrow(new SmsUnavailableException("SMS provider unavailable"))
+                .when(smsSender).send(eq(PHONE), anyString());
+
+        assertThatThrownBy(() -> otpService.sendOtp(PHONE, "127.0.0.1", null))
+                .isInstanceOf(SmsUnavailableException.class);
+
+        // The text may have gone out, so the send keeps its place in the budget and its code.
+        verify(rateLimiter, never()).refund(anyString());
+        verify(redisTemplate, never()).delete(CODE_KEY);
+        assertThat(smsCount("failed")).isEqualTo(1.0);
+        assertThat(metrics.find("gua.identity.sms.refused").counters()).isEmpty();
+    }
+
     // -------------------- scoped codes --------------------
 
     @Test
@@ -393,6 +480,16 @@ class OtpServiceTest {
         verify(redisTemplate).delete("otp:code:pin-change:chal-1");
         verify(redisTemplate).delete("otp:attempts:pin-change:chal-1");
         verify(redisTemplate, never()).delete(CODE_KEY);
+    }
+
+    private double smsCount(String result) {
+        Counter counter = metrics.find("gua.identity.sms.send").tag("result", result).counter();
+        return counter == null ? 0.0 : counter.count();
+    }
+
+    private double refusedCount(String reason) {
+        Counter counter = metrics.find("gua.identity.sms.refused").tag("reason", reason).counter();
+        return counter == null ? 0.0 : counter.count();
     }
 
     private double count(String result) {

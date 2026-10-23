@@ -12,6 +12,7 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.exception.InvalidOtpException;
 import me.sarahlacerda.gua.identityservice.exception.OtpRateLimitedException;
 import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
+import me.sarahlacerda.gua.identityservice.exception.SmsRefusedException;
 import me.sarahlacerda.gua.identityservice.metrics.OtpVerifyFlow;
 
 @Service
@@ -175,6 +176,14 @@ public class OtpService {
             reviewLogin.observeProviderLatency(Duration.ofNanos(System.nanoTime() - started));
             // gua_identity_sms_send_total{provider,result} — SMS usage + delivery failures.
             metrics.counter("gua.identity.sms.send", "provider", smsProvider, "result", "sent").increment();
+        } catch (SmsRefusedException ex) {
+            // Nothing was texted: the code reached nobody, and the send costs no budget.
+            redisTemplate.delete(codeKey);
+            refundRateLimits(e164PhoneNumber, requesterIp);
+            metrics.counter("gua.identity.sms.send", "provider", smsProvider, "result", "failed").increment();
+            // gua_identity_sms_refused_total{reason}: destinations the provider refused.
+            metrics.counter("gua.identity.sms.refused", "reason", ex.getReason().tagValue()).increment();
+            throw ex;
         } catch (RuntimeException ex) {
             metrics.counter("gua.identity.sms.send", "provider", smsProvider, "result", "failed").increment();
             throw ex;
@@ -315,6 +324,13 @@ public class OtpService {
             }
         } catch (RateLimiterException ex) {
             throw new OtpRateLimitedException("Too many OTP requests", ex);
+        }
+    }
+
+    private void refundRateLimits(String e164PhoneNumber, String requesterIp) {
+        rateLimiter.refund(PHONE_RATE_KEY_PREFIX + e164PhoneNumber);
+        if (StringUtils.hasText(requesterIp)) {
+            rateLimiter.refund(IP_RATE_KEY_PREFIX + requesterIp);
         }
     }
 
