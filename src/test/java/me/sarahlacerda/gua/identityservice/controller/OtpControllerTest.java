@@ -25,6 +25,7 @@ import me.sarahlacerda.gua.identityservice.controller.dto.OtpVerifyResponse;
 import me.sarahlacerda.gua.identityservice.domain.MatrixSession;
 import me.sarahlacerda.gua.identityservice.domain.VerifyOtpResult;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
+import me.sarahlacerda.gua.identityservice.exception.SmsRefusedException;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.IdentityOrchestrationService;
 import me.sarahlacerda.gua.identityservice.service.RegistrationGuard;
@@ -70,6 +71,22 @@ class OtpControllerTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isAccepted());
 
         verify(orchestrationService).sendOtp("+12025550123", "127.0.0.1", "pt-BR");
+    }
+
+    @Test
+    void sendOtpAnswersAProviderRefusalWithAClientError() throws Exception {
+        OtpSendRequest request = new OtpSendRequest();
+        request.setPhone("+46701740605");
+        org.mockito.Mockito.doThrow(new SmsRefusedException(SmsRefusedException.Reason.DESTINATION_UNAVAILABLE))
+                .when(orchestrationService).sendOtp("+46701740605", "127.0.0.1", null);
+
+        mockMvc.perform(MockMvcRequestBuilders.post("/otp/send")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsBytes(request)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status()
+                        .isUnprocessableEntity())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code",
+                        is("sms_destination_unavailable")));
     }
 
     @Test

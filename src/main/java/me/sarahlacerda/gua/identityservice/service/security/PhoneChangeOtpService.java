@@ -13,6 +13,7 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.exception.InvalidOtpException;
 import me.sarahlacerda.gua.identityservice.exception.OtpRateLimitedException;
 import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
+import me.sarahlacerda.gua.identityservice.exception.SmsRefusedException;
 import me.sarahlacerda.gua.identityservice.service.OtpCodeGenerator;
 import me.sarahlacerda.gua.identityservice.service.OtpCodes;
 import me.sarahlacerda.gua.identityservice.service.RateLimiter;
@@ -73,6 +74,13 @@ public class PhoneChangeOtpService {
         try {
             smsSender.send(newE164, messageBody);
             metrics.counter("gua.identity.sms.send", "provider", smsProvider, "result", "sent").increment();
+        } catch (SmsRefusedException ex) {
+            // Nothing was texted: the code reached nobody, and the send costs no budget.
+            redisTemplate.delete(otpKey(challengeId));
+            refundRateLimits(newE164, requesterIp);
+            metrics.counter("gua.identity.sms.send", "provider", smsProvider, "result", "failed").increment();
+            metrics.counter("gua.identity.sms.refused", "reason", ex.getReason().tagValue()).increment();
+            throw ex;
         } catch (RuntimeException ex) {
             metrics.counter("gua.identity.sms.send", "provider", smsProvider, "result", "failed").increment();
             throw ex;
@@ -111,6 +119,13 @@ public class PhoneChangeOtpService {
             }
         } catch (RateLimiterException ex) {
             throw new OtpRateLimitedException("Too many OTP requests", ex);
+        }
+    }
+
+    private void refundRateLimits(String e164PhoneNumber, String requesterIp) {
+        rateLimiter.refund(PHONE_RATE_KEY_PREFIX + e164PhoneNumber);
+        if (StringUtils.hasText(requesterIp)) {
+            rateLimiter.refund(IP_RATE_KEY_PREFIX + requesterIp);
         }
     }
 
