@@ -98,6 +98,23 @@ For production:
 - `IDP_LOGIN_PASSKEYS_RP_ID` and `IDP_LOGIN_PASSKEYS_ORIGINS` must match the domain and the exact HTTPS origin of the sign-in UI.
 - Keep `/actuator/prometheus` off the public edge. `/actuator/health` serves the probes.
 
+### SMS send limits
+
+Every SMS passes `SmsSendGuard` before the provider is called, and every spelling of a number shares its E.164 counters. A refused send answers `429 rate_limited` with `Retry-After`, `400 invalid_phone_number` or `400 phone_country_not_supported`, and is counted in `gua_identity_sms_refused_total{reason}`. A send the provider refuses (`422` or `400`) gives back every counter it charged, ceilings included.
+
+| Environment variable | Default | Limits |
+| --- | --- | --- |
+| `IDENTITY_OTP_MAX_PHONE_PER_HOUR` | 5 | Sends to one number per hour. |
+| `IDENTITY_OTP_MAX_IP_PER_HOUR` | 10 | Sends from one client address per hour. |
+| `IDENTITY_OTP_MAX_SIGN_UP_SENDS_PER_HOUR` | 0 (none) | Sends to numbers without an account, across every number and address. |
+| `IDENTITY_OTP_MAX_SIGN_UP_SENDS_PER_DAY` | 0 (none) | The same, per day. |
+| `IDENTITY_OTP_MAX_ACCOUNT_SENDS_PER_HOUR` | 0 (none) | Sends for existing accounts, counted apart from sign-ups. |
+| `IDENTITY_OTP_MAX_ACCOUNT_SENDS_PER_DAY` | 0 (none) | The same, per day. |
+| `IDENTITY_OTP_ALLOWED_COUNTRIES` | empty (every region) | ISO 3166-1 alpha-2 regions, comma separated, matched on the number's own region (JE, GG and IM are not GB). |
+| `IDENTITY_DIRECTORY_MAX_LOOKUPS_PER_ACCOUNT_PER_HOUR` | 0 (none) | `/directory/lookup` calls per account, from any address. |
+
+The allowlist applies to existing accounts too, and an unknown region code stops startup. Enable the same regions in the SMS provider's geographic permissions. For an event on a shared network, raise the sign-up ceilings before the per-address limit.
+
 ## 🚀 Deployment
 
 - `.github/workflows/ci-cd.yml` runs the tests on every pull request and every push to `main`. A push to `main` also builds and signs the image `ghcr.io/gua-ra/identity-service` and deploys it to dev. A pull request labelled `deploy:dev` does the same.
