@@ -130,6 +130,13 @@ public class IdentityServiceProperties {
 
         /** Max phone numbers accepted per /directory/lookup request. */
         private int maxLookupBatch = 1000;
+
+        /**
+         * /directory/lookup calls per account in an hour, whatever address they come from. 0 means
+         * no limit.
+         */
+        @Min(0)
+        private int maxLookupsPerAccountPerHour = 0;
     }
 
     /**

@@ -115,12 +115,16 @@ class SmsSendGuardTest {
     }
 
     @Test
-    void theShippedConfigurationSetsNoCeiling() throws IOException {
-        // application.yml with every IDENTITY_OTP_MAX_*_SENDS_* unset.
-        OtpProperties otp = shippedConfiguration().bind("identity.otp", OtpProperties.class).get();
+    void theShippedConfigurationSetsNoCeilingAndNoLookupBudget() throws IOException {
+        // application.yml with every IDENTITY_OTP_MAX_*_SENDS_* and the lookup budget unset.
+        Binder binder = shippedConfiguration();
+        OtpProperties otp = binder.bind("identity.otp", OtpProperties.class).get();
+        IdentityServiceProperties.DirectoryProperties directory = binder
+                .bind("identity.directory", IdentityServiceProperties.DirectoryProperties.class).get();
 
         assertThat(List.of(otp.getMaxSignUpSendsPerHour(), otp.getMaxSignUpSendsPerDay(),
-                otp.getMaxAccountSendsPerHour(), otp.getMaxAccountSendsPerDay())).containsOnly(0);
+                otp.getMaxAccountSendsPerHour(), otp.getMaxAccountSendsPerDay(),
+                directory.getMaxLookupsPerAccountPerHour())).containsOnly(0);
         assertThat(otp.getMaxRequestsPerPhonePerHour()).isEqualTo(5);
         assertThat(otp.getMaxRequestsPerIpPerHour()).isEqualTo(10);
     }

@@ -64,8 +64,8 @@ public class DirectoryController {
         )
         @RequestBody @Valid DirectoryLookupRequest request
     ) {
-        authenticatedUserAccessor.requireCurrentUserId();
-        List<DirectoryLookupResponse.ContactMatchView> matches = contactDiscoveryService.match(request.getPhones())
+        String userId = authenticatedUserAccessor.requireCurrentUserId();
+        List<DirectoryLookupResponse.ContactMatchView> matches = contactDiscoveryService.match(userId, request.getPhones())
             .stream()
             .map(match -> new DirectoryLookupResponse.ContactMatchView(
                 match.phoneNumber(), match.userId(), match.username(), match.displayName()))
