@@ -11,7 +11,9 @@ import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.script.RedisScript;
 
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -58,6 +60,16 @@ class RateLimiterTest {
             .thenThrow(new RedisConnectionFailureException("redis is down"));
 
         assertThatCode(() -> rateLimiter.refund("key")).doesNotThrowAnyException();
+    }
+
+    @Test
+    void aRefusalCarriesTheTimeLeftInTheWindow() {
+        when(valueOperations.increment("key")).thenReturn(6L);
+        when(redisTemplate.getExpire("key", TimeUnit.MILLISECONDS)).thenReturn(42_000L);
+
+        assertThatThrownBy(() -> rateLimiter.checkRate("key", 5, Duration.ofMinutes(1)))
+            .isInstanceOfSatisfying(RateLimiterException.class,
+                refused -> assertThat(refused.getRetryAfter()).isEqualTo(Duration.ofSeconds(42)));
     }
 
     @Test

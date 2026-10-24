@@ -12,6 +12,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import me.sarahlacerda.gua.identityservice.exception.SmsRefusedException;
+import me.sarahlacerda.gua.identityservice.service.SmsSendGuard;
 import me.sarahlacerda.gua.identityservice.service.SmsSender;
 
 class IdentityMetricsInitializerTest {
@@ -41,6 +42,9 @@ class IdentityMetricsInitializerTest {
         for (SmsRefusedException.Reason reason : SmsRefusedException.Reason.values()) {
             assertCounterAtZero(registry, "gua.identity.sms.refused", "reason", reason.tagValue());
         }
+        for (SmsSendGuard.Refusal refusal : SmsSendGuard.Refusal.values()) {
+            assertCounterAtZero(registry, "gua.identity.sms.refused", "reason", refusal.tagValue());
+        }
     }
 
     @Test
@@ -56,7 +60,7 @@ class IdentityMetricsInitializerTest {
                 .count()).isEqualTo(1.0);
         assertThat(registry.get("gua.identity.sms.send").tag("result", "failed").counter().count()).isEqualTo(1.0);
         assertThat(registry.find("gua.identity.sms.refused").counters())
-                .hasSize(SmsRefusedException.Reason.values().length);
+                .hasSize(SmsRefusedException.Reason.values().length + SmsSendGuard.Refusal.values().length);
     }
 
     @Test
@@ -96,7 +100,9 @@ class IdentityMetricsInitializerTest {
                 .contains("gua_identity_login_total")
                 .contains("gua_identity_otp_verify_total")
                 .contains("gua_identity_sms_send_total")
-                .contains("gua_identity_sms_refused_total");
+                .contains("gua_identity_sms_refused_total{reason=\"destination_unavailable\"}")
+                .contains("gua_identity_sms_refused_total{reason=\"sign_up_daily_ceiling\"}")
+                .contains("gua_identity_sms_refused_total{reason=\"account_daily_ceiling\"}");
     }
 
     @Test

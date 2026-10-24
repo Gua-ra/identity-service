@@ -51,6 +51,33 @@ public class IdentityServiceProperties {
         private int maxRequestsPerIpPerHour = 10;
 
         /**
+         * SMS sends to numbers without an account, across every number and address, in a window
+         * opened by the first send. 0 means no ceiling.
+         */
+        @Min(0)
+        private int maxSignUpSendsPerHour = 0;
+
+        @Min(0)
+        private int maxSignUpSendsPerDay = 0;
+
+        /**
+         * SMS sends for existing accounts, counted apart from the sign-up ceilings. 0 means no
+         * ceiling.
+         */
+        @Min(0)
+        private int maxAccountSendsPerHour = 0;
+
+        @Min(0)
+        private int maxAccountSendsPerDay = 0;
+
+        /**
+         * ISO 3166-1 alpha-2 regions a code may be texted to, matched on the region of the number,
+         * so +1 numbers outside the listed regions (Caribbean, for example) are refused. Empty
+         * means every region.
+         */
+        private List<String> allowedCountries = new ArrayList<>();
+
+        /**
          * Wrong guesses one code may absorb before it is deleted. Counted per phone
          * in Redis next to the code and expiring with it; a new send resets it. The
          * endpoint limiters bound guesses per address, this bounds them per code.

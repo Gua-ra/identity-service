@@ -2,6 +2,7 @@ package me.sarahlacerda.gua.identityservice.service;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,12 +47,14 @@ public class RateLimiter {
         }
 
         if (currentCount != null && currentCount > limit) {
-            throw new RateLimiterException("Rate limit exceeded for key: " + key);
+            Long remainingMillis = redisTemplate.getExpire(key, TimeUnit.MILLISECONDS);
+            throw new RateLimiterException("Rate limit exceeded",
+                    remainingMillis != null && remainingMillis > 0 ? Duration.ofMillis(remainingMillis) : window);
         }
     }
 
     /**
-     * Gives back one call {@link #checkRate} counted, for a call that turned out to cost nothing.
+     * Gives back one call counted under {@code key}, for a call that turned out to cost nothing.
      * The window is unchanged. Best effort: a Redis failure here leaves the call counted.
      */
     public void refund(String key) {
