@@ -100,7 +100,7 @@ For production:
 
 ### SMS send limits
 
-Every SMS passes `SmsSendGuard` before the provider is called, and every spelling of a number shares its E.164 counters. A refused send answers `429 rate_limited` with `Retry-After`, `400 invalid_phone_number` or `400 phone_country_not_supported`, and is counted in `gua_identity_sms_refused_total{reason}`. A send the provider refuses (`422` or `400`) gives back every counter it charged, ceilings included.
+Every SMS passes `SmsSendGuard` before the provider is called, and every spelling of a number shares its E.164 counters. A send over a limit answers `429 rate_limited` with `Retry-After` and a number outside the allowlist answers `400 phone_country_not_supported`; both are counted in `gua_identity_sms_refused_total{reason}`. A number that does not parse answers `400 invalid_phone_number` and is not counted. A send the provider refuses (`422` or `400`) is counted under the provider's reason and gives back every counter it charged, ceilings included.
 
 | Environment variable | Default | Limits |
 | --- | --- | --- |
