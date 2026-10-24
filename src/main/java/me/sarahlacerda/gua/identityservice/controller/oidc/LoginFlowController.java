@@ -34,6 +34,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.JsonNode;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
@@ -53,6 +54,7 @@ import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
+import me.sarahlacerda.gua.identityservice.service.PhoneRegion;
 import me.sarahlacerda.gua.identityservice.service.RegistrationGuard;
 import me.sarahlacerda.gua.identityservice.service.ReviewLogin;
 import me.sarahlacerda.gua.identityservice.service.account.AccountCreationService;
@@ -166,6 +168,7 @@ public class LoginFlowController {
     private final EndOtherSessionsService endOtherSessionsService;
     private final ReviewLogin reviewLogin;
     private final UsernameAvailability usernameAvailability;
+    private final MeterRegistry metrics;
 
     @GetMapping("/context")
     @Operation(summary = "Fetch the current login state", description = "Returns the current step, the login intent (PHONE or PASSKEY, from the OIDC login_hint), a CSRF token to echo on subsequent calls, the login language (locale) when known, the masked phone when known, and whether this is an in-app passkey enrollment. Once the step is one the flow can only reach with the subject resolved, it also reports passkeyRegistered, preferredFactor and passkeysEnabled; all are absent before then, and in particular at the phone step, where the session holds a submitted number and nothing proved. At ENROLL_STEP_UP, and only there, it additionally reports pinRegistered, so the step-up offers the PIN beside the passkey only to an account that holds one. At PIN_REQUIRED and PASSKEY_REQUIRED after an OTP it also reports recovery, the delayed account recovery state, which is absent whenever recovery is not available to this session.")
@@ -867,6 +870,7 @@ public class LoginFlowController {
 
         session.setPhase(Phase.COMPLETED);
         loginSessionService.delete(sessionId);
+        recordCompletion(session);
 
         ResponseCookie expired = ResponseCookie.from(properties.getCookieName(), "")
                 .httpOnly(true)
@@ -879,6 +883,19 @@ public class LoginFlowController {
         return ResponseEntity.ok()
                 .header(HttpHeaders.SET_COOKIE, expired.toString())
                 .body(state(session, redirect.toUriString()));
+    }
+
+    /**
+     * Counts a finished app sign-in under the same meters, and tag keys, as the REST orchestration:
+     * a new account as a signup by phone region, anything else as a login.
+     */
+    private void recordCompletion(LoginSession session) {
+        if (session.isNewUser()) {
+            metrics.counter("gua.identity.signup", "result", "success",
+                    "country", PhoneRegion.of(session.getPhoneNumber())).increment();
+        } else {
+            metrics.counter("gua.identity.login", "result", "success").increment();
+        }
     }
 
     /**
