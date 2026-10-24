@@ -1,5 +1,6 @@
 package me.sarahlacerda.gua.identityservice.controller;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
@@ -42,9 +43,12 @@ import me.sarahlacerda.gua.identityservice.exception.PinChangeCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.PinLockedException;
 import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
 import me.sarahlacerda.gua.identityservice.exception.ReauthPhoneMismatchException;
+import me.sarahlacerda.gua.identityservice.exception.SmsRefusedException;
+import me.sarahlacerda.gua.identityservice.exception.SmsUnavailableException;
 import me.sarahlacerda.gua.identityservice.exception.StepUpRequiredException;
 import me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException;
 import me.sarahlacerda.gua.identityservice.exception.UnknownUserException;
+import me.sarahlacerda.gua.identityservice.exception.UnsupportedPhoneCountryException;
 import me.sarahlacerda.gua.identityservice.exception.UsernameTakenException;
 import me.sarahlacerda.gua.identityservice.exception.WeakPinException;
 import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryState;
@@ -53,6 +57,8 @@ import me.sarahlacerda.gua.identityservice.service.security.AccountRecoveryState
 public class RestExceptionHandler {
 
         private static final Logger log = LoggerFactory.getLogger(RestExceptionHandler.class);
+
+        static final int SMS_RETRY_AFTER_SECONDS = 60;
 
         @ExceptionHandler({ RedisConnectionFailureException.class, DataAccessResourceFailureException.class })
         public ResponseEntity<ErrorResponse> handleBackingStoreUnavailable(RuntimeException ex) {
@@ -70,8 +76,22 @@ public class RestExceptionHandler {
 
         @ExceptionHandler({ OtpRateLimitedException.class, RateLimiterException.class })
         public ResponseEntity<ErrorResponse> handleRateLimited(RuntimeException ex) {
+                Duration retryAfter = ex instanceof OtpRateLimitedException otp ? otp.getRetryAfter()
+                                : ((RateLimiterException) ex).getRetryAfter();
+                if (retryAfter == null) {
+                        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                                        .body(new ErrorResponse("rate_limited", ex.getMessage()));
+                }
+                long seconds = Math.max(1, (retryAfter.toMillis() + 999) / 1000);
                 return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                                .body(new ErrorResponse("rate_limited", ex.getMessage()));
+                                .header("Retry-After", String.valueOf(seconds))
+                                .body(new ErrorResponse("rate_limited", ex.getMessage(), seconds));
+        }
+
+        @ExceptionHandler(UnsupportedPhoneCountryException.class)
+        public ResponseEntity<ErrorResponse> handleUnsupportedPhoneCountry(UnsupportedPhoneCountryException ex) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .body(new ErrorResponse("phone_country_not_supported", ex.getMessage()));
         }
 
         @ExceptionHandler(PhoneAlreadyLinkedException.class)
@@ -96,6 +116,33 @@ public class RestExceptionHandler {
         public ResponseEntity<ErrorResponse> handleInvalidPhoneNumber(InvalidPhoneNumberException ex) {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                                 .body(new ErrorResponse("invalid_phone_number", ex.getMessage()));
+        }
+
+        /**
+         * The SMS provider refused the destination. Nothing was texted and the send limits were not
+         * spent, so the client can let the user correct the number at once.
+         */
+        @ExceptionHandler(SmsRefusedException.class)
+        public ResponseEntity<ErrorResponse> handleSmsRefused(SmsRefusedException ex) {
+                return switch (ex.getReason()) {
+                        case DESTINATION_UNAVAILABLE -> ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                                        .body(new ErrorResponse("sms_destination_unavailable",
+                                                        "We can't send a text to this number's country yet."));
+                        case INVALID_NUMBER -> ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                        .body(new ErrorResponse("invalid_phone_number",
+                                                        "This number can't receive text messages. Check it and try again."));
+                        case RECIPIENT_OPTED_OUT -> ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                                        .body(new ErrorResponse("sms_recipient_opted_out",
+                                                        "This number has turned off texts from Gua. Reply START to a Gua text to turn them back on, then try again."));
+                };
+        }
+
+        @ExceptionHandler(SmsUnavailableException.class)
+        public ResponseEntity<ErrorResponse> handleSmsUnavailable(SmsUnavailableException ex) {
+                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                                .header("Retry-After", String.valueOf(SMS_RETRY_AFTER_SECONDS))
+                                .body(new ErrorResponse("sms_unavailable",
+                                                "We can't send text messages right now. Try again in a minute."));
         }
 
         @ExceptionHandler(UsernameTakenException.class)

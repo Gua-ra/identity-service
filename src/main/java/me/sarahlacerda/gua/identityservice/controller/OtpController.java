@@ -26,6 +26,7 @@ import me.sarahlacerda.gua.identityservice.controller.dto.OtpVerifyResponse;
 import me.sarahlacerda.gua.identityservice.domain.VerifyOtpResult;
 import me.sarahlacerda.gua.identityservice.security.AuthenticatedUserAccessor;
 import me.sarahlacerda.gua.identityservice.service.IdentityOrchestrationService;
+import me.sarahlacerda.gua.identityservice.service.PhoneNumberNormalizer;
 import me.sarahlacerda.gua.identityservice.service.RegistrationGuard;
 import me.sarahlacerda.gua.identityservice.service.security.TrustedDeviceService.DeviceMetadata;
 
@@ -41,21 +42,25 @@ public class OtpController {
     private final IdentityOrchestrationService orchestrationService;
     private final AuthenticatedUserAccessor authenticatedUserAccessor;
     private final RegistrationGuard registrationGuard;
+    private final PhoneNumberNormalizer phoneNumberNormalizer;
 
     @PostMapping("/send")
     @Operation(summary = "Send an OTP to a user's phone", description = "Creates a one-time password for the supplied phone number, applies rate limits, and dispatches the SMS using the client's preferred language when provided.", security = {})
     @ApiResponses({
             @ApiResponse(responseCode = "202", description = "OTP accepted and dispatched"),
-            @ApiResponse(responseCode = "400", description = "Validation failed", content = @Content),
-            @ApiResponse(responseCode = "429", description = "Rate limit exceeded", content = @Content)
+            @ApiResponse(responseCode = "400", description = "Validation failed, invalid_phone_number when the number does not parse or cannot receive texts, or phone_country_not_supported when codes are not texted to the number's country", content = @Content),
+            @ApiResponse(responseCode = "422", description = "The SMS provider refused the destination (sms_destination_unavailable, sms_recipient_opted_out)", content = @Content),
+            @ApiResponse(responseCode = "429", description = "rate_limited: a send limit is reached; Retry-After and retryAfterSeconds carry the wait", content = @Content),
+            @ApiResponse(responseCode = "503", description = "SMS provider unavailable (sms_unavailable); see Retry-After", content = @Content)
     })
     public ResponseEntity<Void> sendOtp(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Phone number to receive the OTP and optional language preference", required = true, content = @Content(schema = @Schema(implementation = OtpSendRequest.class))) @RequestBody @Valid OtpSendRequest request,
             @Parameter(hidden = true) HttpServletRequest servletRequest) {
         // Web gate (inert unless enabled): this endpoint has no login session, so it is always treated
         // as a web flow. An OTP is sent only for a known or allowlisted number.
-        registrationGuard.assertOtpAllowed(request.getPhone());
-        orchestrationService.sendOtp(request.getPhone(), servletRequest.getRemoteAddr(), request.getLanguage());
+        String phone = phoneNumberNormalizer.toE164(request.getPhone());
+        registrationGuard.assertOtpAllowed(phone);
+        orchestrationService.sendOtp(phone, servletRequest.getRemoteAddr(), request.getLanguage());
         return ResponseEntity.accepted().build();
     }
 
@@ -63,7 +68,7 @@ public class OtpController {
     @Operation(summary = "Verify an OTP and establish a Matrix session", description = "Validates the submitted OTP and either returns a Matrix session, a signupToken for brand-new users, or a pinChallengeToken for returning users with two-step verification enabled.", security = {})
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "OTP verified; session, signupToken, or pinChallengeToken returned", content = @Content(schema = @Schema(implementation = OtpVerifyResponse.class))),
-            @ApiResponse(responseCode = "400", description = "Invalid request payload", content = @Content),
+            @ApiResponse(responseCode = "400", description = "Invalid request payload or invalid_phone_number", content = @Content),
             @ApiResponse(responseCode = "401", description = "OTP invalid or expired", content = @Content),
             @ApiResponse(responseCode = "429", description = "Too many verification attempts", content = @Content)
     })
@@ -72,7 +77,7 @@ public class OtpController {
             @Parameter(hidden = true) HttpServletRequest servletRequest) {
         DeviceMetadata metadata = buildDeviceMetadata(request, servletRequest);
         VerifyOtpResult result = orchestrationService.verifyOtpAndSignIn(
-                request.getPhone(),
+                phoneNumberNormalizer.toE164(request.getPhone()),
                 request.getCode(),
                 request.getPin(),
                 metadata);
