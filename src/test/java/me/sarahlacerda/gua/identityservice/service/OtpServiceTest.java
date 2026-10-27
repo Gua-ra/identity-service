@@ -9,10 +9,10 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
+import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -28,7 +28,6 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.exception.InvalidOtpException;
 import me.sarahlacerda.gua.identityservice.exception.OtpRateLimitedException;
-import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
 import me.sarahlacerda.gua.identityservice.exception.SmsRefusedException;
 import me.sarahlacerda.gua.identityservice.exception.SmsUnavailableException;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -39,6 +38,8 @@ class OtpServiceTest {
     private static final String PHONE = "+12025550123";
     private static final String CODE_KEY = "otp:code:+12025550123";
     private static final String ATTEMPTS_KEY = "otp:attempts:+12025550123";
+    private static final SmsSendGuard.Admission ADMISSION = new SmsSendGuard.Admission(
+            List.of("otp:rate:sign-up:day", "otp:rate:ip:127.0.0.1", "otp:rate:phone:" + PHONE));
 
     @Mock
     private StringRedisTemplate redisTemplate;
@@ -53,7 +54,7 @@ class OtpServiceTest {
     private SmsSender smsSender;
 
     @Mock
-    private RateLimiter rateLimiter;
+    private SmsSendGuard sendGuard;
 
     private IdentityServiceProperties properties;
     private SimpleMeterRegistry metrics;
@@ -68,7 +69,7 @@ class OtpServiceTest {
                 new PhoneNumberNormalizer(), new PhoneNumberMasker(), metrics, org.mockito.Mockito.mock(DirectoryService.class),
                 org.mockito.Mockito.mock(PhoneNumberHasher.class), duration -> {
                 }, new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder());
-        otpService = new OtpService(redisTemplate, properties, codeGenerator, smsSender, rateLimiter, metrics,
+        otpService = new OtpService(redisTemplate, properties, codeGenerator, smsSender, sendGuard, metrics,
                 reviewLogin);
     }
 
@@ -79,13 +80,23 @@ class OtpServiceTest {
 
         otpService.sendOtp("+12025550123", "127.0.0.1", null);
 
-        verify(rateLimiter).checkRate("otp:rate:phone:+12025550123",
-                properties.getOtp().getMaxRequestsPerPhonePerHour(), Duration.ofHours(1));
-        verify(rateLimiter).checkRate("otp:rate:ip:127.0.0.1", properties.getOtp().getMaxRequestsPerIpPerHour(),
-                Duration.ofHours(1));
+        verify(sendGuard).admit("+12025550123", "127.0.0.1");
         verify(valueOperations).set(eq("otp:code:+12025550123"), eq("123456"), eq(properties.getOtp().getTtl()));
         verify(smsSender).send("+12025550123",
                 "Your Gua verification code is 123456. Never share this code with anyone. Gua support will never ask you for it.");
+    }
+
+    @Test
+    void anAccountSendIsAdmittedForTheAccountAndStoredUnderThePerPhoneKey() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("123456");
+
+        otpService.sendAccountOtp(PHONE, "127.0.0.1", null);
+
+        verify(sendGuard).admitForAccount(PHONE, "127.0.0.1");
+        Mockito.verifyNoMoreInteractions(sendGuard);
+        verify(valueOperations).set(eq(CODE_KEY), eq("123456"), eq(properties.getOtp().getTtl()));
+        verify(smsSender).send(eq(PHONE), anyString());
     }
 
     @Test
@@ -252,24 +263,16 @@ class OtpServiceTest {
     }
 
     @Test
-    void sendOtpTransformsRateLimiterExceptions() {
-        Mockito.doThrow(new RateLimiterException("fail")).when(rateLimiter)
-                .checkRate(eq("otp:rate:phone:+12025550123"), anyInt(), any(Duration.class));
+    void aRefusedSendStoresAndTextsNothing() {
+        Mockito.doThrow(new OtpRateLimitedException("Too many OTP requests", Duration.ofMinutes(5)))
+                .when(sendGuard).admit(PHONE, null);
 
-        assertThatThrownBy(() -> otpService.sendOtp("+12025550123", null, null))
+        assertThatThrownBy(() -> otpService.sendOtp(PHONE, null, null))
                 .isInstanceOf(OtpRateLimitedException.class);
-    }
 
-    @Test
-    void sendOtpSkipsIpRateLimitWhenIpMissing() {
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("999999");
-
-        otpService.sendOtp("+12025550123", null, null);
-
-        verify(rateLimiter).checkRate("otp:rate:phone:+12025550123",
-                properties.getOtp().getMaxRequestsPerPhonePerHour(), Duration.ofHours(1));
-        verifyNoMoreInteractions(rateLimiter);
+        verify(codeGenerator, never()).generateNumericCode(anyInt());
+        verify(redisTemplate, never()).delete(ATTEMPTS_KEY);
+        verify(smsSender, never()).send(anyString(), anyString());
     }
 
     @Test
@@ -335,14 +338,14 @@ class OtpServiceTest {
     void aRefusedSendGivesBackItsBudgetAndDropsTheCodeNobodyReceived() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("123456");
+        when(sendGuard.admit(PHONE, "127.0.0.1")).thenReturn(ADMISSION);
         Mockito.doThrow(new SmsRefusedException(SmsRefusedException.Reason.DESTINATION_UNAVAILABLE))
                 .when(smsSender).send(eq(PHONE), anyString());
 
         assertThatThrownBy(() -> otpService.sendOtp(PHONE, "127.0.0.1", null))
                 .isInstanceOf(SmsRefusedException.class);
 
-        verify(rateLimiter).refund("otp:rate:phone:" + PHONE);
-        verify(rateLimiter).refund("otp:rate:ip:127.0.0.1");
+        verify(sendGuard).refund(ADMISSION);
         verify(redisTemplate).delete(CODE_KEY);
         assertThat(smsCount("failed")).isEqualTo(1.0);
         assertThat(smsCount("sent")).isZero();
@@ -353,6 +356,7 @@ class OtpServiceTest {
     void everyRefusalReasonIsCountedUnderItsOwnTag() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("123456");
+        when(sendGuard.admit(PHONE, "127.0.0.1")).thenReturn(ADMISSION);
         for (SmsRefusedException.Reason reason : SmsRefusedException.Reason.values()) {
             Mockito.doThrow(new SmsRefusedException(reason)).when(smsSender).send(eq(PHONE), anyString());
 
@@ -363,7 +367,7 @@ class OtpServiceTest {
             assertThat(refusedCount(reason.tagValue())).isEqualTo(1.0);
         }
         int reasons = SmsRefusedException.Reason.values().length;
-        verify(rateLimiter, times(reasons)).refund("otp:rate:phone:" + PHONE);
+        verify(sendGuard, times(reasons)).refund(ADMISSION);
         assertThat(smsCount("failed")).isEqualTo(reasons);
     }
 
@@ -371,20 +375,23 @@ class OtpServiceTest {
     void aRefusedSendWithoutAnAddressRefundsTheNumberOnly() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("123456");
+        SmsSendGuard.Admission numberOnly = new SmsSendGuard.Admission(List.of("otp:rate:phone:" + PHONE));
+        when(sendGuard.admit(PHONE, null)).thenReturn(numberOnly);
         Mockito.doThrow(new SmsRefusedException(SmsRefusedException.Reason.RECIPIENT_OPTED_OUT))
                 .when(smsSender).send(eq(PHONE), anyString());
 
         assertThatThrownBy(() -> otpService.sendOtp(PHONE, null, null)).isInstanceOf(SmsRefusedException.class);
 
-        verify(rateLimiter).checkRate(eq("otp:rate:phone:" + PHONE), anyInt(), any(Duration.class));
-        verify(rateLimiter).refund("otp:rate:phone:" + PHONE);
-        verifyNoMoreInteractions(rateLimiter);
+        verify(sendGuard).admit(PHONE, null);
+        verify(sendGuard).refund(numberOnly);
+        Mockito.verifyNoMoreInteractions(sendGuard);
     }
 
     @Test
     void aRefusedScopedSendDropsTheScopedCodeAndGivesBackItsBudget() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("123456");
+        when(sendGuard.admitForAccount(PHONE, "127.0.0.1")).thenReturn(ADMISSION);
         Mockito.doThrow(new SmsRefusedException(SmsRefusedException.Reason.INVALID_NUMBER))
                 .when(smsSender).send(eq(PHONE), anyString());
 
@@ -393,8 +400,37 @@ class OtpServiceTest {
 
         verify(redisTemplate).delete("otp:code:pin-change:chal-1");
         verify(redisTemplate, never()).delete(CODE_KEY);
-        verify(rateLimiter).refund("otp:rate:phone:" + PHONE);
-        verify(rateLimiter).refund("otp:rate:ip:127.0.0.1");
+        verify(sendGuard).refund(ADMISSION);
+    }
+
+    @Test
+    void aRefusedAccountSendGivesBackWhatTheAccountAdmissionCharged() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("123456");
+        when(sendGuard.admitForAccount(PHONE, "127.0.0.1")).thenReturn(ADMISSION);
+        Mockito.doThrow(new SmsRefusedException(SmsRefusedException.Reason.DESTINATION_UNAVAILABLE))
+                .when(smsSender).send(eq(PHONE), anyString());
+
+        assertThatThrownBy(() -> otpService.sendAccountOtp(PHONE, "127.0.0.1", null))
+                .isInstanceOf(SmsRefusedException.class);
+
+        verify(sendGuard).refund(ADMISSION);
+        verify(redisTemplate).delete(CODE_KEY);
+    }
+
+    @Test
+    void aSentCodeKeepsEveryCounterItsAdmissionCharged() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(codeGenerator.generateNumericCode(properties.getOtp().getCodeLength())).thenReturn("123456");
+        when(sendGuard.admit(PHONE, "127.0.0.1")).thenReturn(ADMISSION);
+        when(sendGuard.admitForAccount(PHONE, "127.0.0.1")).thenReturn(ADMISSION);
+
+        otpService.sendOtp(PHONE, "127.0.0.1", null);
+        otpService.sendAccountOtp(PHONE, "127.0.0.1", null);
+        otpService.sendScopedOtp(OtpScope.PIN_CHANGE, "chal-1", PHONE, "127.0.0.1", null);
+
+        verify(sendGuard, never()).refund(any());
+        assertThat(smsCount("sent")).isEqualTo(3.0);
     }
 
     @Test
@@ -408,7 +444,7 @@ class OtpServiceTest {
                 .isInstanceOf(SmsUnavailableException.class);
 
         // The text may have gone out, so the send keeps its place in the budget and its code.
-        verify(rateLimiter, never()).refund(anyString());
+        verify(sendGuard, never()).refund(any());
         verify(redisTemplate, never()).delete(CODE_KEY);
         assertThat(smsCount("failed")).isEqualTo(1.0);
         assertThat(metrics.find("gua.identity.sms.refused").counters()).isEmpty();
@@ -430,11 +466,8 @@ class OtpServiceTest {
         verify(valueOperations, never()).set(eq(CODE_KEY), anyString(), any());
         verify(redisTemplate).delete("otp:attempts:pin-change:chal-1");
         verify(redisTemplate, never()).delete(ATTEMPTS_KEY);
-        // Same send limits as the public path: namespacing the code is not an exemption.
-        verify(rateLimiter).checkRate("otp:rate:phone:" + PHONE,
-                properties.getOtp().getMaxRequestsPerPhonePerHour(), Duration.ofHours(1));
-        verify(rateLimiter).checkRate("otp:rate:ip:127.0.0.1", properties.getOtp().getMaxRequestsPerIpPerHour(),
-                Duration.ofHours(1));
+        // Namespacing the code is not an exemption from the send limits; it is the account's own number.
+        verify(sendGuard).admitForAccount(PHONE, "127.0.0.1");
         verify(smsSender).send(eq(PHONE), anyString());
     }
 
