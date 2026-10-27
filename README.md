@@ -105,6 +105,7 @@ Every SMS passes `SmsSendGuard` before the provider is called, and every spellin
 | Environment variable | Default | Limits |
 | --- | --- | --- |
 | `IDENTITY_OTP_MAX_PHONE_PER_HOUR` | 5 | Sends to one number per hour. |
+| `IDENTITY_OTP_MAX_PHONE_PER_DAY` | 0 (none) | Sends to one number per day, from any address. |
 | `IDENTITY_OTP_MAX_IP_PER_HOUR` | 10 | Sends from one client address per hour. |
 | `IDENTITY_OTP_MAX_SIGN_UP_SENDS_PER_HOUR` | 0 (none) | Sends to numbers without an account, across every number and address. |
 | `IDENTITY_OTP_MAX_SIGN_UP_SENDS_PER_DAY` | 0 (none) | The same, per day. |
@@ -112,6 +113,8 @@ Every SMS passes `SmsSendGuard` before the provider is called, and every spellin
 | `IDENTITY_OTP_MAX_ACCOUNT_SENDS_PER_DAY` | 0 (none) | The same, per day. |
 | `IDENTITY_OTP_ALLOWED_COUNTRIES` | empty (every region) | ISO 3166-1 alpha-2 regions, comma separated, matched on the number's own region (JE, GG and IM are not GB). |
 | `IDENTITY_DIRECTORY_MAX_LOOKUPS_PER_ACCOUNT_PER_HOUR` | 0 (none) | `/directory/lookup` calls per account, from any address. |
+
+Every send the guard admits is also counted by destination in `gua_identity_sms_admitted_total{country,budget}`, including sends the provider later reports as undelivered.
 
 The allowlist applies to existing accounts too, and an unknown region code stops startup. Enable the same regions in the SMS provider's geographic permissions. For an event on a shared network, raise the sign-up ceilings before the per-address limit.
 
