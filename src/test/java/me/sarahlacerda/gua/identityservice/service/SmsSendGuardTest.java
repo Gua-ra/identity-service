@@ -6,8 +6,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterAll;
@@ -21,6 +27,7 @@ import org.springframework.boot.context.properties.source.ConfigurationPropertyS
 import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.core.env.MutablePropertySources;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -126,6 +133,7 @@ class SmsSendGuardTest {
                 otp.getMaxAccountSendsPerHour(), otp.getMaxAccountSendsPerDay(),
                 directory.getMaxLookupsPerAccountPerHour())).containsOnly(0);
         assertThat(otp.getMaxRequestsPerPhonePerHour()).isEqualTo(5);
+        assertThat(otp.getMaxRequestsPerPhonePerDay()).isZero();
         assertThat(otp.getMaxRequestsPerIpPerHour()).isEqualTo(10);
     }
 
@@ -186,6 +194,46 @@ class SmsSendGuardTest {
     }
 
     @Test
+    void parallelSendsNeverOvershootACeiling() throws Exception {
+        properties.getOtp().setMaxSignUpSendsPerHour(10);
+        int senders = 48;
+        ExecutorService pool = Executors.newFixedThreadPool(16);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<Boolean>> results = new ArrayList<>();
+            for (int i = 0; i < senders; i++) {
+                String number = String.format("+160422599%02d", i);
+                String address = "198.51.100." + i;
+                Callable<Boolean> send = () -> {
+                    start.await();
+                    try {
+                        guard.admit(number, address);
+                        return true;
+                    } catch (OtpRateLimitedException refused) {
+                        return false;
+                    }
+                };
+                results.add(pool.submit(send));
+            }
+            start.countDown();
+            long admitted = 0;
+            for (Future<Boolean> result : results) {
+                if (result.get(30, TimeUnit.SECONDS)) {
+                    admitted++;
+                }
+            }
+
+            assertThat(admitted).isEqualTo(10);
+            assertThat(count(SmsSendGuard.SIGN_UP_HOURLY_KEY)).isEqualTo(10);
+            assertThat(refusals(SmsSendGuard.Refusal.SIGN_UP_HOURLY_CEILING)).isEqualTo(senders - 10.0);
+            // A refused send charged no number or address of its own.
+            assertThat(redisTemplate.keys(SmsSendGuard.PHONE_KEY_PREFIX + "*")).hasSize(10);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     void aCounterFoundWithoutAnExpiryIsGivenOne() {
         redisTemplate.opsForValue().set(SmsSendGuard.SIGN_UP_HOURLY_KEY, "0");
 
@@ -193,6 +241,59 @@ class SmsSendGuardTest {
 
         assertThat(redisTemplate.getExpire(SmsSendGuard.SIGN_UP_HOURLY_KEY, TimeUnit.SECONDS))
                 .isBetween(3500L, 3600L);
+    }
+
+    // -------------------- per-number day --------------------
+
+    @Test
+    void theDailyNumberLimitHoldsWhenTheHourlyWindowEnds() throws InterruptedException {
+        properties.getOtp().setMaxRequestsPerPhonePerDay(2);
+        guard.admit(CA, ADDRESS);
+        guard.admit(CA, OTHER_ADDRESS);
+
+        endWindow(SmsSendGuard.PHONE_KEY_PREFIX + CA);
+
+        assertThatThrownBy(() -> guard.admit(CA, "192.0.2.1"))
+                .isInstanceOfSatisfying(OtpRateLimitedException.class, refused -> {
+                    assertThat(refused.getMessage()).isEqualTo("Too many OTP requests");
+                    assertThat(refused.getRetryAfter()).isGreaterThan(Duration.ofHours(23));
+                });
+        assertThat(refusals(SmsSendGuard.Refusal.PHONE_DAILY)).isEqualTo(1.0);
+        // The refused send spent none of the ceilings or of the new address's budget.
+        assertThat(count(SmsSendGuard.SIGN_UP_HOURLY_KEY)).isEqualTo(2);
+        assertThat(redisTemplate.hasKey(SmsSendGuard.IP_KEY_PREFIX + "192.0.2.1")).isFalse();
+        // Other numbers keep their own day.
+        assertThatCode(() -> guard.admit(US, "192.0.2.1")).doesNotThrowAnyException();
+    }
+
+    @Test
+    void theDailyNumberLimitCoversSignedInAccountSends() {
+        properties.getOtp().setMaxRequestsPerPhonePerDay(1);
+        hasAccount(BR);
+        guard.admit(BR, ADDRESS);
+
+        assertThatThrownBy(() -> guard.admitForAccount(BR, OTHER_ADDRESS)).isInstanceOf(OtpRateLimitedException.class);
+        assertThat(refusals(SmsSendGuard.Refusal.PHONE_DAILY)).isEqualTo(1.0);
+    }
+
+    @Test
+    void aSignInThatTextsNothingSkipsTheDailyNumberLimit() {
+        properties.getOtp().setMaxRequestsPerPhonePerDay(1);
+        guard.admitWithoutSms(US, ADDRESS);
+        guard.admitWithoutSms(US, OTHER_ADDRESS);
+
+        assertThat(redisTemplate.hasKey(SmsSendGuard.PHONE_DAILY_KEY_PREFIX + US)).isFalse();
+    }
+
+    @Test
+    void aRefundGivesBackTheNumbersDay() {
+        properties.getOtp().setMaxRequestsPerPhonePerDay(1);
+        SmsSendGuard.Admission admission = guard.admit(BR, ADDRESS);
+        assertThat(admission.keys()).contains(SmsSendGuard.PHONE_DAILY_KEY_PREFIX + BR);
+
+        guard.refund(admission);
+
+        assertThatCode(() -> guard.admit(BR, OTHER_ADDRESS)).doesNotThrowAnyException();
     }
 
     // -------------------- sign-up and account budgets --------------------
@@ -291,6 +392,25 @@ class SmsSendGuardTest {
 
         assertThat(redisTemplate.keys("otp:*")).isEmpty();
         assertThat(refusals(SmsSendGuard.Refusal.COUNTRY)).isEqualTo(2.0);
+    }
+
+    @Test
+    void admittedSendsAreCountedByDestinationAndBudget() {
+        hasAccount(BR);
+        guard.admit("+212650123456", ADDRESS);
+        guard.admit("+212650123457", OTHER_ADDRESS);
+        guard.admit(BR, ADDRESS);
+        guard.admitForAccount(CA, ADDRESS);
+        guard.admitWithoutSms(US, ADDRESS);
+        properties.getOtp().setMaxRequestsPerPhonePerHour(1);
+        assertThatThrownBy(() -> guard.admit("+212650123456", "192.0.2.1"))
+                .isInstanceOf(OtpRateLimitedException.class);
+
+        assertThat(admitted("MA", "sign_up")).isEqualTo(2.0);
+        assertThat(admitted("BR", "account")).isEqualTo(1.0);
+        assertThat(admitted("CA", "account")).isEqualTo(1.0);
+        // A send that texts nothing is not a destination.
+        assertThat(metrics.find("gua.identity.sms.admitted").tag("country", "US").counter()).isNull();
     }
 
     @Test
@@ -524,6 +644,27 @@ class SmsSendGuardTest {
     }
 
     @Test
+    void aRedisOutageSendsNothing() {
+        LettuceConnectionFactory unreachable = new LettuceConnectionFactory(
+                new RedisStandaloneConfiguration(redis.getHost(), 1));
+        unreachable.afterPropertiesSet();
+        unreachable.start();
+        try {
+            redisTemplate = new StringRedisTemplate(unreachable);
+            redisTemplate.afterPropertiesSet();
+            guard = newGuard();
+            SmsSender provider = Mockito.mock(SmsSender.class);
+            OtpService otpService = otpService(provider);
+
+            assertThatThrownBy(() -> otpService.sendOtp(BR, ADDRESS, "pt-BR"))
+                    .isInstanceOf(DataAccessException.class);
+            Mockito.verifyNoInteractions(provider);
+        } finally {
+            unreachable.destroy();
+        }
+    }
+
+    @Test
     void aSignUpFloodDoesNotStopAnExistingAccountsSignIn() {
         properties.getOtp().setMaxSignUpSendsPerHour(1);
         SmsSender provider = Mockito.mock(SmsSender.class);
@@ -587,6 +728,12 @@ class SmsSendGuardTest {
     private long count(String key) {
         String value = redisTemplate.opsForValue().get(key);
         return value == null ? 0 : Long.parseLong(value);
+    }
+
+    private double admitted(String country, String budget) {
+        Counter counter = metrics.find("gua.identity.sms.admitted").tag("country", country).tag("budget", budget)
+                .counter();
+        return counter == null ? 0.0 : counter.count();
     }
 
     private double refusals(SmsSendGuard.Refusal refusal) {
