@@ -75,15 +75,8 @@ class LoginFactorEnrollmentServiceTest {
     }
 
     /**
-     * The PIN added from settings, after the enrollment step-up. A passkey on the account is no
-     * obstacle here, unlike at first-factor setup: producing it is what authorized this, and
-     * adding the PIN underneath it is the point.
-     *
-     * <p>
-     * And it starts its fresh-factor hold like any other PIN. A PIN added minutes ago from a
-     * session an attacker holds must not be spendable straight away as the step-up that
-     * re-points the phone number, so the stamp is asserted here rather than left to fall out of
-     * the write path this happens to share with the others.
+     * The PIN added from settings, after the enrollment step-up. A passkey on the account is no obstacle
+     * here, and the new PIN starts its fresh-factor hold like any other.
      */
     @Test
     void anEnrolledPinIsSetOnAnAccountThatHoldsAPasskey() {

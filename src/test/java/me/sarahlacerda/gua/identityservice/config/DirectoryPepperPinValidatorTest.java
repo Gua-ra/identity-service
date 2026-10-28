@@ -17,8 +17,7 @@ class DirectoryPepperPinValidatorTest {
     }
 
     private String fingerprintOf(String pepper) throws Exception {
-        // Use the validator itself (unpinned) to surface the canonical fingerprint by
-        // reflection so the test never hardcodes a derived value.
+        // Computed through the validator by reflection so the test never hardcodes a derived value.
         Method m = DirectoryPepperPinValidator.class.getDeclaredMethod("fingerprint", String.class);
         m.setAccessible(true);
         return (String) m.invoke(null, pepper);
@@ -44,7 +43,6 @@ class DirectoryPepperPinValidatorTest {
     @Test
     void failsFastWhenPepperRotatedAwayFromPinnedFingerprint() throws Exception {
         String pinnedFor = fingerprintOf("the-original-pepper");
-        // Service is now configured with a DIFFERENT (rotated/drifted) pepper.
         DirectoryPepperPinValidator validator =
                 new DirectoryPepperPinValidator(propertiesWith("a-rotated-pepper", pinnedFor));
 

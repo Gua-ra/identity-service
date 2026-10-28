@@ -3,15 +3,9 @@ package me.sarahlacerda.gua.identityservice.metrics;
 import java.util.List;
 
 /**
- * Where a verified code was spent, as the {@code flow} tag of
- * {@code gua_identity_otp_verify_total}.
- *
- * <p>
- * One place, because Micrometer keys a meter by its name alone: a counter name first
- * registered with {@code [result]} refuses every later registration that carries
- * {@code [result, flow]}, and the refusal is one warning followed by silence. That is
- * how the phone-change flow's verify counter came to record nothing at all. Anything
- * that verifies a code tags it from here, so the tag set cannot drift apart again.
+ * Where a verified code was spent, as the {@code flow} tag of {@code gua_identity_otp_verify_total}.
+ * Micrometer keys a meter by name alone and refuses a later registration with different tag keys, so
+ * everything that verifies a code tags it from here.
  */
 public enum OtpVerifyFlow {
 

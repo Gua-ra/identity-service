@@ -15,10 +15,16 @@ import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 
+import me.sarahlacerda.gua.identityservice.exception.OtpRateLimitedException;
 import me.sarahlacerda.gua.identityservice.exception.PhoneChangeCooldownException;
+import me.sarahlacerda.gua.identityservice.exception.RateLimiterException;
+import me.sarahlacerda.gua.identityservice.exception.SmsRefusedException;
+import me.sarahlacerda.gua.identityservice.exception.SmsUnavailableException;
 import me.sarahlacerda.gua.identityservice.exception.TwoFactorCooldownException;
+import me.sarahlacerda.gua.identityservice.exception.UnsupportedPhoneCountryException;
 import me.sarahlacerda.gua.identityservice.web.ratelimit.EndpointRateLimiter;
 
 @WebMvcTest(controllers = RestExceptionHandlerTest.FailingController.class)
@@ -50,10 +56,8 @@ class RestExceptionHandlerTest {
     }
 
     /**
-     * The wire shape of the fresh-2FA refusal. Both clients already carry the
-     * {@code twofa_cooldown_active} code and read {@code retryAfterSeconds} from the body
-     * with the header as a fallback, so this is the contract they were written against
-     * rather than a new one.
+     * The wire shape of the fresh-2FA refusal: clients read {@code retryAfterSeconds} from the body,
+     * with the header as a fallback.
      */
     @Test
     void aFreshFactorRefusalCarriesTheCodeAndTheWaitBothClientsRead() throws Exception {
@@ -75,6 +79,31 @@ class RestExceptionHandlerTest {
             .andExpect(jsonPath("$.code").value("phone_change_cooldown"));
     }
 
+    @Test
+    void aRefusedSendCarriesTheWaitRoundedUpToWholeSeconds() throws Exception {
+        mockMvc.perform(get("/_test/sms-ceiling"))
+            .andExpect(status().isTooManyRequests())
+            .andExpect(jsonPath("$.code").value("rate_limited"))
+            .andExpect(jsonPath("$.retryAfterSeconds").value(3541))
+            .andExpect(header().string("Retry-After", "3541"));
+    }
+
+    @Test
+    void aRateLimitWithNoKnownWaitHasNoRetryAfter() throws Exception {
+        mockMvc.perform(get("/_test/reauth-budget"))
+            .andExpect(status().isTooManyRequests())
+            .andExpect(jsonPath("$.code").value("rate_limited"))
+            .andExpect(jsonPath("$.retryAfterSeconds").doesNotExist())
+            .andExpect(header().doesNotExist("Retry-After"));
+    }
+
+    @Test
+    void aDestinationOutsideTheAllowedCountriesIsABadRequestWithItsOwnCode() throws Exception {
+        mockMvc.perform(get("/_test/unsupported-country"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("phone_country_not_supported"));
+    }
+
     /** Error bodies that carry no wait do not grow the field. */
     @Test
     void anUnrelatedErrorBodyIsUnchanged() throws Exception {
@@ -82,8 +111,48 @@ class RestExceptionHandlerTest {
             .andExpect(jsonPath("$.retryAfterSeconds").doesNotExist());
     }
 
+    @Test
+    void aDestinationTheProviderCannotReachIs422WithAPlainMessage() throws Exception {
+        mockMvc.perform(get("/_test/sms-refused/DESTINATION_UNAVAILABLE"))
+            .andExpect(status().isUnprocessableEntity())
+            .andExpect(jsonPath("$.code").value("sms_destination_unavailable"))
+            .andExpect(jsonPath("$.message").value("We can't send a text to this number's country yet."));
+    }
+
+    @Test
+    void aNumberTheProviderCallsInvalidIsTheExistingInvalidNumberError() throws Exception {
+        mockMvc.perform(get("/_test/sms-refused/INVALID_NUMBER"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("invalid_phone_number"));
+    }
+
+    @Test
+    void anOptedOutRecipientIs422WithItsOwnCode() throws Exception {
+        mockMvc.perform(get("/_test/sms-refused/RECIPIENT_OPTED_OUT"))
+            .andExpect(status().isUnprocessableEntity())
+            .andExpect(jsonPath("$.code").value("sms_recipient_opted_out"));
+    }
+
+    @Test
+    void anUnavailableProviderIs503WithRetryAfter() throws Exception {
+        mockMvc.perform(get("/_test/sms-unavailable"))
+            .andExpect(status().isServiceUnavailable())
+            .andExpect(header().string("Retry-After", "60"))
+            .andExpect(jsonPath("$.code").value("sms_unavailable"));
+    }
+
     @RestController
     static class FailingController {
+
+        @GetMapping("/_test/sms-refused/{reason}")
+        public String smsRefused(@PathVariable SmsRefusedException.Reason reason) {
+            throw new SmsRefusedException(reason);
+        }
+
+        @GetMapping("/_test/sms-unavailable")
+        public String smsUnavailable() {
+            throw new SmsUnavailableException("SMS provider unavailable");
+        }
 
         @GetMapping("/_test/fresh-2fa")
         public String freshTwoFactor() {
@@ -93,6 +162,22 @@ class RestExceptionHandlerTest {
         @GetMapping("/_test/change-cooldown")
         public String changeCooldown() {
             throw new PhoneChangeCooldownException("Phone change cooldown active", 3600);
+        }
+
+        @GetMapping("/_test/sms-ceiling")
+        public String smsCeiling() {
+            throw new OtpRateLimitedException("Verification codes are temporarily unavailable",
+                    java.time.Duration.ofMillis(3_540_001));
+        }
+
+        @GetMapping("/_test/reauth-budget")
+        public String reauthBudget() {
+            throw new RateLimiterException("Too many attempts to confirm your number; try again later");
+        }
+
+        @GetMapping("/_test/unsupported-country")
+        public String unsupportedCountry() {
+            throw new UnsupportedPhoneCountryException("Verification codes cannot be sent to this country");
         }
 
         @GetMapping("/_test/redis-down")

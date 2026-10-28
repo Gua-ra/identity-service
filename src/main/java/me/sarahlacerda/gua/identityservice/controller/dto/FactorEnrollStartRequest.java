@@ -10,16 +10,9 @@ import lombok.Setter;
 public class FactorEnrollStartRequest {
 
     /**
-     * Where the enrollment sheet hands back to when the ceremony completes: the app scheme this
-     * build of the app answers. Each build answers its own, and the server cannot tell which
-     * build is calling, because the bearer token is a homeserver token that names no OIDC
-     * client of ours.
-     *
-     * <p>
-     * It is bounded by the deployment's allowlist
-     * ({@code idp.login.enroll.redirect-uris}): a value that is not on it is refused with
-     * {@code 400 invalid_redirect_uri} rather than honoured. Omit the field to keep the
-     * deployment's own resolution.
+     * Where the enrollment sheet returns when the ceremony completes: the app scheme this build
+     * answers. Bounded by {@code idp.login.enroll.redirect-uris}; a value not on the list is refused
+     * with {@code 400 invalid_redirect_uri}. Omit the field to use the deployment default.
      */
     @Schema(description = "App-scheme redirect this build answers. Must be one the deployment allows, or the call is refused with invalid_redirect_uri.", example = "global.gua.dev:/oidc")
     private String redirectUri;

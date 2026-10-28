@@ -2,103 +2,139 @@ package me.sarahlacerda.gua.identityservice.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.twilio.Twilio;
-import com.twilio.http.Request;
-import com.twilio.http.Response;
-import com.twilio.http.TwilioRestClient;
-
-import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.filter.Filter;
 import ch.qos.logback.core.read.ListAppender;
-import ch.qos.logback.core.spi.FilterReply;
-import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
-import me.sarahlacerda.gua.identityservice.exception.SmsDeliveryException;
 
-/** A Twilio send, accepted or refused, never writes the code, the message or the whole number to any log. */
+import com.twilio.exception.ApiConnectionException;
+import com.twilio.exception.ApiException;
+import com.twilio.exception.TwilioException;
+import com.twilio.type.PhoneNumber;
+
+import me.sarahlacerda.gua.identityservice.exception.SmsRefusedException;
+import me.sarahlacerda.gua.identityservice.exception.SmsRefusedException.Reason;
+import me.sarahlacerda.gua.identityservice.exception.SmsUnavailableException;
+
 class TwilioSmsSenderTest {
 
-    private static final String PHONE = "+16042259911";
-    private static final String CODE = "482913";
-    private static final String AUTH_TOKEN = "twilio-auth-token-under-test";
-    private static final String TWILIO_TEXT = "The 'To' number " + PHONE + " is not a valid phone number.";
+    private static final String PHONE = "+46701740605";
+    private static final String BODY = "Your Gua verification code is 482913.";
 
     private final ListAppender<ILoggingEvent> logs = new ListAppender<>();
-    private final Logger root = (Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
-    private final TwilioRestClient twilio = mock(TwilioRestClient.class);
-    private TwilioSmsSender sender;
-    private String body;
+    private final Logger logger = (Logger) LoggerFactory.getLogger(TwilioSmsSender.class);
 
     @BeforeEach
-    void setUp() {
-        String testThread = Thread.currentThread().getName();
-        // Spring contexts left by other test classes keep logging to the root logger from their own threads.
-        logs.addFilter(new Filter<>() {
-            @Override
-            public FilterReply decide(ILoggingEvent event) {
-                return testThread.equals(event.getThreadName()) ? FilterReply.NEUTRAL : FilterReply.DENY;
-            }
-        });
+    void captureLogs() {
         logs.start();
-        root.addAppender(logs);
-        IdentityServiceProperties properties = new IdentityServiceProperties();
-        IdentityServiceProperties.SmsProperties.TwilioProperties twilioProperties = properties.getSms().getTwilio();
-        twilioProperties.setEnabled(true);
-        twilioProperties.setAccountSid("ACtest");
-        twilioProperties.setAuthToken(AUTH_TOKEN);
-        twilioProperties.setFromNumber("+15005550006");
-        sender = new TwilioSmsSender(properties);
-        Twilio.setRestClient(twilio);
-        when(twilio.getAccountSid()).thenReturn("ACtest");
-        when(twilio.getObjectMapper()).thenReturn(new ObjectMapper());
-        body = SmsTemplates.forLanguage(properties.getOtp(), "en").formatted(CODE);
+        logger.addAppender(logs);
     }
 
     @AfterEach
-    void tearDown() {
-        root.detachAppender(logs);
-        Twilio.setRestClient(null);
-        assertThat(logs.list).allSatisfy(event -> {
-            assertThat(event.getFormattedMessage())
-                    .doesNotContain(CODE).doesNotContain(PHONE).doesNotContain(TWILIO_TEXT).doesNotContain(AUTH_TOKEN);
+    void releaseLogs() {
+        logger.detachAppender(logs);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = { 21408, 21606, 21612, 21659 })
+    void aDestinationTheAccountCannotReachIsRefusedAsUnavailable(int code) {
+        assertRefused(code, Reason.DESTINATION_UNAVAILABLE);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = { 21211, 21614 })
+    void anInvalidOrNonMobileNumberIsRefusedAsInvalid(int code) {
+        assertRefused(code, Reason.INVALID_NUMBER);
+    }
+
+    @Test
+    void anOptedOutRecipientIsRefusedAsOptedOut() {
+        assertRefused(21610, Reason.RECIPIENT_OPTED_OUT);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = { 20003, 20429, 21704, 30001 })
+    void anyOtherApiErrorIsAnUnavailableProvider(int code) {
+        TwilioSmsSender sender = failingWith(apiError(code));
+
+        assertThatThrownBy(() -> sender.send(PHONE, BODY))
+                .isExactlyInstanceOf(SmsUnavailableException.class)
+                .hasNoCause();
+        assertLogsKeepTheNumberAndTwilioMessageOut();
+    }
+
+    @Test
+    void aConnectionFailureIsAnUnavailableProvider() {
+        TwilioSmsSender sender = failingWith(new ApiConnectionException("Connection Error: POST to " + PHONE));
+
+        assertThatThrownBy(() -> sender.send(PHONE, BODY))
+                .isExactlyInstanceOf(SmsUnavailableException.class)
+                .hasNoCause();
+        assertLogsKeepTheNumberAndTwilioMessageOut();
+    }
+
+    @Test
+    void anErrorWithoutACodeIsAnUnavailableProvider() {
+        TwilioSmsSender sender = failingWith(new ApiException("The 'To' number " + PHONE + " failed"));
+
+        assertThatThrownBy(() -> sender.send(PHONE, BODY)).isExactlyInstanceOf(SmsUnavailableException.class);
+    }
+
+    @Test
+    void aSuccessfulSendTextsTheNumberAndLogsNothing() {
+        AtomicReference<String> texted = new AtomicReference<>();
+        TwilioSmsSender sender = new TwilioSmsSender(new PhoneNumberMasker(),
+                (to, body) -> texted.set(to.getEndpoint() + "|" + body));
+
+        sender.send(PHONE, BODY);
+
+        assertThat(texted.get()).isEqualTo(PHONE + "|" + BODY);
+        assertThat(logs.list).isEmpty();
+    }
+
+    @Test
+    void theProviderTagStaysTwilio() {
+        assertThat(SmsSender.providerTag(failingWith(apiError(21408)))).isEqualTo("twilio");
+    }
+
+    private void assertRefused(int code, Reason reason) {
+        TwilioSmsSender sender = failingWith(apiError(code));
+
+        assertThatThrownBy(() -> sender.send(PHONE, BODY))
+                .isInstanceOfSatisfying(SmsRefusedException.class,
+                        ex -> assertThat(ex.getReason()).isEqualTo(reason))
+                .hasNoCause();
+        assertLogsKeepTheNumberAndTwilioMessageOut();
+        assertThat(logs.list).singleElement()
+                .satisfies(event -> assertThat(event.getFormattedMessage()).contains("••••0605")
+                        .contains("code=" + code).contains(reason.tagValue()));
+    }
+
+    private void assertLogsKeepTheNumberAndTwilioMessageOut() {
+        assertThat(logs.list).isNotEmpty().allSatisfy(event -> {
+            assertThat(event.getFormattedMessage()).doesNotContain(PHONE).doesNotContain("'To' number");
             assertThat(event.getThrowableProxy()).isNull();
         });
     }
 
-    @Test
-    void anAcceptedMessageIsNotLogged() {
-        when(twilio.request(any(Request.class)))
-                .thenReturn(new Response("{\"sid\":\"SM00000000000000000000000000000000\",\"status\":\"queued\"}", 201));
-        int before = logs.list.size();
-
-        sender.send(PHONE, body);
-
-        assertThat(logs.list).hasSize(before);
+    /** Twilio's messages quote the destination, as its API does for 21211 and 21614. */
+    private static ApiException apiError(int code) {
+        return new ApiException("The 'To' number " + PHONE + " is not reachable", code,
+                "https://www.twilio.com/docs/errors/" + code, 400, null);
     }
 
-    @Test
-    void aRefusedMessageLogsAndThrowsTwiliosErrorCodeAndNeverItsText() {
-        when(twilio.request(any(Request.class))).thenReturn(new Response("{\"code\":21211,\"message\":\"" + TWILIO_TEXT
-                + "\",\"more_info\":\"https://www.twilio.com/docs/errors/21211\",\"status\":400}", 400));
-
-        assertThatThrownBy(() -> sender.send(PHONE, body))
-                .isInstanceOf(SmsDeliveryException.class)
-                .hasMessage("Twilio refused the SMS: error 21211 (HTTP 400)")
-                .hasNoCause();
-
-        assertThat(logs.list).filteredOn(event -> event.getLevel() == Level.ERROR).singleElement()
-                .satisfies(event -> assertThat(event.getFormattedMessage())
-                        .isEqualTo("Failed to send SMS via Twilio to ***9911: error 21211 (HTTP 400)"));
+    private static TwilioSmsSender failingWith(TwilioException failure) {
+        return new TwilioSmsSender(new PhoneNumberMasker(), (PhoneNumber to, String body) -> {
+            throw failure;
+        });
     }
 }

@@ -52,8 +52,7 @@ class PhoneChangeServiceTest {
     private static final String NEW_E164 = "+14155550123";
     private static final String CHALLENGE = "chal-1";
     private static final String CHALLENGE_KEY = "phone:change:chal-1";
-    // Old enough that the fresh-2FA hold on the credential has long expired, so these tests
-    // are about precedence and ownership rather than about the hold. The hold has its own.
+    // Old enough that the fresh-2FA hold on the credential has expired. The hold has its own tests.
     private static final Instant REGISTERED_LONG_AGO = Instant.now().minus(Duration.ofDays(400));
 
     @Mock
@@ -96,9 +95,7 @@ class PhoneChangeServiceTest {
                 redisTemplate,
                 reauthService,
                 userSecurityService,
-                // The real policy over the mocked collaborators: the step-up reads its factor
-                // answers through it, so these tests drive it with the same hasPin / hasPasskey
-                // stubs they always used and the delegation is exercised rather than stubbed out.
+                // The real policy over the mocked collaborators, so the delegation is exercised.
                 new AuthFactorPolicy(userSecurityService, passkeyService),
                 passkeyService,
                 phoneChangeOtpService,
@@ -193,8 +190,7 @@ class PhoneChangeServiceTest {
                 "en"))
                 .isInstanceOf(StepUpRequiredException.class);
 
-        // Hard block per product decision (2026-07-02): no token-only fallback. The
-        // reauth token is still spent, the failure is audited, and nothing else runs.
+        // Hard block, no token-only fallback: the reauth token is spent, the failure is audited and nothing else runs.
         verify(auditLogger).reauthFailed(USER, ReauthOperation.PHONE_CHANGE.name(), "1.2.3.4");
         verify(userSecurityService, never()).enforcePhoneChangeCooldown(anyString());
         verify(phoneNumberNormalizer, never()).toE164(anyString());
@@ -280,10 +276,7 @@ class PhoneChangeServiceTest {
         PhoneChangeService.PhoneChangeStart start = service.startPhoneNumberChange(USER, "tok", NEW_RAW, null,
                 "pk-stepup", credential, "1.2.3.4", "en");
 
-        // The passkey is the preferred factor, so proving it is enough on its own. Asking for
-        // the PIN as well would make the stronger factor worth less than the weaker one, and
-        // in practice would mean nobody could use it: the PIN would still be the thing that
-        // had to be produced every time.
+        // Proving the passkey is enough on its own; the PIN is not asked for as well.
         verify(userSecurityService, never()).validatePinOrThrow(anyString(), anyString());
         verify(phoneChangeOtpService).send(start.challengeId(), NEW_E164, "1.2.3.4", "en");
     }
@@ -298,9 +291,7 @@ class PhoneChangeServiceTest {
 
         service.startPhoneNumberChange(USER, "tok", NEW_RAW, null, "pk-stepup", credential, "1.2.3.4", "en");
 
-        // The hold exists to stop a PIN minted minutes ago from re-pointing the number. This
-        // caller did not spend a PIN, so holding them would be refusing someone for a reason
-        // that has nothing to do with what they proved.
+        // This caller did not spend a PIN, so the PIN hold does not apply.
         verify(userSecurityService, never()).enforcePhoneChangePinHold(anyString());
         // Everything the hold is NOT standing in for still runs.
         verify(userSecurityService).enforcePhoneChangeCooldown(USER);
@@ -310,8 +301,7 @@ class PhoneChangeServiceTest {
     void thePasskeyIsTriedBeforeThePinRatherThanAfterIt() {
         when(userSecurityService.hasPin(USER)).thenReturn(true);
         JsonNode credential = JsonNodeFactory.instance.objectNode();
-        // The assertion is refused. If the PIN branch ran first, this would surface as a PIN
-        // failure and the account would have been charged a PIN attempt for a passkey problem.
+        // If the PIN branch ran first, a refused assertion would be charged as a PIN attempt.
         doThrow(new me.sarahlacerda.gua.identityservice.exception.LoginFlowException(
                 org.springframework.http.HttpStatus.FORBIDDEN, "passkey_user_verification_required", "no uv"))
                 .when(passkeyService).finishStepUpAssertion("pk-stepup", credential);
@@ -331,9 +321,7 @@ class PhoneChangeServiceTest {
         when(passkeyService.finishStepUpAssertion("pk-stepup", credential))
                 .thenReturn(new PasskeyService.PasskeyAuthentication("@mallory:example.test", REGISTERED_LONG_AGO));
 
-        // Now that an assertion can settle the step-up on its own, this check is the only thing
-        // between somebody else's credential and the change. It must refuse before acceptance,
-        // and it must not quietly fall through to the PIN branch either.
+        // Somebody else's credential must be refused before acceptance and must not fall through to the PIN branch.
         assertThatThrownBy(() -> service.startPhoneNumberChange(USER, "tok", NEW_RAW, "123456", "pk-stepup",
                 credential, "1.2.3.4", "en"))
                 .isInstanceOf(InvalidPinException.class);
@@ -351,10 +339,8 @@ class PhoneChangeServiceTest {
         PhoneChangeService.PhoneChangeStart start = service.startPhoneNumberChange(USER, "tok", NEW_RAW, "123456",
                 null, null, "1.2.3.4", "en");
 
-        // This is the case that makes a broken passkey survivable: the step-up never asks
-        // whether the account has a credential registered, so a credential left on a lost
-        // phone cannot turn into "no way to change your number". Registration is not
-        // usability, and only the second one is being tested for here.
+        // The step-up never asks whether the account has a credential registered, so a credential left on
+        // a lost phone cannot block a number change.
         verify(passkeyService, never()).hasPasskey(anyString());
         verify(userSecurityService).validatePinOrThrow(USER, "123456");
         verify(phoneChangeOtpService).send(start.challengeId(), NEW_E164, "1.2.3.4", "en");
@@ -422,11 +408,7 @@ class PhoneChangeServiceTest {
                 "1.2.3.4", "en"))
                 .isInstanceOf(TwoFactorCooldownException.class);
 
-        // Holding only the PIN would price the same takeover at seven days or at nothing
-        // depending on which factor the attacker picked, and the cheap one is the passkey:
-        // POST /security/passkey/enroll/start asks a session holder for nothing but the
-        // bearer token, and the assertion that follows settles this step-up with the PIN
-        // never asked for. Nothing past the step-up runs.
+        // A freshly enrolled passkey is held like a freshly set PIN. Nothing past the step-up runs.
         verify(userSecurityService, never()).enforcePhoneChangeCooldown(anyString());
         verify(phoneNumberNormalizer, never()).toE164(anyString());
         verifyNoInteractions(phoneChangeOtpService);
@@ -443,8 +425,7 @@ class PhoneChangeServiceTest {
                 "1.2.3.4", "en"))
                 .isInstanceOf(InvalidPinException.class);
 
-        // Ownership stays the first thing an accepted assertion meets. A hold weighed ahead
-        // of it would be answering a question about somebody else's credential.
+        // Ownership is checked before the hold.
         verify(userSecurityService, never()).enforceFreshFactorHold(any());
     }
 
@@ -458,9 +439,7 @@ class PhoneChangeServiceTest {
         PhoneChangeService.PhoneChangeStart start = service.startPhoneNumberChange(USER, "tok", NEW_RAW, null,
                 "pk-stepup", credential, "1.2.3.4", "en");
 
-        // The hold is asked about every credential that is accepted, and it answers "no hold"
-        // for one that has been registered a while. The refusal expires; it removes no factor
-        // from anybody.
+        // The hold is asked about every accepted credential and answers no hold for an established one.
         verify(userSecurityService).enforceFreshFactorHold(REGISTERED_LONG_AGO);
         verify(userSecurityService, never()).validatePinOrThrow(anyString(), anyString());
         verify(phoneChangeOtpService).send(start.challengeId(), NEW_E164, "1.2.3.4", "en");
@@ -482,7 +461,6 @@ class PhoneChangeServiceTest {
         verify(redisTemplate).delete(CHALLENGE_KEY);
         verify(phoneChangeOtpService).discard(CHALLENGE);
         verify(auditLogger).phoneChangeOtpFailed(USER, 5, "9.9.9.9");
-        // No swap.
         verify(matrixProvisioningService, never()).ensureExclusivePhoneBinding(anyString(), anyString());
     }
 
@@ -535,11 +513,10 @@ class PhoneChangeServiceTest {
 
         service.completePhoneNumberChange(USER, CHALLENGE, "123456", "1.2.3.4");
 
-        // The swap runs in a separate bean so the @Transactional proxy engages
-        // (a self-call would make it non-atomic). Internals are covered by
+        // The swap runs in a separate bean so the @Transactional proxy engages. Internals are covered by
         // PhoneDirectorySwapServiceTest.
         verify(phoneDirectorySwapService).swap(USER, NEW_E164);
-        verify(redisTemplate).delete(CHALLENGE_KEY); // challenge fully spent
+        verify(redisTemplate).delete(CHALLENGE_KEY);
     }
 
     @Test
@@ -562,10 +539,7 @@ class PhoneChangeServiceTest {
 
         service.completePhoneNumberChange(USER, CHALLENGE, "123456", "1.2.3.4");
 
-        // The old numbers used to be read back from the homeserver so they could be
-        // unpublished from the resolver directory. That publishing client is gone
-        // (ADM-001 L1b): binding the new number is the only homeserver interaction left,
-        // and nothing in this flow talks to the resolver at all.
+        // Binding the new number is the only homeserver interaction.
         verify(matrixProvisioningService).ensureExclusivePhoneBinding(USER, NEW_E164);
         verifyNoMoreInteractions(matrixProvisioningService);
     }
@@ -607,15 +581,12 @@ class PhoneChangeServiceTest {
     }
 
     /**
-     * Shared stubs for a /complete that passes OTP verification. Lenient where a
-     * given test does not exercise every collaborator. The atomic swap itself is a
-     * void mock (no-op by default) — its internals are tested in
-     * PhoneDirectorySwapServiceTest.
+     * Shared stubs for a /complete that passes OTP verification. The atomic swap is a void mock; its
+     * internals are tested in PhoneDirectorySwapServiceTest.
      */
     private void primeSuccessfulComplete() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(valueOperations.get(CHALLENGE_KEY)).thenReturn(USER + "|" + NEW_E164 + "|0");
-        // phoneChangeOtpService.verify(...) returns void on success (no stub -> no throw).
         org.mockito.Mockito.lenient().when(directoryService.findMaskedPhoneByUserId(USER))
                 .thenReturn(java.util.Optional.of("••••9999"));
     }

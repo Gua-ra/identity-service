@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.time.Duration;
@@ -22,11 +21,9 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * The startup consistency check: a deployment may not publish placement records under an identity the
- * roster does not agree with.
- *
- * <p>Each case here is a way the three things could fail to line up. Together they are what stops this
- * service signing records for a homeserver it is not, or with a key nobody will verify against.
+ * The startup consistency check: a deployment may not publish placement records under an identity
+ * the roster does not agree with. Each case is one way the roster entry, the configured id and the
+ * key could fail to line up.
  */
 class PlacementSignerStartupCheckTest {
 
@@ -212,9 +209,8 @@ class PlacementSignerStartupCheckTest {
         IdentityServiceProperties properties = publishing();
         properties.getPlacement().setRecordValidity(Duration.ofDays(401));
 
-        // record-validity is a freely configurable Duration while the codec refuses anything over 400
-        // days. Left unchecked it is accepted at boot and then throws on every single signature, which
-        // shows up at 03:20 as a job that failed rather than as the misconfiguration it is.
+        // record-validity is freely configurable while the codec refuses anything over 400 days, so a
+        // longer value must fail at boot.
         assertThatThrownBy(() -> check(properties).verifyPlacementSigningIdentity())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("record-validity");

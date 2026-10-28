@@ -49,11 +49,8 @@ public class DirectoryEntry {
     private String homeserverId;
 
     /**
-     * Human-readable handle, unique within this deployment's directory
-     * (case-insensitive index) and stored alongside the Matrix user id. Today the
-     * interactive login path uses the same handle as the MXID localpart. Not
-     * federation-wide: that uniqueness is a property of the sequenced binding log in
-     * ADM-001 (L11, L12).
+     * Human-readable handle, unique within this deployment's directory (case-insensitive index), not
+     * federation-wide. The interactive login path uses the same handle as the MXID localpart.
      */
     @Column(name = "username", length = 64)
     private String username;

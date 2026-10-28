@@ -10,11 +10,9 @@ import org.springframework.util.StringUtils;
 import me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException;
 
 /**
- * Single source of truth for Gua username (Matrix localpart) rules: 3-30
- * characters of lowercase letters, digits, dot, underscore, or dash, excluding
- * a
- * reserved set. Shared by the legacy signup flow and the interactive OIDC login
- * flow so both validate handles identically.
+ * Single source of truth for Gua username (Matrix localpart) rules: 3-30 characters of lowercase
+ * letters, digits, dot, underscore or dash, excluding a reserved set. Shared by the legacy signup
+ * flow and the interactive OIDC login flow.
  */
 @Component
 public class UsernamePolicy {
@@ -41,10 +39,8 @@ public class UsernamePolicy {
             throw new InvalidUsernameException(
                     "Username must be 3-30 characters: lowercase letters, digits, dot, underscore, or dash");
         }
-        // MAS rejects all-numeric usernames (register.rego "username-all-numeric"):
-        // the localpart must contain at least one non-numeric character. Enforce the
-        // same rule here so we fail fast with a friendly message instead of letting
-        // the upstream MAS policy check reject the provisioning request.
+        // MAS rejects all-numeric usernames (register.rego "username-all-numeric"). Enforce the same rule
+        // here to fail fast with a friendly message.
         if (ALL_NUMERIC_PATTERN.matcher(normalized).matches()) {
             throw new InvalidUsernameException("Username must contain at least one non-numeric character");
         }

@@ -15,27 +15,19 @@ import me.sarahlacerda.gua.identityservice.domain.MatrixIds;
 import me.sarahlacerda.gua.identityservice.exception.LoginFlowException;
 
 /**
- * Chooses the localpart an existing account presents as the {@code preferred_username}
- * claim, which MAS imports as the Matrix localpart on a first delegated login
- * (ADM-001 S6).
+ * Chooses the localpart an existing account presents as the {@code preferred_username} claim, which
+ * MAS imports as the Matrix localpart on a first delegated login.
  *
- * <p>The source is the username stored in the directory: the handle reserved at signup
- * under the directory's case-insensitive unique index, which no code path changes once
- * stored (a phone change carries it forward). It is read, never derived from the user
- * id, so re-keying {@code user_id} cannot change what an account presents to MAS.
+ * <p>The source is the username stored in the directory, which no code path changes once stored. It
+ * is read, never derived from the user id. Rows without a stored username (legacy native signups,
+ * rows healed from the homeserver phone binding) fall back to the localpart of a well-formed Matrix
+ * user id via {@link MatrixIds}; that value is refused when another account in this directory holds
+ * it as its stored username.
  *
- * <p>Rows without a stored username (legacy native signups, rows healed from the
- * homeserver phone binding) fall back to the localpart of a well-formed Matrix user id,
- * via {@link MatrixIds}. That value is unique on its own homeserver; it is refused when
- * another account in this directory holds it as its stored username, and it is never
- * produced from a user id that is not a Matrix user id.
- *
- * <p>Every candidate must also match the username format
- * ({@link UsernamePolicy#hasValidFormat}), which is lowercase because MAS matches
- * localparts case-insensitively. Anything that fails is refused with
- * {@code account_identity_inconsistent} instead of being sent: with the MAS claims
- * import set to {@code on_conflict: add}, a localpart shared by two accounts links the
- * second account onto the first account's MAS user.
+ * <p>Every candidate must match {@link UsernamePolicy#hasValidFormat}. Anything that fails is
+ * refused with {@code account_identity_inconsistent}: MAS imports claims with
+ * {@code on_conflict: add}, so a localpart shared by two accounts would link the second account onto
+ * the first account's MAS user.
  */
 @Component
 @RequiredArgsConstructor

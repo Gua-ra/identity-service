@@ -17,29 +17,20 @@ import me.sarahlacerda.gua.identityservice.domain.AccountGenesisRecord.Origin;
 import me.sarahlacerda.gua.identityservice.repository.AccountGenesisRepository;
 
 /**
- * The two gauges Phase 3 is watched by:
+ * Two gauges:
  *
  * <ul>
- *   <li>{@code gua_identity_account_genesis{origin}}, how many accounts are rooted in a genesis
- *       and how many are bootstrap, which is the audit split ADM-001 L5 asks to be able to see;</li>
- *   <li>{@code gua_identity_accounts_without_genesis}, which must reach zero and stay there before any
- *       later phase may propose reading a placement record for routing.</li>
+ *   <li>{@code gua_identity_account_genesis{origin}}: how many accounts are rooted in a genesis and
+ *       how many are bootstrap;</li>
+ *   <li>{@code gua_identity_accounts_without_genesis}: accounts that still hold no genesis row.</li>
  * </ul>
  *
- * <p>Those are the exact names a scrape exposes. Both are gauges, and the Prometheus registry appends
- * {@code _total} to counters only, so neither name carries that suffix; {@code AccountGenesisMetricsTest}
- * pins the scraped names so a panel or an alert built on them cannot come back "no data", which is the
- * failure {@code IdentityMetricsInitializer} was written to prevent. Counters are not an option here:
- * both counts fall as the backfill runs, and the second one exists to reach zero.
+ * <p>Those are the exact scraped names (gauges carry no {@code _total} suffix);
+ * {@code AccountGenesisMetricsTest} pins them.
  *
- * <p>Registered only while the feature is switched on, under either flag. With everything off no new
- * series appear and, more to the point, {@link AccountScanner#countAccountsWithoutGenesis()} never runs:
- * it is a full pass over the account tables, and a feature nobody turned on must cost nothing.
- *
- * <p>Each value is read from the database at most once per {@link #REFRESH} interval and cached in
- * between, so a busy Prometheus scrape cannot turn a gauge into a load source. Registered eagerly at
- * construction, in the pattern {@code IdentityMetricsInitializer} documents, so the series exist on a
- * fresh pod's first scrape instead of appearing as "no data".
+ * <p>Registered only while the feature is on, so with everything off
+ * {@link AccountScanner#countAccountsWithoutGenesis()}, a full pass over the account tables, never
+ * runs. Each value is read from the database at most once per {@link #REFRESH} and cached in between.
  */
 @Component
 public class AccountGenesisMetrics {
@@ -61,7 +52,6 @@ public class AccountGenesisMetrics {
 
         GenesisProperties genesis = properties.getGenesis();
         if (!genesis.isEnabled() && !genesis.getBootstrapBackfill().isEnabled()) {
-            // Inert, which is what every flag being off promises: no series, and no scan behind them.
             return;
         }
 
@@ -98,8 +88,7 @@ public class AccountGenesisMetrics {
                 snapshot.set(new Snapshot(Instant.now(), value));
                 return value;
             } catch (RuntimeException ex) {
-                // A scrape must never fail because the database is briefly unavailable; serve the last
-                // value and try again on the next one.
+                // A scrape must never fail because the database is briefly unavailable: serve the last value.
                 log.debug("Could not refresh an account genesis gauge: {}", ex.getMessage());
                 return current.value();
             }

@@ -6,10 +6,9 @@ import java.util.Set;
 /**
  * Who the bearer token says the caller is, and which registered OIDC client minted it.
  *
- * @param clientId the registered client the token was issued to, taken from the audience the
- *                 token was accepted on. Null for a token this service did not mint, which is
- *                 every homeserver-issued token: those carry no client of ours, and a caller
- *                 never gets to name one.
+ * @param clientId the registered client the token was issued to, taken from the audience the token
+ *                 was accepted on. Null for a token this service did not mint, which is every
+ *                 homeserver-issued token.
  */
 public record OidcAuthenticatedPrincipal(
         String userId,

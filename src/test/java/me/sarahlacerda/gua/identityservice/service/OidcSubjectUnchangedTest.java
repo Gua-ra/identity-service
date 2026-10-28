@@ -26,13 +26,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 /**
- * ADM-001 S6 and ADM-008 decision 10: Phase 3 changes no OIDC subject semantics.
- *
- * <p>{@code sub} stays the Matrix user id, {@code preferred_username} stays the handle stored in the
- * directory, and no claim carries an accountId. The last one is load-bearing rather than cosmetic: MAS
- * derives the Matrix localpart from an arbitrary template over the imported claims, and an accountId is
- * lowercase letters and digits, so it would pass MAS's localpart rules. A claim carrying one would be a
- * single config line away from re-keying every account onto it.
+ * {@code sub} stays the Matrix user id, {@code preferred_username} stays the handle stored in the
+ * directory, and no claim carries an accountId: the MAS localpart template could be pointed at it.
  */
 class OidcSubjectUnchangedTest {
 

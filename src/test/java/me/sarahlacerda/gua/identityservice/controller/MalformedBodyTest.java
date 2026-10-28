@@ -13,11 +13,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 
-/**
- * A request with no body, or a body that is not JSON, is the caller's mistake and must
- * read as one. Before this, every such request reached the catch-all handler and came
- * back as a 500, which blamed the server and told the caller nothing.
- */
+/** A request with no body, or a body that is not JSON, must be answered as the caller's mistake, not a 500. */
 @SpringBootTest
 @ActiveProfiles("test")
 class MalformedBodyTest {
