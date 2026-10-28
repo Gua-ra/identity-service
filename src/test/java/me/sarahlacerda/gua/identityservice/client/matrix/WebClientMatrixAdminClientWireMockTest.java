@@ -19,6 +19,7 @@ import java.util.List;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
+import com.github.tomakehurst.wiremock.http.Fault;
 import com.github.tomakehurst.wiremock.verification.LoggedRequest;
 
 import ch.qos.logback.classic.Level;
@@ -275,6 +276,27 @@ class WebClientMatrixAdminClientWireMockTest {
                     """)));
 
         assertThat(client.findUserIdByPhone("+15551234567")).isEmpty();
+    }
+
+    @Test
+    void aFailedReverseLookupLogsNeitherTheNumberNorItsUrl() {
+        wireMock.stubFor(get(urlPathMatching("/_synapse/admin/v1/threepid/msisdn/users/.+"))
+            .willReturn(aResponse().withFault(Fault.CONNECTION_RESET_BY_PEER)));
+        Logger clientLog = (Logger) LoggerFactory.getLogger(WebClientMatrixAdminClient.class);
+        Level previous = clientLog.getLevel();
+        clientLog.setLevel(Level.DEBUG);
+        try {
+            assertThat(client.findUserIdByPhone("+15551234567")).isEmpty();
+        } finally {
+            clientLog.setLevel(previous);
+        }
+
+        assertNoLogContains("15551234567");
+        assertThat(warningsFor(WebClientMatrixAdminClient.class))
+            .containsExactly("Reverse phone lookup failed: WebClientRequestException");
+        assertThat(loggedEvents()).filteredOn(event -> event.getLevel() == Level.DEBUG)
+            .extracting(ILoggingEvent::getFormattedMessage)
+            .anySatisfy(message -> assertThat(message).contains("/_synapse/admin/v1/threepid/msisdn/users/*** "));
     }
 
     @Test

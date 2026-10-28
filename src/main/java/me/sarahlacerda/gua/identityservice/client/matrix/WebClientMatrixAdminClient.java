@@ -1,11 +1,13 @@
 package me.sarahlacerda.gua.identityservice.client.matrix;
 
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +28,9 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
 
     private static final Logger log = LoggerFactory.getLogger(WebClientMatrixAdminClient.class);
 
+    /** The address segment of a threepid lookup path, which is the phone number itself. */
+    private static final Pattern THREEPID_ADDRESS = Pattern.compile("(/threepid/[^/]+/users/)[^/?#]+");
+
     private final WebClient adminClient;
     private final WebClient clientApi;
 
@@ -44,17 +49,20 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
     }
 
     private static ExchangeFilterFunction maskingRequestLogger() {
-        // Safe DEBUG trace of admin requests with Authorization redacted, so the bearer token never
-        // appears in logs.
+        // DEBUG trace of admin requests that never shows the bearer token or a looked-up phone number.
         return ExchangeFilterFunction.ofRequestProcessor(request -> {
             if (log.isDebugEnabled()) {
                 log.debug("Matrix admin {} {} headers=[{}]",
                         request.method(),
-                        request.url(),
+                        redactThreepidAddress(request.url()),
                         summarizeHeaders(request));
             }
             return Mono.just(request);
         });
+    }
+
+    private static String redactThreepidAddress(URI url) {
+        return THREEPID_ADDRESS.matcher(url.toString()).replaceAll("$1***");
     }
 
     private static String summarizeHeaders(ClientRequest request) {
@@ -107,6 +115,7 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
         if (phone == null || phone.isBlank()) {
             return Optional.empty();
         }
+        // The lookup URL ends in the phone number, so a failure logs only the exception type.
         try {
             ThreepidUserResponse response = adminClient.get()
                     .uri(builder -> builder.path("/_synapse/admin/v1/threepid/msisdn/users/{address}")
@@ -119,7 +128,7 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
                         return resp.releaseBody().then(Mono.empty());
                     })
                     .onErrorResume(ex -> {
-                        log.warn("Reverse phone lookup failed: {}", ex.getMessage());
+                        log.warn("Reverse phone lookup failed: {}", ex.getClass().getSimpleName());
                         return Mono.empty();
                     })
                     .block();
@@ -128,7 +137,7 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
             }
             return Optional.of(response.userId());
         } catch (Exception ex) {
-            log.warn("Reverse phone lookup failed: {}", ex.getMessage());
+            log.warn("Reverse phone lookup failed: {}", ex.getClass().getSimpleName());
             return Optional.empty();
         }
     }
