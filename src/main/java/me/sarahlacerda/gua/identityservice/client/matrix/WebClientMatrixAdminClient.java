@@ -115,7 +115,7 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
         if (phone == null || phone.isBlank()) {
             return Optional.empty();
         }
-        // The lookup URL ends in the phone number, so a failure logs only the exception type.
+        // The lookup URL ends in the phone number, so the exception message is left out as a precaution.
         try {
             ThreepidUserResponse response = adminClient.get()
                     .uri(builder -> builder.path("/_synapse/admin/v1/threepid/msisdn/users/{address}")
