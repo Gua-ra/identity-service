@@ -29,7 +29,9 @@ public class OpenApiConfig {
                 .title("Gua Identity Service API")
                 .description("Endpoints for OTP, PIN management, and contact discovery in the Gua ecosystem.")
                 .version("1.0.0")
-                .license(new License().name("Apache 2.0"))
+                .license(new License()
+                    .name("AGPL-3.0-only")
+                    .url("https://www.gnu.org/licenses/agpl-3.0.html"))
             );
     }
 }
