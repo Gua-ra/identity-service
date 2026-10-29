@@ -28,7 +28,8 @@ import me.sarahlacerda.gua.identityservice.exception.SmsUnavailableException;
 class TwilioSmsSenderTest {
 
     private static final String PHONE = "+46701740605";
-    private static final String BODY = "Your Gua verification code is 482913.";
+    private static final String CODE = "482913";
+    private static final String BODY = "Your Gua verification code is " + CODE + ".";
 
     private final ListAppender<ILoggingEvent> logs = new ListAppender<>();
     private final Logger logger = (Logger) LoggerFactory.getLogger(TwilioSmsSender.class);
@@ -69,7 +70,7 @@ class TwilioSmsSenderTest {
         assertThatThrownBy(() -> sender.send(PHONE, BODY))
                 .isExactlyInstanceOf(SmsUnavailableException.class)
                 .hasNoCause();
-        assertLogsKeepTheNumberAndTwilioMessageOut();
+        assertLogsKeepTheNumberCodeAndTwilioMessageOut();
     }
 
     @Test
@@ -79,7 +80,7 @@ class TwilioSmsSenderTest {
         assertThatThrownBy(() -> sender.send(PHONE, BODY))
                 .isExactlyInstanceOf(SmsUnavailableException.class)
                 .hasNoCause();
-        assertLogsKeepTheNumberAndTwilioMessageOut();
+        assertLogsKeepTheNumberCodeAndTwilioMessageOut();
     }
 
     @Test
@@ -113,15 +114,16 @@ class TwilioSmsSenderTest {
                 .isInstanceOfSatisfying(SmsRefusedException.class,
                         ex -> assertThat(ex.getReason()).isEqualTo(reason))
                 .hasNoCause();
-        assertLogsKeepTheNumberAndTwilioMessageOut();
+        assertLogsKeepTheNumberCodeAndTwilioMessageOut();
         assertThat(logs.list).singleElement()
                 .satisfies(event -> assertThat(event.getFormattedMessage()).contains("••••0605")
                         .contains("code=" + code).contains(reason.tagValue()));
     }
 
-    private void assertLogsKeepTheNumberAndTwilioMessageOut() {
+    private void assertLogsKeepTheNumberCodeAndTwilioMessageOut() {
         assertThat(logs.list).isNotEmpty().allSatisfy(event -> {
-            assertThat(event.getFormattedMessage()).doesNotContain(PHONE).doesNotContain("'To' number");
+            assertThat(event.getFormattedMessage()).doesNotContain(PHONE).doesNotContain(CODE)
+                    .doesNotContain("'To' number");
             assertThat(event.getThrowableProxy()).isNull();
         });
     }
