@@ -17,6 +17,9 @@ identity:
     # own region, so +1 numbers from the Caribbean are refused unless their region is listed. Empty, the
     # default, sends to every region.
     allowed-countries: ${IDENTITY_OTP_ALLOWED_COUNTRIES:}
+    # Daily sends per region, as REGION:LIMIT entries, comma separated (MA:3,SN:2), across every number,
+    # address and account. For regions whose SMS cost much more. Empty, the default, limits no region.
+    country-daily-limits: ${IDENTITY_OTP_COUNTRY_DAILY_LIMITS:}
     max-verify-attempts: ${IDENTITY_OTP_MAX_VERIFY_ATTEMPTS:5}
     sms-template: ${IDENTITY_OTP_SMS_TEMPLATE:Your Gua verification code is %s. Never share this code with anyone. Gua support will never ask you for it.}
     # Keys are lower-case tags, matched exactly and then by primary language (see SmsTemplates).

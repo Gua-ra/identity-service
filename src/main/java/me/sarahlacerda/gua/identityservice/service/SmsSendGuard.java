@@ -4,8 +4,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -34,7 +36,9 @@ import me.sarahlacerda.gua.identityservice.exception.UnsupportedPhoneCountryExce
  * before the provider: the destination must be a valid number, in an allowed region when an
  * allowlist is configured, and the per-address and per-number counters, and the hourly and daily
  * ceilings that are configured, must all have room. A daily per-number limit, when configured,
- * also bounds how many codes one phone can be sent once each hourly window reopens.
+ * also bounds how many codes one phone can be sent once each hourly window reopens. A daily
+ * per-region limit, when configured for the destination's region, bounds the spend on regions
+ * whose SMS cost much more than the rest.
  *
  * <p>
  * Sends to numbers without an account count against separate sign-up ceilings, so a sign-up
@@ -60,6 +64,7 @@ public class SmsSendGuard {
     static final String SIGN_UP_DAILY_KEY = "otp:rate:sign-up:day";
     static final String ACCOUNT_HOURLY_KEY = "otp:rate:account:hour";
     static final String ACCOUNT_DAILY_KEY = "otp:rate:account:day";
+    static final String COUNTRY_DAILY_KEY_PREFIX = "otp:rate:country-day:";
 
     private static final Duration HOUR = Duration.ofHours(1);
     private static final Duration DAY = Duration.ofDays(1);
@@ -99,7 +104,8 @@ public class SmsSendGuard {
         SIGN_UP_HOURLY_CEILING("sign_up_hourly_ceiling"),
         SIGN_UP_DAILY_CEILING("sign_up_daily_ceiling"),
         ACCOUNT_HOURLY_CEILING("account_hourly_ceiling"),
-        ACCOUNT_DAILY_CEILING("account_daily_ceiling");
+        ACCOUNT_DAILY_CEILING("account_daily_ceiling"),
+        COUNTRY_DAILY_CEILING("country_daily_ceiling");
 
         private final String tagValue;
 
@@ -144,6 +150,7 @@ public class SmsSendGuard {
     private final PhoneNumberHasher phoneNumberHasher;
     private final RateLimiter rateLimiter;
     private final Set<String> allowedCountries;
+    private final Map<String, Integer> countryDailyLimits;
 
     public SmsSendGuard(StringRedisTemplate redisTemplate, IdentityServiceProperties properties,
             MeterRegistry metrics, DirectoryService directoryService, PhoneNumberHasher phoneNumberHasher,
@@ -155,6 +162,7 @@ public class SmsSendGuard {
         this.phoneNumberHasher = phoneNumberHasher;
         this.rateLimiter = rateLimiter;
         this.allowedCountries = allowedCountries(properties.getOtp().getAllowedCountries());
+        this.countryDailyLimits = countryDailyLimits(properties.getOtp().getCountryDailyLimits());
     }
 
     /**
@@ -217,6 +225,11 @@ public class SmsSendGuard {
                     Refusal.ACCOUNT_DAILY_CEILING);
             addCeiling(counters, ACCOUNT_HOURLY_KEY, otp.getMaxAccountSendsPerHour(), HOUR,
                     Refusal.ACCOUNT_HOURLY_CEILING);
+        }
+        Integer countryDailyLimit = countryDailyLimits.get(region);
+        if (budget != Budget.NONE && countryDailyLimit != null) {
+            counters.add(new Counter(COUNTRY_DAILY_KEY_PREFIX + region, countryDailyLimit, DAY,
+                    Refusal.COUNTRY_DAILY_CEILING));
         }
         if (StringUtils.hasText(requesterIp)) {
             counters.add(new Counter(IP_KEY_PREFIX + requesterIp, otp.getMaxRequestsPerIpPerHour(), HOUR, Refusal.IP));
@@ -326,5 +339,41 @@ public class SmsSendGuard {
                     + "; not recognised: " + String.join(",", unknown));
         }
         return Set.copyOf(regions);
+    }
+
+    /** The configured {@code REGION:LIMIT} entries, by upper-cased region; empty means no region is limited. */
+    private static Map<String, Integer> countryDailyLimits(List<String> configured) {
+        if (configured == null) {
+            return Map.of();
+        }
+        Map<String, Integer> limits = new TreeMap<>();
+        Set<String> unrecognised = new TreeSet<>();
+        for (String entry : configured) {
+            if (!StringUtils.hasText(entry)) {
+                continue;
+            }
+            String[] parts = entry.split(":", -1);
+            String region = parts[0].trim().toUpperCase(Locale.ROOT);
+            Integer limit = parts.length == 2 ? positiveInt(parts[1].trim()) : null;
+            if (limit == null || !PHONE_NUMBERS.getSupportedRegions().contains(region)
+                    || limits.putIfAbsent(region, limit) != null) {
+                unrecognised.add(entry.trim());
+            }
+        }
+        if (!unrecognised.isEmpty()) {
+            throw new IllegalStateException("identity.otp.country-daily-limits must list REGION:LIMIT entries"
+                    + " with an ISO 3166-1 alpha-2 region, once each, and a limit of at least 1; not recognised: "
+                    + String.join(",", unrecognised));
+        }
+        return Map.copyOf(limits);
+    }
+
+    private static Integer positiveInt(String value) {
+        try {
+            int parsed = Integer.parseInt(value);
+            return parsed > 0 ? parsed : null;
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 }
