@@ -86,6 +86,13 @@ public class IdentityServiceProperties {
         private List<String> allowedCountries = new ArrayList<>();
 
         /**
+         * {@code REGION:LIMIT} entries: SMS sends per day to numbers of that ISO 3166-1 alpha-2
+         * region, across every number, address and account, in a window opened by the first send.
+         * Meant for regions that cost much more per SMS. A region not listed has no such limit.
+         */
+        private List<String> countryDailyLimits = new ArrayList<>();
+
+        /**
          * Wrong guesses one code may absorb before it is deleted. Counted per phone
          * in Redis next to the code and expiring with it; a new send resets it. The
          * endpoint limiters bound guesses per address, this bounds them per code.

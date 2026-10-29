@@ -112,6 +112,7 @@ Every SMS passes `SmsSendGuard` before the provider is called, and every spellin
 | `IDENTITY_OTP_MAX_ACCOUNT_SENDS_PER_HOUR` | 0 (none) | Sends for existing accounts, counted apart from sign-ups. |
 | `IDENTITY_OTP_MAX_ACCOUNT_SENDS_PER_DAY` | 0 (none) | The same, per day. |
 | `IDENTITY_OTP_ALLOWED_COUNTRIES` | empty (every region) | ISO 3166-1 alpha-2 regions, comma separated, matched on the number's own region (JE, GG and IM are not GB). |
+| `IDENTITY_OTP_COUNTRY_DAILY_LIMITS` | empty (none) | Sends per day to one region, across every number, address and account, as `REGION:LIMIT` entries, comma separated (`MA:3`). For regions whose SMS cost much more. |
 | `IDENTITY_DIRECTORY_MAX_LOOKUPS_PER_ACCOUNT_PER_HOUR` | 0 (none) | `/directory/lookup` calls per account, from any address. |
 
 Every send the guard admits is also counted by destination in `gua_identity_sms_admitted_total{country,budget}`, including sends the provider later reports as undelivered.

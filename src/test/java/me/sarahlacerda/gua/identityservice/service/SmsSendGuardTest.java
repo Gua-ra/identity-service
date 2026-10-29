@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -25,6 +26,7 @@ import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.bind.PropertySourcesPlaceholdersResolver;
 import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
 import org.springframework.boot.env.YamlPropertySourceLoader;
+import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.MutablePropertySources;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DataAccessException;
@@ -54,6 +56,7 @@ class SmsSendGuardTest {
     private static final String BR = "+5511999998888";
     private static final String CA = "+16042259911";
     private static final String US = "+12025550123";
+    private static final String MA = "+212650123456";
     private static final List<String> SERVED = List.of("BR", "CA", "US");
     private static final String ADDRESS = "198.51.100.7";
     private static final String OTHER_ADDRESS = "203.0.113.9";
@@ -135,6 +138,7 @@ class SmsSendGuardTest {
         assertThat(otp.getMaxRequestsPerPhonePerHour()).isEqualTo(5);
         assertThat(otp.getMaxRequestsPerPhonePerDay()).isZero();
         assertThat(otp.getMaxRequestsPerIpPerHour()).isEqualTo(10);
+        assertThat(otp.getCountryDailyLimits()).isEmpty();
     }
 
     @Test
@@ -294,6 +298,71 @@ class SmsSendGuardTest {
         guard.refund(admission);
 
         assertThatCode(() -> guard.admit(BR, OTHER_ADDRESS)).doesNotThrowAnyException();
+    }
+
+    // -------------------- per-region day --------------------
+
+    @Test
+    void aRegionsDailyLimitHoldsAcrossNumbersAddressesAndAccounts() {
+        limitRegions(List.of("MA:2"));
+        hasAccount("+212650123457");
+        guard.admit(MA, ADDRESS);
+        guard.admitForAccount("+212650123457", OTHER_ADDRESS);
+
+        assertThatThrownBy(() -> guard.admit("+212650123458", "192.0.2.1"))
+                .isInstanceOfSatisfying(OtpRateLimitedException.class, refused -> {
+                    assertThat(refused.getMessage()).isEqualTo("Verification codes are temporarily unavailable");
+                    assertThat(refused.getRetryAfter()).isGreaterThan(Duration.ofHours(23));
+                });
+        assertThat(refusals(SmsSendGuard.Refusal.COUNTRY_DAILY_CEILING)).isEqualTo(1.0);
+        // The refused send spent none of the ceilings or of the new address's budget.
+        assertThat(count(SmsSendGuard.SIGN_UP_HOURLY_KEY)).isEqualTo(1);
+        assertThat(redisTemplate.hasKey(SmsSendGuard.IP_KEY_PREFIX + "192.0.2.1")).isFalse();
+        // Regions without a limit are not counted per region.
+        guard.admit(BR, "192.0.2.1");
+        assertThat(redisTemplate.keys(SmsSendGuard.COUNTRY_DAILY_KEY_PREFIX + "*"))
+                .containsExactly(SmsSendGuard.COUNTRY_DAILY_KEY_PREFIX + "MA");
+    }
+
+    @Test
+    void aSignInThatTextsNothingSpendsNoRegionsDay() {
+        limitRegions(List.of("MA:1"));
+        guard.admitWithoutSms(MA, ADDRESS);
+
+        assertThat(redisTemplate.hasKey(SmsSendGuard.COUNTRY_DAILY_KEY_PREFIX + "MA")).isFalse();
+        assertThatCode(() -> guard.admit(MA, OTHER_ADDRESS)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void aRefundGivesBackTheRegionsDay() {
+        limitRegions(List.of("MA:1"));
+        SmsSendGuard.Admission admission = guard.admit(MA, ADDRESS);
+        assertThat(admission.keys()).contains(SmsSendGuard.COUNTRY_DAILY_KEY_PREFIX + "MA");
+
+        guard.refund(admission);
+
+        assertThatCode(() -> guard.admit("+212650123457", OTHER_ADDRESS)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void theRegionLimitsBindFromOneCommaSeparatedValue() throws IOException {
+        OtpProperties otp = shippedConfiguration(Map.of("IDENTITY_OTP_COUNTRY_DAILY_LIMITS", " ma : 1,SN:2"))
+                .bind("identity.otp", OtpProperties.class).get();
+        assertThat(otp.getCountryDailyLimits()).hasSize(2);
+
+        limitRegions(otp.getCountryDailyLimits());
+        guard.admit(MA, ADDRESS);
+        assertThatThrownBy(() -> guard.admit("+212650123457", OTHER_ADDRESS))
+                .isInstanceOf(OtpRateLimitedException.class);
+    }
+
+    @Test
+    void anUnreadableRegionLimitRefusesStartup() {
+        properties.getOtp().setCountryDailyLimits(List.of("MA", "SN:0", "MAR:3", "BR:x", "CA:1", "ca:2", " "));
+
+        assertThatThrownBy(this::newGuard)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("not recognised: BR:x,MA,MAR:3,SN:0,ca:2");
     }
 
     // -------------------- sign-up and account budgets --------------------
@@ -689,7 +758,13 @@ class SmsSendGuardTest {
     }
 
     private static Binder shippedConfiguration() throws IOException {
+        return shippedConfiguration(Map.of());
+    }
+
+    /** application.yml with {@code environment} as the only environment variables set. */
+    private static Binder shippedConfiguration(Map<String, Object> environment) throws IOException {
         MutablePropertySources sources = new MutablePropertySources();
+        sources.addFirst(new MapPropertySource("environment", environment));
         new YamlPropertySourceLoader().load("application.yml", new ClassPathResource("application.yml"))
                 .forEach(sources::addLast);
         return new Binder(ConfigurationPropertySources.from(sources), new PropertySourcesPlaceholdersResolver(sources));
@@ -704,6 +779,11 @@ class SmsSendGuardTest {
 
     private void allowOnly(List<String> regions) {
         properties.getOtp().setAllowedCountries(regions);
+        guard = newGuard();
+    }
+
+    private void limitRegions(List<String> limits) {
+        properties.getOtp().setCountryDailyLimits(limits);
         guard = newGuard();
     }
 
