@@ -132,3 +132,9 @@ Gua's federation and account architecture is documented in gua-resolver. This RE
 - [Gua identity and federation](https://github.com/Gua-ra/gua-resolver/blob/main/docs/architecture/gua-identity-and-federation.md)
 - [Account identifiers and placement records](https://github.com/Gua-ra/gua-resolver/blob/main/docs/specs/account-identifiers-and-placement-records.md)
 - [`docs/specs/genesis-vectors.v1.json`](docs/specs/genesis-vectors.v1.json): test vectors for the account ID encoding
+
+## 📄 License
+
+identity-service is licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`). If you run a modified version as a network service, section 13 of the license requires you to offer its source code to the people who use it.
+
+Contributions are accepted under the same license. There is no contributor license agreement. Dependencies keep their own licenses. The Gua name and logo are not covered by this license; see the [copyright and trademark notice](https://gua.global/copyright).
