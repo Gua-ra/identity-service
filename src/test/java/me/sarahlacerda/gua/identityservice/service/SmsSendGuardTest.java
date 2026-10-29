@@ -230,7 +230,6 @@ class SmsSendGuardTest {
             assertThat(admitted).isEqualTo(10);
             assertThat(count(SmsSendGuard.SIGN_UP_HOURLY_KEY)).isEqualTo(10);
             assertThat(refusals(SmsSendGuard.Refusal.SIGN_UP_HOURLY_CEILING)).isEqualTo(senders - 10.0);
-            // A refused send charged no number or address of its own.
             assertThat(redisTemplate.keys(SmsSendGuard.PHONE_KEY_PREFIX + "*")).hasSize(10);
         } finally {
             pool.shutdownNow();
@@ -263,10 +262,8 @@ class SmsSendGuardTest {
                     assertThat(refused.getRetryAfter()).isGreaterThan(Duration.ofHours(23));
                 });
         assertThat(refusals(SmsSendGuard.Refusal.PHONE_DAILY)).isEqualTo(1.0);
-        // The refused send spent none of the ceilings or of the new address's budget.
         assertThat(count(SmsSendGuard.SIGN_UP_HOURLY_KEY)).isEqualTo(2);
         assertThat(redisTemplate.hasKey(SmsSendGuard.IP_KEY_PREFIX + "192.0.2.1")).isFalse();
-        // Other numbers keep their own day.
         assertThatCode(() -> guard.admit(US, "192.0.2.1")).doesNotThrowAnyException();
     }
 
@@ -478,7 +475,6 @@ class SmsSendGuardTest {
         assertThat(admitted("MA", "sign_up")).isEqualTo(2.0);
         assertThat(admitted("BR", "account")).isEqualTo(1.0);
         assertThat(admitted("CA", "account")).isEqualTo(1.0);
-        // A send that texts nothing is not a destination.
         assertThat(metrics.find("gua.identity.sms.admitted").tag("country", "US").counter()).isNull();
     }
 

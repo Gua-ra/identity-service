@@ -32,27 +32,9 @@ import me.sarahlacerda.gua.identityservice.exception.OtpRateLimitedException;
 import me.sarahlacerda.gua.identityservice.exception.UnsupportedPhoneCountryException;
 
 /**
- * Decides whether one SMS may be sent. Every path that texts a code calls one of the admit methods
- * before the provider: the destination must be a valid number, in an allowed region when an
- * allowlist is configured, and the per-address and per-number counters, and the hourly and daily
- * ceilings that are configured, must all have room. A daily per-number limit, when configured,
- * also bounds how many codes one phone can be sent once each hourly window reopens. A daily
- * per-region limit, when configured for the destination's region, bounds the spend on regions
- * whose SMS cost much more than the rest.
- *
- * <p>
- * Sends to numbers without an account count against separate sign-up ceilings, so a sign-up
- * flood cannot use up the account ceilings. Unauthenticated sends to numbers that have an
- * account, such as repeated sign-in requests, still count against the account ceilings.
- *
- * <p>
- * A send the provider refuses texted nothing, so {@link #refund} gives back every counter its
- * {@link Admission} charged.
- *
- * <p>
- * Every admitted send that texts a code is counted by the region of its destination in
- * {@code gua_identity_sms_admitted_total{country,budget}}. A send the provider accepts and later
- * reports as undelivered is still counted there, so the count shows where codes were requested.
+ * Decides whether one SMS may be sent. Every path that texts a code calls an admit method before
+ * the provider. Numbers without an account have their own ceilings, so a sign-up flood cannot use up
+ * the account ceilings.
  */
 @Component
 public class SmsSendGuard {
@@ -216,14 +198,14 @@ public class SmsSendGuard {
         OtpProperties otp = properties.getOtp();
         List<Counter> counters = new ArrayList<>();
         if (budget == Budget.SIGN_UP) {
-            addCeiling(counters, SIGN_UP_DAILY_KEY, otp.getMaxSignUpSendsPerDay(), DAY,
+            addIfConfigured(counters, SIGN_UP_DAILY_KEY, otp.getMaxSignUpSendsPerDay(), DAY,
                     Refusal.SIGN_UP_DAILY_CEILING);
-            addCeiling(counters, SIGN_UP_HOURLY_KEY, otp.getMaxSignUpSendsPerHour(), HOUR,
+            addIfConfigured(counters, SIGN_UP_HOURLY_KEY, otp.getMaxSignUpSendsPerHour(), HOUR,
                     Refusal.SIGN_UP_HOURLY_CEILING);
         } else if (budget == Budget.ACCOUNT) {
-            addCeiling(counters, ACCOUNT_DAILY_KEY, otp.getMaxAccountSendsPerDay(), DAY,
+            addIfConfigured(counters, ACCOUNT_DAILY_KEY, otp.getMaxAccountSendsPerDay(), DAY,
                     Refusal.ACCOUNT_DAILY_CEILING);
-            addCeiling(counters, ACCOUNT_HOURLY_KEY, otp.getMaxAccountSendsPerHour(), HOUR,
+            addIfConfigured(counters, ACCOUNT_HOURLY_KEY, otp.getMaxAccountSendsPerHour(), HOUR,
                     Refusal.ACCOUNT_HOURLY_CEILING);
         }
         Integer countryDailyLimit = countryDailyLimits.get(region);
@@ -237,7 +219,7 @@ public class SmsSendGuard {
         counters.add(new Counter(PHONE_KEY_PREFIX + e164, otp.getMaxRequestsPerPhonePerHour(), HOUR,
                 Refusal.PHONE));
         if (budget != Budget.NONE) {
-            addCeiling(counters, PHONE_DAILY_KEY_PREFIX + e164, otp.getMaxRequestsPerPhonePerDay(), DAY,
+            addIfConfigured(counters, PHONE_DAILY_KEY_PREFIX + e164, otp.getMaxRequestsPerPhonePerDay(), DAY,
                     Refusal.PHONE_DAILY);
         }
 
@@ -277,8 +259,8 @@ public class SmsSendGuard {
                 retryAfter);
     }
 
-    /** A limit of 0 is not configured: it is neither counted nor checked. */
-    private static void addCeiling(List<Counter> counters, String key, int limit, Duration window, Refusal refusal) {
+    private static void addIfConfigured(List<Counter> counters, String key, int limit, Duration window,
+            Refusal refusal) {
         if (limit > 0) {
             counters.add(new Counter(key, limit, window, refusal));
         }
@@ -300,7 +282,6 @@ public class SmsSendGuard {
         return millis != null && millis > 0 ? Duration.ofMillis(millis) : counter.window();
     }
 
-    /** The number's own region, or {@code "unknown"} for a number that maps to none. */
     private static String region(PhoneNumber parsed) {
         String region = PHONE_NUMBERS.getRegionCodeForNumber(parsed);
         return region != null ? region : "unknown";
