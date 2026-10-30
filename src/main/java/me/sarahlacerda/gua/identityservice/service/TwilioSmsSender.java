@@ -39,10 +39,10 @@ public class TwilioSmsSender implements SmsSender {
     /** The recipient replied STOP to this sender. */
     static final int RECIPIENT_OPTED_OUT_CODE = 21610;
 
-    /** Creates one message; the seam tests replace. */
+    /** Creates one message and returns its Twilio SID; the seam tests replace. */
     @FunctionalInterface
     interface MessageDispatcher {
-        void create(PhoneNumber to, String messageBody);
+        String create(PhoneNumber to, String messageBody);
     }
 
     private final PhoneNumberMasker masker;
@@ -61,7 +61,8 @@ public class TwilioSmsSender implements SmsSender {
     @Override
     public void send(String e164PhoneNumber, String messageBody) {
         try {
-            dispatcher.create(new PhoneNumber(e164PhoneNumber), messageBody);
+            String sid = dispatcher.create(new PhoneNumber(e164PhoneNumber), messageBody);
+            log.info("sms_send outcome=accepted provider=twilio sid={} phone={}", sid, masker.mask(e164PhoneNumber));
         } catch (TwilioException ex) {
             throw translate(ex, e164PhoneNumber);
         }
@@ -108,11 +109,11 @@ public class TwilioSmsSender implements SmsSender {
         // A Messaging Service (number pool, opt-out, compliance) takes precedence over a single from-number.
         if (StringUtils.hasText(messagingServiceSid)) {
             log.info("Twilio SMS sender configured using a Messaging Service");
-            return (to, messageBody) -> Message.creator(to, messagingServiceSid, messageBody).create();
+            return (to, messageBody) -> Message.creator(to, messagingServiceSid, messageBody).create().getSid();
         }
         PhoneNumber from = new PhoneNumber(twilio.getFromNumber());
         log.info("Twilio SMS sender configured using fromNumber={}", masker.mask(twilio.getFromNumber()));
-        return (to, messageBody) -> Message.creator(to, from, messageBody).create();
+        return (to, messageBody) -> Message.creator(to, from, messageBody).create().getSid();
     }
 
     private static void validateConfiguration(TwilioProperties properties) {

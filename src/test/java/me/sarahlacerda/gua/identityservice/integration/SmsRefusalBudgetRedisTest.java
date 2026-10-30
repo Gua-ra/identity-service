@@ -27,6 +27,7 @@ import me.sarahlacerda.gua.identityservice.service.DirectoryService;
 import me.sarahlacerda.gua.identityservice.service.OtpCodeGenerator;
 import me.sarahlacerda.gua.identityservice.service.OtpService;
 import me.sarahlacerda.gua.identityservice.service.PhoneNumberHasher;
+import me.sarahlacerda.gua.identityservice.service.PhoneNumberMasker;
 import me.sarahlacerda.gua.identityservice.service.RateLimiter;
 import me.sarahlacerda.gua.identityservice.service.ReviewLogin;
 import me.sarahlacerda.gua.identityservice.service.SmsSendGuard;
@@ -86,7 +87,8 @@ class SmsRefusalBudgetRedisTest {
         ReviewLogin reviewLogin = Mockito.mock(ReviewLogin.class);
         rateLimiter = new RateLimiter(redisTemplate);
         SmsSendGuard sendGuard = new SmsSendGuard(redisTemplate, properties, metrics,
-                Mockito.mock(DirectoryService.class), Mockito.mock(PhoneNumberHasher.class), rateLimiter);
+                Mockito.mock(DirectoryService.class), Mockito.mock(PhoneNumberHasher.class), rateLimiter,
+                new PhoneNumberMasker());
         SmsSender provider = (to, body) -> {
             RuntimeException failure = providerFailure.get();
             if (failure != null) {

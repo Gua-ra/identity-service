@@ -91,15 +91,20 @@ class TwilioSmsSenderTest {
     }
 
     @Test
-    void aSuccessfulSendTextsTheNumberAndLogsNothing() {
+    void aSuccessfulSendTextsTheNumberAndLogsTheMessageSid() {
         AtomicReference<String> texted = new AtomicReference<>();
-        TwilioSmsSender sender = new TwilioSmsSender(new PhoneNumberMasker(),
-                (to, body) -> texted.set(to.getEndpoint() + "|" + body));
+        TwilioSmsSender sender = new TwilioSmsSender(new PhoneNumberMasker(), (to, body) -> {
+            texted.set(to.getEndpoint() + "|" + body);
+            return "SM0123456789abcdef0123456789abcdef";
+        });
 
         sender.send(PHONE, BODY);
 
         assertThat(texted.get()).isEqualTo(PHONE + "|" + BODY);
-        assertThat(logs.list).isEmpty();
+        assertThat(logs.list).singleElement().satisfies(event -> assertThat(event.getFormattedMessage())
+                .isEqualTo("sms_send outcome=accepted provider=twilio sid=SM0123456789abcdef0123456789abcdef"
+                        + " phone=••••0605"));
+        assertLogsKeepTheNumberCodeAndTwilioMessageOut();
     }
 
     @Test
