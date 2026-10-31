@@ -33,6 +33,8 @@ public class SecurityConfig {
                         // The authentication service's account-deletion notice. Authenticated in the
                         // handler by confidential client credentials, exactly like /oauth2/token.
                         "/oauth2/account-deleted",
+                        // Twilio's message status callback, authenticated in the handler by X-Twilio-Signature.
+                        "/sms/twilio/status",
                         "/login/**");
 
         /**
