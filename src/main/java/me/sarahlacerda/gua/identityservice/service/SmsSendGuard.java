@@ -13,6 +13,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -53,9 +55,15 @@ import me.sarahlacerda.gua.identityservice.exception.UnsupportedPhoneCountryExce
  * Every admitted send that texts a code is counted by the region of its destination in
  * {@code gua_identity_sms_admitted_total{country,budget}}. A send the provider accepts and later
  * reports as undelivered is still counted there, so the count shows where codes were requested.
+ *
+ * <p>
+ * Every admitted or refused send is also logged in logfmt with its region, dialling code, last four
+ * digits and requesting address.
  */
 @Component
 public class SmsSendGuard {
+
+    private static final Logger log = LoggerFactory.getLogger(SmsSendGuard.class);
 
     static final String IP_KEY_PREFIX = "otp:rate:ip:";
     static final String PHONE_KEY_PREFIX = "otp:rate:phone:";
@@ -149,18 +157,20 @@ public class SmsSendGuard {
     private final DirectoryService directoryService;
     private final PhoneNumberHasher phoneNumberHasher;
     private final RateLimiter rateLimiter;
+    private final PhoneNumberMasker masker;
     private final Set<String> allowedCountries;
     private final Map<String, Integer> countryDailyLimits;
 
     public SmsSendGuard(StringRedisTemplate redisTemplate, IdentityServiceProperties properties,
             MeterRegistry metrics, DirectoryService directoryService, PhoneNumberHasher phoneNumberHasher,
-            RateLimiter rateLimiter) {
+            RateLimiter rateLimiter, PhoneNumberMasker masker) {
         this.redisTemplate = redisTemplate;
         this.properties = properties;
         this.metrics = metrics;
         this.directoryService = directoryService;
         this.phoneNumberHasher = phoneNumberHasher;
         this.rateLimiter = rateLimiter;
+        this.masker = masker;
         this.allowedCountries = allowedCountries(properties.getOtp().getAllowedCountries());
         this.countryDailyLimits = countryDailyLimits(properties.getOtp().getCountryDailyLimits());
     }
@@ -178,8 +188,8 @@ public class SmsSendGuard {
      */
     public Admission admit(String phoneNumber, String requesterIp) {
         PhoneNumber parsed = parse(phoneNumber);
-        requireAllowedCountry(parsed);
         String e164 = PHONE_NUMBERS.format(parsed, PhoneNumberFormat.E164);
+        requireAllowedCountry(parsed, e164, requesterIp);
         boolean hasAccount = directoryService.findByDigest(phoneNumberHasher.digest(e164)).isPresent();
         return count(e164, region(parsed), requesterIp, hasAccount ? Budget.ACCOUNT : Budget.SIGN_UP);
     }
@@ -190,9 +200,9 @@ public class SmsSendGuard {
      */
     public Admission admitForAccount(String phoneNumber, String requesterIp) {
         PhoneNumber parsed = parse(phoneNumber);
-        requireAllowedCountry(parsed);
-        return count(PHONE_NUMBERS.format(parsed, PhoneNumberFormat.E164), region(parsed), requesterIp,
-                Budget.ACCOUNT);
+        String e164 = PHONE_NUMBERS.format(parsed, PhoneNumberFormat.E164);
+        requireAllowedCountry(parsed, e164, requesterIp);
+        return count(e164, region(parsed), requesterIp, Budget.ACCOUNT);
     }
 
     /**
@@ -252,6 +262,8 @@ public class SmsSendGuard {
             if (budget != Budget.NONE) {
                 metrics.counter("gua.identity.sms.admitted", "country", region, "budget", budget.tagValue)
                         .increment();
+                log.info("sms_admit outcome=admitted country={} budget={} phone={} ip={}", region,
+                        budget.tagValue, loggedPhone(e164), requesterIp);
             }
             return new Admission(keys);
         }
@@ -271,7 +283,7 @@ public class SmsSendGuard {
                 retryAfter = remaining;
             }
         }
-        refused(refusal);
+        refused(refusal, region, e164, requesterIp);
         throw new OtpRateLimitedException(
                 refusal.isCeiling() ? "Verification codes are temporarily unavailable" : "Too many OTP requests",
                 retryAfter);
@@ -284,14 +296,23 @@ public class SmsSendGuard {
         }
     }
 
-    private void requireAllowedCountry(PhoneNumber parsed) {
+    private void requireAllowedCountry(PhoneNumber parsed, String e164, String requesterIp) {
         if (allowedCountries.isEmpty()) {
             return;
         }
         String region = PHONE_NUMBERS.getRegionCodeForNumber(parsed);
         if (region == null || !allowedCountries.contains(region)) {
-            refused(Refusal.COUNTRY);
+            refused(Refusal.COUNTRY, region(parsed), e164, requesterIp);
             throw new UnsupportedPhoneCountryException("Verification codes cannot be sent to this country");
+        }
+    }
+
+    /** The dialling code and last four digits, e.g. {@code +212••••3456}. */
+    private String loggedPhone(String e164) {
+        try {
+            return "+" + PHONE_NUMBERS.parse(e164, null).getCountryCode() + masker.mask(e164);
+        } catch (NumberParseException ex) {
+            return masker.mask(e164);
         }
     }
 
@@ -306,8 +327,10 @@ public class SmsSendGuard {
         return region != null ? region : "unknown";
     }
 
-    private void refused(Refusal refusal) {
+    private void refused(Refusal refusal, String region, String e164, String requesterIp) {
         metrics.counter("gua.identity.sms.refused", "reason", refusal.tagValue()).increment();
+        log.info("sms_admit outcome=refused reason={} country={} phone={} ip={}", refusal.tagValue(), region,
+                loggedPhone(e164), requesterIp);
     }
 
     private static PhoneNumber parse(String phoneNumber) {

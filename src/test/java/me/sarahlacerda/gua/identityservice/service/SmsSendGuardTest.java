@@ -22,6 +22,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.bind.PropertySourcesPlaceholdersResolver;
 import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
@@ -38,6 +39,10 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
+
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -770,6 +775,50 @@ class SmsSendGuardTest {
         return new Binder(ConfigurationPropertySources.from(sources), new PropertySourcesPlaceholdersResolver(sources));
     }
 
+    @Test
+    void aCountryRefusalLogsTheRegionDiallingCodeAndAddressButNotTheNumber() {
+        allowOnly(SERVED);
+        List<String> lines = capturedLogs(() -> assertThatThrownBy(() -> guard.admit(MA, ADDRESS))
+                .isInstanceOf(UnsupportedPhoneCountryException.class));
+
+        assertThat(lines).containsExactly(
+                "sms_admit outcome=refused reason=country country=MA phone=+212••••3456 ip=" + ADDRESS);
+    }
+
+    @Test
+    void aLimitRefusalLogsItsReason() {
+        properties.getOtp().setMaxRequestsPerPhonePerHour(1);
+        guard = newGuard();
+        guard.admit(BR, ADDRESS);
+
+        List<String> lines = capturedLogs(() -> assertThatThrownBy(() -> guard.admit(BR, OTHER_ADDRESS))
+                .isInstanceOf(OtpRateLimitedException.class));
+
+        assertThat(lines).containsExactly(
+                "sms_admit outcome=refused reason=phone country=BR phone=+55••••8888 ip=" + OTHER_ADDRESS);
+    }
+
+    @Test
+    void anAdmittedSendLogsItsBudget() {
+        List<String> lines = capturedLogs(() -> guard.admit(CA, ADDRESS));
+
+        assertThat(lines).containsExactly(
+                "sms_admit outcome=admitted country=CA budget=sign_up phone=+1••••9911 ip=" + ADDRESS);
+    }
+
+    private static List<String> capturedLogs(Runnable action) {
+        Logger logger = (Logger) LoggerFactory.getLogger(SmsSendGuard.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            action.run();
+        } finally {
+            logger.detachAppender(appender);
+        }
+        return appender.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
+    }
+
     private static void configureCeilings(OtpProperties otp) {
         otp.setMaxSignUpSendsPerHour(60);
         otp.setMaxSignUpSendsPerDay(300);
@@ -789,7 +838,7 @@ class SmsSendGuardTest {
 
     private SmsSendGuard newGuard() {
         return new SmsSendGuard(redisTemplate, properties, metrics, directoryService, phoneNumberHasher,
-                new RateLimiter(redisTemplate));
+                new RateLimiter(redisTemplate), new PhoneNumberMasker());
     }
 
     private void hasAccount(String e164) {
