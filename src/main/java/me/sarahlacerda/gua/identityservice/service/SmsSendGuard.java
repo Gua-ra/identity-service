@@ -263,7 +263,7 @@ public class SmsSendGuard {
                 metrics.counter("gua.identity.sms.admitted", "country", region, "budget", budget.tagValue)
                         .increment();
                 log.info("sms_admit outcome=admitted country={} budget={} phone={} ip={}", region,
-                        budget.tagValue, loggedPhone(e164), requesterIp);
+                        budget.tagValue, masker.maskWithDialCode(e164), requesterIp);
             }
             return new Admission(keys);
         }
@@ -307,15 +307,6 @@ public class SmsSendGuard {
         }
     }
 
-    /** The dialling code and last four digits, e.g. {@code +212••••3456}. */
-    private String loggedPhone(String e164) {
-        try {
-            return "+" + PHONE_NUMBERS.parse(e164, null).getCountryCode() + masker.mask(e164);
-        } catch (NumberParseException ex) {
-            return masker.mask(e164);
-        }
-    }
-
     private Duration remaining(Counter counter) {
         Long millis = redisTemplate.getExpire(counter.key(), TimeUnit.MILLISECONDS);
         return millis != null && millis > 0 ? Duration.ofMillis(millis) : counter.window();
@@ -330,7 +321,7 @@ public class SmsSendGuard {
     private void refused(Refusal refusal, String region, String e164, String requesterIp) {
         metrics.counter("gua.identity.sms.refused", "reason", refusal.tagValue()).increment();
         log.info("sms_admit outcome=refused reason={} country={} phone={} ip={}", refusal.tagValue(), region,
-                loggedPhone(e164), requesterIp);
+                masker.maskWithDialCode(e164), requesterIp);
     }
 
     private static PhoneNumber parse(String phoneNumber) {

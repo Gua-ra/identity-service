@@ -1,5 +1,6 @@
 package me.sarahlacerda.gua.identityservice.service;
 
+import java.net.URI;
 import java.util.Set;
 
 import org.slf4j.Logger;
@@ -14,6 +15,7 @@ import com.twilio.Twilio;
 import com.twilio.exception.ApiException;
 import com.twilio.exception.TwilioException;
 import com.twilio.rest.api.v2010.account.Message;
+import com.twilio.rest.api.v2010.account.MessageCreator;
 import com.twilio.type.PhoneNumber;
 
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
@@ -106,14 +108,23 @@ public class TwilioSmsSender implements SmsSender {
         validateConfiguration(twilio);
         Twilio.init(twilio.getAccountSid(), twilio.getAuthToken());
         String messagingServiceSid = twilio.getMessagingServiceSid();
+        URI statusCallback = StringUtils.hasText(twilio.getStatusCallbackUrl())
+                ? URI.create(twilio.getStatusCallbackUrl())
+                : null;
         // A Messaging Service (number pool, opt-out, compliance) takes precedence over a single from-number.
         if (StringUtils.hasText(messagingServiceSid)) {
             log.info("Twilio SMS sender configured using a Messaging Service");
-            return (to, messageBody) -> Message.creator(to, messagingServiceSid, messageBody).create().getSid();
+            return (to, messageBody) -> withStatusCallback(Message.creator(to, messagingServiceSid, messageBody),
+                    statusCallback).create().getSid();
         }
         PhoneNumber from = new PhoneNumber(twilio.getFromNumber());
         log.info("Twilio SMS sender configured using fromNumber={}", masker.mask(twilio.getFromNumber()));
-        return (to, messageBody) -> Message.creator(to, from, messageBody).create().getSid();
+        return (to, messageBody) -> withStatusCallback(Message.creator(to, from, messageBody), statusCallback)
+                .create().getSid();
+    }
+
+    private static MessageCreator withStatusCallback(MessageCreator creator, URI statusCallback) {
+        return statusCallback != null ? creator.setStatusCallback(statusCallback) : creator;
     }
 
     private static void validateConfiguration(TwilioProperties properties) {
