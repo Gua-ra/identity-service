@@ -55,10 +55,6 @@ import me.sarahlacerda.gua.identityservice.exception.UnsupportedPhoneCountryExce
  * Every admitted send that texts a code is counted by the region of its destination in
  * {@code gua_identity_sms_admitted_total{country,budget}}. A send the provider accepts and later
  * reports as undelivered is still counted there, so the count shows where codes were requested.
- *
- * <p>
- * Every admitted or refused send is also logged in logfmt with its region, dialling code, last four
- * digits and requesting address.
  */
 @Component
 public class SmsSendGuard {

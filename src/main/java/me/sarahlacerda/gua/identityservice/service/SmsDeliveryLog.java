@@ -8,12 +8,6 @@ import org.springframework.stereotype.Component;
 
 import io.micrometer.core.instrument.MeterRegistry;
 
-/**
- * Records the final delivery outcome Twilio reports for a message, one logfmt {@code sms_status} line
- * that joins the {@code sms_send} line by {@code sid}, and
- * {@code gua_identity_sms_delivery_total{status,error_code,country}}. A Messaging Service accepts a send
- * it later fails (21408, 21612, 30034), so this is where those refusals show up.
- */
 @Component
 public class SmsDeliveryLog {
 
@@ -30,7 +24,6 @@ public class SmsDeliveryLog {
         this.metrics = metrics;
     }
 
-    /** Records {@code status} when it is final; queued, sending, sent and the like are ignored. */
     public void record(String sid, String status, String errorCode, String e164To) {
         if (status == null || !FINAL_STATUSES.contains(status)) {
             return;

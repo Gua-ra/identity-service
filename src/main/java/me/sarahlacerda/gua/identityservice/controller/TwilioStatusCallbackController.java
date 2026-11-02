@@ -21,10 +21,7 @@ import io.swagger.v3.oas.annotations.Hidden;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.service.SmsDeliveryLog;
 
-/**
- * Twilio's message status callback. The signature is checked against the configured public callback
- * URL, not the request URL, which the ingress rewrites.
- */
+/** The signature is checked against the configured callback URL because the ingress rewrites the request URL. */
 @Hidden
 @RestController
 @ConditionalOnProperty(prefix = "identity.sms.twilio", name = "enabled", havingValue = "true")
