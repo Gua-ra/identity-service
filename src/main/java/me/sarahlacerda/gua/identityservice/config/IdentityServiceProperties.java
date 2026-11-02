@@ -367,6 +367,8 @@ public class IdentityServiceProperties {
             /** Twilio Messaging Service SID (preferred for production: number pool, opt-out/compliance).
              * Takes precedence over {@code fromNumber} when set. */
             private String messagingServiceSid;
+            /** Public URL of {@code POST /sms/twilio/status}; callback signatures are checked against it. */
+            private String statusCallbackUrl;
         }
     }
 

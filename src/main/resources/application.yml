@@ -289,6 +289,7 @@ identity:
       account-sid: ${IDENTITY_SMS_TWILIO_ACCOUNT_SID:}
       auth-token: ${IDENTITY_SMS_TWILIO_AUTH_TOKEN:}
       from-number: ${IDENTITY_SMS_TWILIO_FROM_NUMBER:}
+      status-callback-url: ${IDENTITY_SMS_TWILIO_STATUS_CALLBACK_URL:}
 
 springdoc:
   api-docs:

@@ -3,6 +3,9 @@ package me.sarahlacerda.gua.identityservice.service;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import com.google.i18n.phonenumbers.NumberParseException;
+import com.google.i18n.phonenumbers.PhoneNumberUtil;
+
 /**
  * Produces a display-only mask of an E.164 phone number that reveals only the last four digits
  * (e.g. {@code +15551234567 -> ••••4567}). The mask is not reversible; it lets users recognise which
@@ -24,5 +27,14 @@ public class PhoneNumberMasker {
             return null;
         }
         return BULLETS + phone.substring(phone.length() - VISIBLE_DIGITS);
+    }
+
+    /** The dialling code and last four digits for logs, e.g. {@code +212••••3456}. */
+    public String maskWithDialCode(String e164) {
+        try {
+            return "+" + PhoneNumberUtil.getInstance().parse(e164, null).getCountryCode() + mask(e164);
+        } catch (NumberParseException ex) {
+            return mask(e164);
+        }
     }
 }
