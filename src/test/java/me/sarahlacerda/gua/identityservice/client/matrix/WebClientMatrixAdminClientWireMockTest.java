@@ -350,7 +350,7 @@ class WebClientMatrixAdminClientWireMockTest {
     }
 
     private List<ILoggingEvent> loggedEvents() {
-        // Background threads from other test classes also append; ListAppender appends under its own monitor.
+        // Other tests' threads may still be logging, and ListAppender appends while holding its own lock.
         synchronized (logs) {
             return List.copyOf(logs.list);
         }

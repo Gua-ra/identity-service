@@ -47,11 +47,7 @@ public class IdentityServiceProperties {
         @Min(1)
         private int maxRequestsPerPhonePerHour = 5;
 
-        /**
-         * SMS sends to one number in a day opened by its first send, from any address. Bounds how
-         * many codes anyone can have texted to one person's phone once each hourly window reopens.
-         * 0 means no limit.
-         */
+        /** SMS sends to one number in a day opened by its first send, from any address. 0 means no limit. */
         @Min(0)
         private int maxRequestsPerPhonePerDay = 0;
 
