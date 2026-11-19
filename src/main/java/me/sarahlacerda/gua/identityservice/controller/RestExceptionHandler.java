@@ -366,11 +366,7 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("bad_request", "A request parameter has the wrong type."));
         }
 
-        /**
-         * Spring's own refusals (unknown path, wrong method, unsupported media type, missing
-         * parameter) implement {@link org.springframework.web.ErrorResponse} and carry their 4xx
-         * status. Answering them as 500 makes every scanner probe look like a server failure.
-         */
+        /** Spring's own 4xx refusals keep their status, so a 500 still means a server fault. */
         @ExceptionHandler(Exception.class)
         public ResponseEntity<ErrorResponse> handleGeneric(Exception ex) {
                 if (ex instanceof org.springframework.web.ErrorResponse refusal
