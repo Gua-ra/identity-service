@@ -47,8 +47,50 @@ public class IdentityServiceProperties {
         @Min(1)
         private int maxRequestsPerPhonePerHour = 5;
 
+        /**
+         * SMS sends to one number in a day opened by its first send, from any address. Bounds how
+         * many codes anyone can have texted to one person's phone once each hourly window reopens.
+         * 0 means no limit.
+         */
+        @Min(0)
+        private int maxRequestsPerPhonePerDay = 0;
+
         @Min(1)
         private int maxRequestsPerIpPerHour = 10;
+
+        /**
+         * SMS sends to numbers without an account, across every number and address, in a window
+         * opened by the first send. 0 means no ceiling.
+         */
+        @Min(0)
+        private int maxSignUpSendsPerHour = 0;
+
+        @Min(0)
+        private int maxSignUpSendsPerDay = 0;
+
+        /**
+         * SMS sends for existing accounts, counted apart from the sign-up ceilings. 0 means no
+         * ceiling.
+         */
+        @Min(0)
+        private int maxAccountSendsPerHour = 0;
+
+        @Min(0)
+        private int maxAccountSendsPerDay = 0;
+
+        /**
+         * ISO 3166-1 alpha-2 regions a code may be texted to, matched on the region of the number,
+         * so +1 numbers outside the listed regions (Caribbean, for example) are refused. Empty
+         * means every region.
+         */
+        private List<String> allowedCountries = new ArrayList<>();
+
+        /**
+         * {@code REGION:LIMIT} entries: SMS sends per day to numbers of that ISO 3166-1 alpha-2
+         * region, across every number, address and account, in a window opened by the first send.
+         * Meant for regions that cost much more per SMS. A region not listed has no such limit.
+         */
+        private List<String> countryDailyLimits = new ArrayList<>();
 
         /**
          * Wrong guesses one code may absorb before it is deleted. Counted per phone
@@ -103,6 +145,13 @@ public class IdentityServiceProperties {
 
         /** Max phone numbers accepted per /directory/lookup request. */
         private int maxLookupBatch = 1000;
+
+        /**
+         * /directory/lookup calls per account in an hour, whatever address they come from. 0 means
+         * no limit.
+         */
+        @Min(0)
+        private int maxLookupsPerAccountPerHour = 0;
     }
 
     /**
@@ -318,6 +367,8 @@ public class IdentityServiceProperties {
             /** Twilio Messaging Service SID (preferred for production: number pool, opt-out/compliance).
              * Takes precedence over {@code fromNumber} when set. */
             private String messagingServiceSid;
+            /** Public URL of {@code POST /sms/twilio/status}; callback signatures are checked against it. */
+            private String statusCallbackUrl;
         }
     }
 

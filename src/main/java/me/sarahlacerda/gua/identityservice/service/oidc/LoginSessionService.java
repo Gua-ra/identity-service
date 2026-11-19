@@ -16,10 +16,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import me.sarahlacerda.gua.identityservice.config.LoginFlowProperties;
 
 /**
- * Redis-backed store for {@link LoginSession}s. Sessions are keyed by an
- * opaque,
- * high-entropy identifier delivered to the browser as an HttpOnly cookie, and
- * expire after {@link LoginFlowProperties#getSessionTtl()}.
+ * Redis-backed store for {@link LoginSession}s. Sessions are keyed by an opaque, high-entropy
+ * identifier delivered to the browser as an HttpOnly cookie, and expire after
+ * {@link LoginFlowProperties#getSessionTtl()}.
  */
 @Service
 @RequiredArgsConstructor
@@ -33,7 +32,6 @@ public class LoginSessionService {
     private final ObjectMapper objectMapper;
     private final LoginFlowProperties properties;
 
-    /** Persists a new session and returns its opaque identifier. */
     public String create(LoginSession session) {
         String id = newToken();
         save(id, session);
@@ -55,10 +53,7 @@ public class LoginSessionService {
         }
     }
 
-    /**
-     * Writes the session, (re)setting its TTL so an active login does not expire
-     * mid-flow.
-     */
+    /** Resets the TTL so an active login does not expire mid-flow. */
     public void save(String id, LoginSession session) {
         try {
             redisTemplate.opsForValue().set(
@@ -77,11 +72,9 @@ public class LoginSessionService {
     }
 
     /**
-     * Issues a one-time token mapping to a login session id, used by the in-app
-     * passkey enrollment handoff. The cookie set on the (separate-context) API POST
-     * is not present in the web view, so the web view opens this token and the GET
-     * handler turns it back into a first-party session cookie. Stored with a short
-     * TTL and consumed on first read.
+     * Issues a one-time token mapping to a login session id, for the in-app enrollment handoff. The
+     * cookie set on the API POST is not present in the web view, so the web view opens this token and
+     * the GET handler turns it into a first-party session cookie. Short TTL, consumed on first read.
      */
     public String createEnrollToken(String sessionId, Duration ttl) {
         String token = newToken();

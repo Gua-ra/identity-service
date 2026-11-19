@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.security.PrivateKey;
@@ -19,25 +18,15 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.HomeserverConfig;
 
 /**
- * Builds and signs generation-1 placement records (ADM-008 decision 7).
+ * Builds and signs generation-1 placement records.
  *
- * <p>identity-service signs as the provisioning agent it already is for each homeserver in its registry:
- * it holds their admin tokens, and under decision 7 it holds the private half of their roster membership
- * keys until Phase 1 genesis keys and Phase 2 registries replace that arrangement. The format does not
- * change when they do; only where the verifier looks the key up.
+ * <p>identity-service signs as the provisioning agent for each homeserver in its registry: it holds
+ * the private half of their roster membership keys. One signer for every homeserver is one
+ * operator, so these records improve no compromise condition; they record where an account lives.
  *
- * <p>One consequence is stated rather than hidden: one signer for every homeserver is one operator, able
- * to produce roster-level proofs for each key, so generation-1 records improve no compromise condition.
- * They record where an account already lives.
- *
- * <h2>Keys are parsed on first use, not at construction</h2>
- * <p>This bean is built in every deployment, including the overwhelming majority that have placement
- * publishing switched off. Parsing a configured key eagerly would mean a deployment holding a malformed
- * or truncated key in its Secret failed to start even with the feature off, which is a behaviour change
- * the flags are supposed to prevent. The key material is therefore held as configured text and decoded
- * the first time a record is actually signed. A deployment that does publish still gets its keys checked
- * before it serves anything: {@link PlacementSignerStartupCheck} decodes every one of them at startup and
- * refuses to start if any fails, which is the fail-fast that matters.
+ * <p>Keys are decoded on first use, not at construction: this bean is built in every deployment,
+ * and a malformed key must not fail startup while publishing is off. A deployment that does publish
+ * gets its keys checked at startup by {@link PlacementSignerStartupCheck}.
  */
 @Component
 public class PlacementRecordSigner {
@@ -113,13 +102,7 @@ public class PlacementRecordSigner {
                 id -> Ed25519Keys.privateKeyFromPkcs8(configuredKeys.get(id)));
     }
 
-    /**
-     * The roster id a configured homeserver publishes under.
-     *
-     * <p>Delegates to {@link FederationIds}, which is the single implementation of this mapping. The MAS
-     * readers resolve the same value through the same collaborator, so the id the comparison indexes by
-     * and the id a reader reports can no longer disagree.
-     */
+    /** The roster id a configured homeserver publishes under. Delegates to {@link FederationIds}. */
     public String federationIdOf(HomeserverConfig homeserver) {
         return federationIds.of(homeserver);
     }

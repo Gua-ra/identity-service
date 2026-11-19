@@ -34,10 +34,7 @@ public record OidcAuthorization(
         this(userId, phoneNumber, displayName, preferredUsername, scope, clientId, nonce, false);
     }
 
-    /**
-     * Backward-compatible form for authorizations without a chosen username or
-     * nonce.
-     */
+    /** Backward-compatible form for authorizations without a chosen username or nonce. */
     public OidcAuthorization(String userId, String phoneNumber, String displayName, Set<String> scope,
             String clientId) {
         this(userId, phoneNumber, displayName, null, scope, clientId, null);

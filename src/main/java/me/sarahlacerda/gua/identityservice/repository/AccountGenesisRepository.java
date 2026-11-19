@@ -17,9 +17,9 @@ import me.sarahlacerda.gua.identityservice.domain.AccountGenesisRecord.State;
 /**
  * Genesis rows, keyed by accountId.
  *
- * <p>Deliberately absent: any method that updates {@link Origin}. A bootstrap account is not adopted
- * into a rooted one in this phase. {@code AccountGenesisOriginImmutableTest} fails the build if such a
- * method appears here, if a modifying query names the column, or if the entity grows a mutator for it.
+ * <p>Deliberately absent: any method that updates {@link Origin}. {@code AccountGenesisOriginImmutableTest}
+ * fails the build if such a method appears here, if a modifying query names the column, or if the
+ * entity grows a mutator for it.
  */
 public interface AccountGenesisRepository extends JpaRepository<AccountGenesisRecord, String> {
 
@@ -40,15 +40,12 @@ public interface AccountGenesisRepository extends JpaRepository<AccountGenesisRe
     List<String> findExistingUserIds(@Param("userIds") Collection<String> userIds);
 
     /**
-     * Attaches a pending registration to an account, as one atomic compare-and-set.
+     * Attaches a pending registration to an account as one atomic compare-and-set. The update matches
+     * only a row that is still PENDING and still carries this handle hash, so of two sessions racing on
+     * one handle the second updates zero rows. The unique index on {@code user_id} backs this up.
      *
-     * <p>This is what makes two sessions racing on one handle resolve to a single attach: the update
-     * matches only a row that is still PENDING and still carries this handle hash, so the second writer
-     * updates zero rows and its signup fails rather than silently attaching an already-attached genesis.
-     * The unique index on {@code user_id} is the second line of the same defence.
-     *
-     * @return rows updated: 1 on success, 0 when the row is gone, expired past its window, already
-     *         attached, or was attached by someone else in between
+     * @return rows updated: 1 on success, 0 when the row is gone, expired, already attached, or was
+     *         attached by someone else in between
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
