@@ -150,17 +150,16 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && inputs.environment == 'dev') ||
       needs.build.outputs.deploy-to-dev == 'true'
-    runs-on: [self-hosted, dev]
+    # In-cluster runner scoped to this one Deployment (gua-deploy k8s/cicd/dev/identity-service-deploy-runner.yaml).
+    # Never the `dev` host runner: this repo is public and that runner has sudo on the node.
+    runs-on: [self-hosted, identity-service-incluster]
     environment: dev
     steps:
       - name: Roll out ${{ needs.build.outputs.ref }} to dev
         run: |
           IMG="${{ needs.build.outputs.ref }}"
-          # k8s pulls the immutable sha-tagged image from GHCR via the ghcr-pull secret
-          # (deployment is imagePullPolicy: IfNotPresent + imagePullSecrets), no docker needed.
-          # Use k3s' bundled kubectl as root so PATH + kubeconfig are always correct on the node.
-          sudo k3s kubectl -n gua set image deployment/identity-service identity-service="$IMG"
-          sudo k3s kubectl -n gua rollout status deployment/identity-service --timeout=180s
+          kubectl -n gua set image deployment/identity-service identity-service="$IMG"
+          kubectl -n gua rollout status deployment/identity-service --timeout=180s
 
       - name: Tell the PR where it went
         if: github.event_name == 'pull_request'

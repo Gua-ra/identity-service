@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.sql.Connection;
@@ -25,16 +24,12 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties.Home
 /**
  * The fallback MAS read path: a read-only role on each MAS database.
  *
- * <p><b>Not available on this deployment.</b> No such role exists on any MAS database. Granting it
- * means creating a login role per MAS with {@code SELECT} on exactly three tables,
- * {@code upstream_oauth_links}, {@code users} and {@code upstream_oauth_providers}, and nothing else.
- * Until then this reader reports itself unconfigured
- * ({@code identity.placement.mas.sql.enabled}).
+ * <p>Off by default ({@code identity.placement.mas.sql.enabled}). It needs a login role per MAS with
+ * {@code SELECT} on exactly three tables: {@code upstream_oauth_links}, {@code users} and
+ * {@code upstream_oauth_providers}.
  *
- * <p><b>The column this must never read.</b> {@code upstream_oauth_links.human_account_name} holds the
- * account's phone number in the deployed MAS configuration. It is not in any statement below, it is not
- * selected by {@code SELECT *} anywhere here, and {@code MasSqlLinkReaderTest} fails if it ever appears
- * in this file. Neither the links query nor the provider query may grow it.
+ * <p><b>The column this must never read:</b> {@code upstream_oauth_links.human_account_name} holds
+ * the account's phone number. {@code MasSqlLinkReaderTest} fails if it appears in this file.
  */
 @Component
 public class MasSqlLinkReader implements MasLinkReader {
@@ -156,10 +151,7 @@ public class MasSqlLinkReader implements MasLinkReader {
         return effective;
     }
 
-    /**
-     * The effective value, with the MAS default applied. {@code fail} is the default when the key is
-     * absent, so reporting "absent" as "unset" would hide the difference that matters.
-     */
+    /** The effective value, with the MAS default applied: {@code fail} when the key is absent. */
     private String onConflictOf(String claimsImportsJson) {
         if (claimsImportsJson == null || claimsImportsJson.isBlank()) {
             return "fail";

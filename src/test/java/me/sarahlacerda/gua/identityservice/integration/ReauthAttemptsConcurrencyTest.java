@@ -28,14 +28,10 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 /**
- * Pins the budget of wrong numbers against a real Redis under a parallel burst. The account's
- * own number is what a stolen session guesses at, and the cap only bounds that guessing if the
- * attempt is reserved atomically before the number is compared: a read followed by a later
- * increment bounds a sequence of guesses and lets a burst of them all read the same value, all
- * pass the gate and all get compared.
+ * Pins the budget of wrong numbers against a real Redis under a parallel burst. The cap bounds
+ * guessing only if the attempt is reserved atomically before the number is compared.
  *
- * <p>
- * Needs Docker for Postgres and Redis, and is skipped where Docker is not available.
+ * <p>Needs Docker for Postgres and Redis, and is skipped where Docker is not available.
  */
 @SpringBootTest
 @Testcontainers(disabledWithoutDocker = true)

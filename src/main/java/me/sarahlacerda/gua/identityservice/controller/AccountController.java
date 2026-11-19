@@ -41,13 +41,8 @@ import me.sarahlacerda.gua.identityservice.service.security.ReauthOperation;
 import me.sarahlacerda.gua.identityservice.service.security.TokenRevocationService;
 
 /**
- * Account management endpoints that require fresh OTP reauthentication. Modeled
- * on the Matrix
- * User-Interactive Authentication {@code m.login.msisdn} stage so the long-term
- * migration to a
- * full MAS deployment can map directly: every privileged operation here demands
- * a phone-OTP proof
- * of possession in addition to the existing session bearer token.
+ * Account management endpoints that require fresh OTP reauthentication in addition to the session
+ * bearer token. Modeled on the Matrix User-Interactive Authentication {@code m.login.msisdn} stage.
  */
 @RestController
 @RequestMapping("/account")
@@ -70,7 +65,7 @@ public class AccountController {
         @Operation(summary = "Send a fresh OTP for account reauthentication", description = "The signed-in user confirms the number on their own account. It is normalized, digested with the directory's peppered HMAC and compared with that account's own directory binding; only a match sends an OTP, and the OTP goes to that number. Nothing is stored. A number that is not this account's is refused with 403 reauth_phone_mismatch, in the same words whether it is unknown or belongs to somebody else, so this can never be used to ask who owns a number.", security = @SecurityRequirement(name = "oidcAccessToken"))
         @ApiResponses({
                         @ApiResponse(responseCode = "202", description = "OTP dispatched to the account's number"),
-                        @ApiResponse(responseCode = "400", description = "invalid_phone_number: the submitted number could not be parsed", content = @Content),
+                        @ApiResponse(responseCode = "400", description = "invalid_phone_number: the submitted number could not be parsed; phone_country_not_supported: codes are not texted to the number's country", content = @Content),
                         @ApiResponse(responseCode = "401", description = "Caller not authenticated", content = @Content),
                         @ApiResponse(responseCode = "403", description = "reauth_phone_mismatch: this is not the number on the account", content = @Content),
                         @ApiResponse(responseCode = "429", description = "OTP rate limit hit, or too many wrong numbers submitted for this account", content = @Content)
@@ -128,10 +123,8 @@ public class AccountController {
                 String userId = authenticatedUserAccessor.requireCurrentUserId();
                 reauthService.requireValidReauth(userId, request.getReauthToken(), ReauthOperation.IDENTITY_RESET);
 
-                // Reset rotates the homeserver credential for the SAME existing account; it
-                // must never mint a new MXID or a new directory row. Pin the operation to the
-                // stable MXID already on file for this user so a credential reset can never be
-                // turned into a fresh identity (the other half of the identity-reset loop).
+                // Reset rotates the credential of the existing account. It must never mint a new MXID or
+                // directory row.
                 String existingUserId = directoryService.findByUserId(userId).stream()
                                 .findFirst()
                                 .map(entry -> entry.getUserId())
@@ -153,7 +146,7 @@ public class AccountController {
         @Operation(summary = "Start a phone-number change", description = "Spends a PHONE_CHANGE-scoped reauth token and a mandatory step-up factor: a user-verifying passkey assertion from /security/passkey/stepup/options settles it on its own, otherwise the account PIN when one is set. Then sends an OTP to the NEW number and returns a challenge to redeem at /account/phone/change/complete. Accounts with neither a PIN nor a passkey receive step_up_required and must set up two-step verification first. The OLD number is alerted out of band.", security = @SecurityRequirement(name = "oidcAccessToken"))
         @ApiResponses({
                         @ApiResponse(responseCode = "200", description = "Challenge created and OTP sent to the new number", content = @Content(schema = @Schema(implementation = PhoneChangeStartResponse.class))),
-                        @ApiResponse(responseCode = "400", description = "Validation failed, PIN invalid, invalid/equal phone number, or twofa_cooldown_active when the account PIN is too new to be spent as the step-up factor (retryAfterSeconds carries the wait; GET /security/pin/status reports the same number up front)", content = @Content),
+                        @ApiResponse(responseCode = "400", description = "Validation failed, PIN invalid, invalid/equal phone number, phone_country_not_supported for a new number in a country codes are not texted to, or twofa_cooldown_active when the account PIN is too new to be spent as the step-up factor (retryAfterSeconds carries the wait; GET /security/pin/status reports the same number up front)", content = @Content),
                         @ApiResponse(responseCode = "401", description = "Authentication or reauth/step-up failed", content = @Content),
                         @ApiResponse(responseCode = "403", description = "step_up_required — account has neither a PIN nor a passkey; two-step verification must be set up first", content = @Content),
                         @ApiResponse(responseCode = "409", description = "New number already linked to another account", content = @Content),

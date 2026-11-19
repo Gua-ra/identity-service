@@ -15,14 +15,9 @@ import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 
 /**
- * Regression guard for ADM-001 L1b. This service used to publish {@code phone -> homeserver}
- * rows into the gua-resolver directory with a client that signed each write with this
- * homeserver's roster key; the resolver accepted any active member's key for any row, so a
- * member could bind any phone number to itself. That client is deleted, not disabled.
- *
- * <p>The guard scans every compiled class of the service, main and test alike, for the
- * strings the removed mechanism needed and fails if any of them comes back: the resolver
- * write endpoint, the client type, and its canonical signing prefix.
+ * Guards against the return of the deleted client that published {@code phone -> homeserver} rows
+ * into the gua-resolver directory. Scans every compiled class, main and test, for the strings that
+ * mechanism needed: the resolver write endpoint, the client type and its canonical signing prefix.
  */
 class ResolverDirectoryPublishRemovedTest {
 

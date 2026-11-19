@@ -1,13 +1,10 @@
 package me.sarahlacerda.gua.identityservice.account.genesis;
 
 /**
- * RFC 4648 base32, lowercase and unpadded, which is the spelling ADM-008 fixes for an accountId.
+ * RFC 4648 base32, lowercase and unpadded: the spelling of an accountId.
  *
- * <p>The decoder is strict in both directions an ambiguity could enter: it accepts only the lowercase
- * alphabet (no uppercase, no padding, no RFC 4648 section 6 "extended hex" alphabet), only a character
- * count that an unpadded encoding can actually produce, and only trailing bits that are zero. Those are
- * the three ways a decoder that "helpfully" accepts more would give one byte string several spellings,
- * which ADM-001 L4 forbids for anything a signature or a permanent identifier covers.
+ * <p>The decoder accepts only the lowercase alphabet, only a character count an unpadded encoding can
+ * produce, and only zero trailing bits, so each byte string has exactly one spelling.
  */
 public final class Base32 {
 
@@ -26,7 +23,6 @@ public final class Base32 {
     private Base32() {
     }
 
-    /** Encodes {@code data} as lowercase unpadded base32. */
     public static String encode(byte[] data) {
         StringBuilder out = new StringBuilder((data.length * 8 + 4) / 5);
         int buffer = 0;

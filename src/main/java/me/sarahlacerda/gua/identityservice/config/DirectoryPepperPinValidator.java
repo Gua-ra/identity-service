@@ -13,40 +13,20 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 /**
- * Pins {@code IDENTITY_DIRECTORY_PEPPER} against silent rotation / environment
- * drift.
+ * Pins {@code IDENTITY_DIRECTORY_PEPPER} against silent rotation. The pepper is the HMAC key for every
+ * phone digest, so changing it orphans every directory row and routes returning users into signup.
  *
- * <p>
- * The directory pepper is the HMAC key for every phone digest in
- * {@code PhoneNumberHasher}. It is an <em>immutable, backed-up</em> secret:
- * changing it re-keys every digest, so the existing directory rows can no longer
- * be found and returning users are wrongly routed into signup (the
- * duplicate-account half of the identity-reset loop). A rotation is therefore a
- * data-corruption event, not a credential refresh.
- *
- * <p>
- * To catch an accidental rotation loudly, an operator records the live pepper's
- * <em>fingerprint</em> in {@code identity.directory.pepper-fingerprint}. On
- * startup this validator recomputes the fingerprint of the configured pepper and
- * {@linkplain IllegalStateException fails fast} if it differs from the pinned
- * value. The fingerprint is a one-way HMAC over a fixed, non-secret label keyed
- * by the pepper, so it never reveals the pepper and is safe to store in config.
- *
- * <p>
- * When no fingerprint is pinned (e.g. local dev) the validator only logs the
- * computed fingerprint at WARN so an operator can copy it into the deployment
- * config. It never hardcodes or logs the pepper itself.
+ * <p>An operator records the pepper's fingerprint in {@code identity.directory.pepper-fingerprint}.
+ * Startup recomputes it and fails fast on a mismatch. The fingerprint is a one-way HMAC over a fixed
+ * label, so it is safe to store in config. With no fingerprint pinned (local dev) the computed value
+ * is logged at WARN. The pepper itself is never logged.
  */
 @Component
 public class DirectoryPepperPinValidator {
 
     private static final Logger log = LoggerFactory.getLogger(DirectoryPepperPinValidator.class);
 
-    /**
-     * Fixed, non-secret label HMAC'd with the pepper to derive a stable,
-     * non-reversible fingerprint. Changing this string changes every fingerprint,
-     * so it must remain constant across releases.
-     */
+    /** Fixed, non-secret label HMAC'd with the pepper. Changing it changes every fingerprint. */
     private static final String FINGERPRINT_LABEL = "gua.identity.directory.pepper.fingerprint.v1";
     private static final String HMAC_ALGORITHM = "HmacSHA256";
 

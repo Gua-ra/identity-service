@@ -6,12 +6,10 @@ import java.util.regex.Pattern;
 /**
  * Strict parsing of Matrix user ids ({@code @localpart:server}).
  *
- * <p>This is the only code in the service that reads a localpart out of a user id, and
- * it accepts nothing but a well-formed Matrix user id. It is not where an existing
- * account's MAS localpart comes from: that is the username stored in the directory,
- * chosen by {@link me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver}
- * (ADM-001 S6). The resolver calls this parser only as its fallback for rows that have
- * no stored username.
+ * <p>The only code that reads a localpart out of a user id. An existing account's MAS localpart
+ * comes from the directory username instead (see
+ * {@link me.sarahlacerda.gua.identityservice.service.AccountLocalpartResolver}), which calls this
+ * parser only as its fallback for rows with no stored username.
  */
 public final class MatrixIds {
 
@@ -20,7 +18,6 @@ public final class MatrixIds {
     private MatrixIds() {
     }
 
-    /** True when {@code value} has the shape {@code @localpart:server}. */
     public static boolean isMatrixUserId(String value) {
         return value != null && MATRIX_USER_ID.matcher(value).matches();
     }
