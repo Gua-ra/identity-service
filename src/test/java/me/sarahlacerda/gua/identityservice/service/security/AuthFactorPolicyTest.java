@@ -10,15 +10,10 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 /**
- * The component every factor decision now goes through, so these are the answers login,
- * the phone-change step-up and recovery all get.
- *
- * <p>
- * Two kinds of thing are frozen here. That an SMS code never finishes a sign-in for an
- * account holding a factor, including when passkeys are switched off. And what the policy must
- * NOT do: narrow an operation's accepted factors by what the account holds, or refuse recovery
- * to an account that has a stronger factor. Either of those turns a credential that has quietly
- * become unusable into an account with no way back.
+ * The answers login, the phone-change step-up and recovery all get. Frozen here: an SMS code never
+ * finishes a sign-in for an account holding a factor, the policy never narrows an operation's
+ * accepted factors by what the account holds, and it never refuses recovery to an account that has
+ * a stronger factor.
  */
 @ExtendWith(MockitoExtension.class)
 class AuthFactorPolicyTest {
@@ -45,11 +40,7 @@ class AuthFactorPolicyTest {
         assertThat(policy().passkeyRegistered(USER)).isFalse();
     }
 
-    /**
-     * Deployment capability, not account state. It is the one sense in which a passkey can be
-     * "unavailable" that the server settles on its own, which is exactly why signup may act on
-     * it: nobody asserted it, it was read from configuration.
-     */
+    /** Deployment capability, not account state: read from configuration, so signup may act on it. */
     @Test
     void passkeysSupportedReportsTheDeploymentAndAsksNothingAboutTheAccount() {
         when(passkeyService.isEnabled()).thenReturn(true);
@@ -148,11 +139,7 @@ class AuthFactorPolicyTest {
         }
     }
 
-    /**
-     * The stored-credential predicate. Switching passkeys off must not turn a passkey-only
-     * account into one the SMS code finishes, because the next step for that account would be
-     * setting a PIN of the SMS holder's choosing.
-     */
+    /** Switching passkeys off must not turn a passkey-only account into one the SMS code finishes. */
     @Test
     void aStoredPasskeyStillGatesSignInWhenTheDeploymentHasPasskeysSwitchedOff() {
         lenient().when(passkeyService.isEnabled()).thenReturn(false);
@@ -186,10 +173,8 @@ class AuthFactorPolicyTest {
     void theAcceptedFactorsDoNotNarrowToWhatTheAccountHappensToHold() {
         AuthFactorPolicy policy = policy();
 
-        // stepUpFor takes no account: an account with only a PIN still sees PASSKEY accepted,
-        // and one with only a passkey still sees PIN accepted. Narrowing the set to what an
-        // account holds is how a bare existence check becomes a lockout, because the factor it
-        // narrowed to is exactly the one that may have become unusable.
+        // stepUpFor takes no account: an account with only a PIN still sees PASSKEY accepted, and one with
+        // only a passkey still sees PIN accepted.
         assertThat(policy.stepUpFor(ReauthOperation.PHONE_CHANGE).accepts(AuthFactor.PIN)).isTrue();
         assertThat(policy.stepUpFor(ReauthOperation.PHONE_CHANGE).accepts(AuthFactor.PASSKEY)).isTrue();
         assertThat(policy.stepUpFor(ReauthOperation.PHONE_CHANGE))
@@ -208,9 +193,7 @@ class AuthFactorPolicyTest {
     void deactivateAndIdentityResetAreReportedAsTheyAreActuallyEnforced() {
         AuthFactorPolicy policy = policy();
 
-        // Recorded, not endorsed. Both are reauth-token-only today, which is weaker than the
-        // phone change, and saying so in one readable place is the point: the gap used to be
-        // visible only as the absence of a check.
+        // Both are reauth-token-only today, which is weaker than the phone change.
         assertThat(policy.stepUpFor(ReauthOperation.DEACTIVATE).accepted())
                 .containsExactly(AuthFactor.PHONE_OTP);
         assertThat(policy.stepUpFor(ReauthOperation.IDENTITY_RESET).accepted())

@@ -21,21 +21,13 @@ public class DirectoryService {
 
     private final DirectoryEntryRepository repository;
 
-    /**
-     * Upsert a directory entry. A {@code null} {@code displayName} preserves the
-     * existing value
-     * (no overwrite); pass an empty string to clear it explicitly.
-     */
+    /** A null displayName preserves the existing value. An empty string clears it. */
     @Transactional
     public DirectoryEntry upsertByDigest(String phoneDigest, String userId, String displayName) {
         return upsertByDigest(phoneDigest, null, userId, displayName);
     }
 
-    /**
-     * Upsert a directory entry, also persisting a display-only masked phone.
-     * A {@code null} {@code phoneMasked} or {@code displayName} preserves the
-     * existing value (no overwrite).
-     */
+    /** Also persists the display-only masked phone. A null phoneMasked or displayName preserves the existing value. */
     @Transactional
     public DirectoryEntry upsertByDigest(String phoneDigest, String phoneMasked, String userId, String displayName) {
         DirectoryEntry entry = repository.findByPhoneDigest(phoneDigest)
@@ -98,16 +90,10 @@ public class DirectoryService {
                 .findFirst();
     }
 
-    // --- Routing-at-scale (Gua federation) -------------------------------------
-
     /**
-     * Records this deployment's routing choice for an account: the homeserver it was
-     * created on and the username alias, which is unique within this directory only.
-     * Looked up by phone digest (the account's stable directory key). A {@code null}
-     * value leaves the existing column untouched so this is safe to call on re-link.
-     * The row is a local record, not the committed placement or identifier binding of
-     * <a href="https://github.com/Gua-ra/gua-resolver/blob/main/docs/decisions/ADM-001-identifier-binding-placement-trust.md">ADM-001</a>
-     * (L6, L7).
+     * Records this deployment's routing choice for an account: the homeserver it was created on and
+     * the username, which is unique within this directory only. Looked up by phone digest. A
+     * {@code null} value leaves the existing column untouched, so this is safe to call on re-link.
      */
     @Transactional
     public DirectoryEntry assignRouting(String phoneDigest, String homeserverId, String username) {
@@ -124,10 +110,8 @@ public class DirectoryService {
     }
 
     /**
-     * Sets the contact-discovery opt-out flag on the entry for {@code phoneDigest}.
-     * The {@code @Builder} does not carry {@code discoverable}, so a phone change
-     * (which builds a fresh row for the new digest) must call this to preserve a
-     * user's prior discovery opt-out instead of silently re-opting them in.
+     * Sets the contact-discovery opt-out flag on the entry for {@code phoneDigest}. The builder does
+     * not carry {@code discoverable}, so a phone change must call this to preserve a prior opt-out.
      */
     @Transactional
     public DirectoryEntry setDiscoverable(String phoneDigest, boolean discoverable) {
@@ -138,18 +122,14 @@ public class DirectoryService {
         return repository.save(entry);
     }
 
-    /** True when the (case-insensitive) global username is already taken. */
     @Transactional(readOnly = true)
     public boolean isUsernameTaken(String username) {
         return repository.existsByUsernameIgnoreCase(username);
     }
 
     /**
-     * Resolves a username to its directory entry (Matrix user id + the homeserver
-     * recorded for it in this deployment's directory). Uniqueness is enforced within
-     * this directory, not across the federation: federation-wide uniqueness is a
-     * property of the sequenced binding log in ADM-001 (L11, L12). Routing before
-     * login is the resolver's own lookup, in which this service takes no part.
+     * Resolves a username to its directory entry (Matrix user id and the homeserver recorded for it).
+     * Uniqueness is enforced within this directory, not across the federation.
      */
     @Transactional(readOnly = true)
     public Optional<DirectoryEntry> resolveByUsername(String username) {

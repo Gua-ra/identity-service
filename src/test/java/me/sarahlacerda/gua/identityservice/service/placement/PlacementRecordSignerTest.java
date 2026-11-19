@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.time.Duration;
@@ -128,9 +127,7 @@ class PlacementRecordSignerTest {
                 PlacementTestFixtures.LOCAL_ID, PlacementTestFixtures.DOMAIN,
                 PlacementTestFixtures.FEDERATION_ID, "this is not a key"));
 
-        // This bean is built in every deployment, including the great majority with publishing off,
-        // where nothing will ever sign. Parsing eagerly meant a malformed Secret stopped the service
-        // starting even with the feature off, which is a behaviour change the flags exist to prevent.
+        // The signer is built in every deployment, so a malformed key must not stop startup while publishing is off.
         PlacementRecordSigner lazy = new PlacementRecordSigner(malformed);
 
         assertThat(lazy.canSignFor(PlacementTestFixtures.FEDERATION_ID)).isTrue();
@@ -147,8 +144,7 @@ class PlacementRecordSignerTest {
                 PlacementTestFixtures.DOMAIN, "");
         aliased.getRouting().getHomeservers().add(noExplicitId);
 
-        // The MAS readers resolve the same value through the same collaborator, so the id a reader
-        // reports and the id the comparison indexes by cannot drift apart again.
+        // The MAS readers resolve the same value through the same collaborator.
         assertThat(new PlacementRecordSigner(aliased).federationIdOf(noExplicitId))
                 .isEqualTo(new FederationIds(aliased).of(noExplicitId))
                 .isEqualTo("fed-legacy");

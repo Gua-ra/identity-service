@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.time.Duration;
@@ -25,17 +24,12 @@ import reactor.core.publisher.Mono;
 /**
  * The primary MAS read path: the MAS admin API, with a {@code client_credentials} token.
  *
- * <p><b>Not available on this deployment.</b> The links endpoint requires the {@code urn:mas:admin}
- * scope, and the MAS authorization policy grants that scope through {@code client_credentials} only to
- * client ids listed in its policy data {@code admin_clients}. This service's MAS client id is not
- * listed, so this reader stays off ({@code identity.placement.mas.admin-api.enabled}) until a
- * deployment change adds it. This is a policy-data change, not the Synapse admin-scope problem recorded
- * elsewhere, which {@code urn:mas:admin} does not share.
+ * <p>Off by default ({@code identity.placement.mas.admin-api.enabled}). The links endpoint requires
+ * the {@code urn:mas:admin} scope, which the MAS policy grants through {@code client_credentials}
+ * only to client ids listed in its {@code admin_clients} policy data.
  *
- * <p>Because that scope has never been granted, the response envelope below is written from the MAS
- * admin handler and model definitions rather than from a live call, and it is tolerant of unknown
- * fields. Confirm it against a real MAS the first time the scope exists; the contract this class
- * presents to the reconciler does not change either way.
+ * <p>The response envelope is written from the MAS admin handler and model definitions, not from a
+ * live call, and tolerates unknown fields. Confirm it against a real MAS once the scope is granted.
  */
 @Component
 public class MasAdminApiLinkReader implements MasLinkReader {
@@ -175,8 +169,7 @@ public class MasAdminApiLinkReader implements MasLinkReader {
                 .bodyToMono(TokenResponse.class)
                 .timeout(Duration.ofSeconds(15))
                 .onErrorResume(ex -> {
-                    // The message never carries the response body: a token endpoint can echo the client
-                    // secret back in an error.
+                    // Never log the response body: a token endpoint can echo the client secret in an error.
                     log.warn("The MAS token request failed");
                     return Mono.empty();
                 })
@@ -202,8 +195,8 @@ public class MasAdminApiLinkReader implements MasLinkReader {
     }
 
     /**
-     * The admin API cannot answer this: its provider model omits {@code claims_imports} altogether, so
-     * the on-conflict gauge needs the SQL path or the rendered configuration.
+     * The admin API cannot answer this: its provider model omits {@code claims_imports}, so the
+     * on-conflict gauge needs the SQL path.
      */
     @Override
     public Map<String, String> localpartOnConflictByHomeserver() {

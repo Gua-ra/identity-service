@@ -115,13 +115,10 @@ class PhoneRebindConcurrencyTest {
         executor.shutdown();
 
         assertThat(unexpected).isEmpty();
-        // Both may succeed under last-write-wins (since upsert re-fetches),
-        // OR one may throw DataIntegrityViolation under contention.
-        // What MUST hold: there is exactly ONE row for this digest, owned by either A or B.
+        // Both may succeed (last write wins) or one may hit the UNIQUE constraint. Exactly one row must remain.
         List<DirectoryEntry> all = directoryRepository.findByPhoneDigestIn(List.of(digest));
         assertThat(all).hasSize(1);
         assertThat(all.get(0).getUserId()).isIn(userA, userB);
-        // And at least one operation either succeeded or was rejected — i.e. all 2 threads were observed.
         assertThat(ok.get() + conflicts.get()).isEqualTo(threads);
     }
 }

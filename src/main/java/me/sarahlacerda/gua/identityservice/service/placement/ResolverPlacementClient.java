@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.time.Duration;
@@ -22,14 +21,11 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import reactor.core.publisher.Mono;
 
 /**
- * The gua-resolver surfaces this service talks to for placement: the public roster, and the placement
- * record endpoints.
+ * The gua-resolver surfaces this service talks to for placement: the public roster and the
+ * placement record endpoints.
  *
- * <p>This is not a reintroduction of the deleted directory-publishing client. That one bound a phone
- * digest to a homeserver and the resolver accepted any active member's signature for any row, so a
- * member could bind any phone number to itself (ADM-001 L1b). A placement record binds an accountId,
- * which is a hash with no identifier in its preimage, one accountId has one home, and nothing is served
- * from the records in this phase.
+ * <p>A placement record binds an accountId, which is a hash with no identifier in its preimage. One
+ * accountId has one home, and nothing is served from the records.
  */
 @Component
 public class ResolverPlacementClient {
@@ -38,7 +34,6 @@ public class ResolverPlacementClient {
 
     private static final String RECORDS_PATH = "/placement/records";
 
-    /** What happened to one publish attempt. */
     public enum PublishOutcome {
         /** The resolver stored the record. */
         PUBLISHED,
@@ -114,10 +109,8 @@ public class ResolverPlacementClient {
     }
 
     /**
-     * The published record for one account, decoded from the signed envelope.
-     *
-     * <p>Reading a record here is the comparison, not a routing lookup: the value never reaches the
-     * resolution path, and no caller of this method decides where an account lives.
+     * The published record for one account, decoded from the signed envelope. For comparison only,
+     * never a routing lookup.
      *
      * @return empty when there is no record, or when the resolver could not be reached
      */
@@ -155,11 +148,8 @@ public class ResolverPlacementClient {
     }
 
     /**
-     * Publishes one signed record.
-     *
-     * <p>A conflict is reported, never retried and never forced: one accountId has one home, and a
-     * record naming another homeserver is evidence of a duplicate identity or a bad signer, which a
-     * person has to explain (ADM-001 L9 refuses migration outright).
+     * Publishes one signed record. A conflict is reported, never retried and never forced: a record
+     * naming another homeserver is evidence of a duplicate identity or a bad signer.
      */
     public PublishOutcome publish(PlacementRecordSigner.SignedPlacementRecord signed) {
         if (!configured) {

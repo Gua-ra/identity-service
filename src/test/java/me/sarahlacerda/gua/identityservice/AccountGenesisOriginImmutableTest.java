@@ -16,14 +16,10 @@ import me.sarahlacerda.gua.identityservice.repository.AccountGenesisRepository;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@code origin} is the audit marker ADM-001 L5 rests on: it says whether an account's identity is
- * rooted in a genesis the client proved possession of, or is a bootstrap id this deployment minted for
- * an account that predates the feature. An auditor can only rely on that split if nothing can flip it
- * after the fact, so a bootstrap account is not adopted into a rooted one in this phase.
- *
- * <p>The javadoc on {@link AccountGenesisRepository} claims this test enforces that. It does, from three
- * directions: no mutator on the entity, no repository method that names the field, and no modifying
- * query that writes the column.
+ * {@code origin} says whether an account's identity is rooted in a genesis the client proved
+ * possession of, or is a bootstrap id this deployment minted. An auditor can rely on that split only
+ * if nothing can flip it, so this test enforces it from three directions: no mutator on the entity,
+ * no repository method that names the field, and no modifying query that writes the column.
  */
 class AccountGenesisOriginImmutableTest {
 
@@ -38,8 +34,7 @@ class AccountGenesisOriginImmutableTest {
                 .sorted()
                 .toList();
 
-        // An allowlist rather than a check for setOrigin by name: a class-level @Setter puts a mutator on
-        // every field at once, which is how origin became settable in the first place.
+        // An allowlist: a class-level @Setter would put a mutator on every field at once.
         assertThat(setters).containsExactlyInAnyOrderElementsOf(ALLOWED_SETTERS);
     }
 

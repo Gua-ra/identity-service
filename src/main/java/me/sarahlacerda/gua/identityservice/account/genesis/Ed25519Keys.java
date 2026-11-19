@@ -15,14 +15,9 @@ import java.util.Base64;
 import java.util.HexFormat;
 
 /**
- * Raw RFC 8032 Ed25519 public keys, as the genesis objects carry them, on top of the JDK-native Ed25519
- * provider (JDK 15+). No new dependency: the account objects store the bare 32-byte key, and the JDK
- * KeyFactory wants X.509 {@code SubjectPublicKeyInfo}, so the fixed 12-byte SPKI prefix is prepended here.
- *
- * <p>{@link #isOnCurve(byte[])} is what backs ADM-008 decision 1's "a key failing Ed25519 point decoding"
- * rule. It is deliberately separate from the all-zero check: the all-zero encoding decodes to a valid
- * low-order point, so point decoding alone would let it through, which is exactly why ADM-008 lists the
- * two rules separately.
+ * Raw RFC 8032 Ed25519 public keys on top of the JDK provider. The genesis objects carry the bare
+ * 32-byte key and the JDK KeyFactory wants X.509 {@code SubjectPublicKeyInfo}, so the fixed 12-byte
+ * SPKI prefix is prepended here.
  */
 public final class Ed25519Keys {
 
@@ -36,15 +31,8 @@ public final class Ed25519Keys {
     }
 
     /**
-     * Turns a raw 32-byte Ed25519 public key into a JDK {@link PublicKey}, and checks that it really is
-     * a curve point.
-     *
-     * <p>The point check is deliberately not left to {@link KeyFactory}. On this JVM
-     * {@code generatePublic} only parses the encoding: it accepts a y coordinate larger than the field
-     * prime and one that is not on the curve, and defers both checks to the first
-     * {@link Signature#initVerify}. ADM-008 decision 1 requires the decoder itself to refuse such a key,
-     * so the verifier is initialized here, where the JVM performs the decoding, and the resulting
-     * {@code InvalidKeyException} is turned into a decode failure.
+     * Turns a raw 32-byte Ed25519 public key into a JDK {@link PublicKey} and checks it is a curve point.
+     * {@link KeyFactory} only parses the encoding, so a verifier is initialized here to force the check.
      *
      * @throws InvalidGenesisException with the given reason when the bytes are not a curve point
      */
@@ -114,11 +102,10 @@ public final class Ed25519Keys {
 
 
     /**
-     * Loads an Ed25519 private key from base64 PKCS#8, the shape the deployment Secret holds a roster
-     * membership key in.
+     * Loads an Ed25519 private key from base64 PKCS#8.
      *
      * @throws IllegalStateException when the value is not a readable Ed25519 private key; the message
-     *                               never echoes the value, because the value is key material
+     *                               never includes the value, which is key material
      */
     public static PrivateKey privateKeyFromPkcs8(String base64Pkcs8) {
         if (base64Pkcs8 == null || base64Pkcs8.isBlank()) {
@@ -139,7 +126,6 @@ public final class Ed25519Keys {
         }
     }
 
-    /** Signs {@code message} with an Ed25519 private key. */
     public static byte[] sign(PrivateKey privateKey, byte[] message) {
         try {
             Signature signer = Signature.getInstance(ALGORITHM);
@@ -154,10 +140,8 @@ public final class Ed25519Keys {
     }
 
     /**
-     * Reads a raw 32-byte Ed25519 public key from base64, accepting either the bare key or an X.509
-     * {@code SubjectPublicKeyInfo} wrapper. The roster publishes member keys base64-encoded and the two
-     * spellings are both in circulation, so a comparison that understood only one would report a
-     * configuration mismatch that is not there.
+     * Reads a raw 32-byte Ed25519 public key from base64, accepting the bare key or its X.509
+     * {@code SubjectPublicKeyInfo} wrapper: the roster publishes both spellings.
      *
      * @throws InvalidGenesisException when the value is neither spelling of a curve point
      */
@@ -186,23 +170,16 @@ public final class Ed25519Keys {
     }
 
     /**
-     * Fixed probe the key-pair check signs. It is a compile-time constant with its own domain prefix,
-     * never influenced by a caller, and it is neither a placement record (those open with ASCII
-     * {@code GUAP}) nor an admission possession proof (that path signs the bare server name). ADM-008
-     * decision 7 forbids a membership key from signing <em>caller-chosen</em> bytes, because admission's
-     * proof carries no prefix; a constant this service compiles in is not caller-chosen, and the
-     * signature it produces is public and useless on its own.
+     * Fixed probe the key-pair check signs. It is a compile-time constant with its own domain prefix, so it
+     * is neither a placement record nor an admission possession proof. A membership key must never sign
+     * caller-chosen bytes.
      */
     private static final byte[] KEY_PAIR_PROBE =
             "gua-placement-signing-key-check.v1".getBytes(StandardCharsets.US_ASCII);
 
     /**
-     * True when {@code privateKey} is the private half of {@code rawPublicKey}.
-     *
-     * <p>Checked by signing the fixed probe above and verifying it under the candidate public key,
-     * rather than by deriving the public half: Ed25519 public-key derivation needs curve arithmetic the
-     * JDK does not expose, and every alternative would mean a new cryptography dependency. Verifying a
-     * signature proves the pair matches just as conclusively.
+     * True when {@code privateKey} is the private half of {@code rawPublicKey}. Checked by signing the
+     * fixed probe and verifying it, because the JDK does not expose Ed25519 public-key derivation.
      */
     public static boolean publicHalfMatches(PrivateKey privateKey, byte[] rawPublicKey) {
         try {
@@ -212,7 +189,7 @@ public final class Ed25519Keys {
         }
     }
 
-    /** True when every byte is zero. ADM-008 decision 1 refuses such a key even though it decodes. */
+    /** True when every byte is zero. Refused separately: the all-zero encoding decodes to a valid low-order point. */
     public static boolean isAllZero(byte[] value) {
         if (value == null) {
             return true;

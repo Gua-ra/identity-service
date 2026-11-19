@@ -22,7 +22,7 @@ RUN ./gradlew --no-daemon help >/dev/null 2>&1 || true
 # Copy source and resources
 COPY src src
 
-# Build the fat jar (tests skipped – rely on CI instead)
+# Build the fat jar (tests skipped, rely on CI instead)
 RUN ./gradlew --no-daemon bootJar -x test
 
 ##############################
