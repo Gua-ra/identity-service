@@ -69,11 +69,6 @@ public class OidcClientService {
         return client;
     }
 
-    /**
-     * Whether a token issued to this client may authenticate a call to the bearer API. False for an
-     * unknown client and for one registered without {@code api-access}, whose tokens reach only
-     * {@code /userinfo}.
-     */
     public boolean grantsApiAccess(String clientId) {
         RegisteredClient client = clientId == null ? null : clientsById.get(clientId);
         return client != null && client.apiAccess();
@@ -185,8 +180,7 @@ public class OidcClientService {
     /**
      * @param homeserverIds registry ids of the homeservers whose accounts this client may report deleted;
      *                      always empty for a public client
-     * @param apiAccess     whether tokens issued to this client authenticate the bearer API, or only
-     *                      {@code /userinfo}
+     * @param apiAccess     whether this client's tokens authenticate the bearer API
      */
     public record RegisteredClient(
         String clientId,

@@ -27,9 +27,7 @@ public class OidcAccessTokenValidator {
     public Optional<OidcAuthenticatedPrincipal> validate(String accessToken) {
         Optional<OidcAuthenticatedPrincipal> principal = oidcTokenService.parseAccessToken(accessToken);
         if (principal.isPresent()) {
-            // A token this service minted authenticates the bearer API only when its client is
-            // registered with api-access. A relying party's token is valid at /userinfo alone and
-            // never falls through to whoami, which could not know it.
+            // A relying party's token is valid at /userinfo only and must not fall through to whoami.
             if (clientService.grantsApiAccess(principal.get().clientId())) {
                 return principal;
             }

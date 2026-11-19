@@ -337,8 +337,7 @@ oidc:
       redirect-uris: ${OIDC_CLIENT_GUA_IOS_REDIRECTS:global.gua:/oidc}
       allowed-scopes: openid,profile,phone
       require-pkce: true
-      # Tokens issued to the app client authenticate the bearer API. The mas client above has no
-      # api-access, so the authentication service's tokens reach only /userinfo.
+      # The mas client has no api-access, so its tokens are valid at /userinfo only.
       api-access: true
 
 idp:

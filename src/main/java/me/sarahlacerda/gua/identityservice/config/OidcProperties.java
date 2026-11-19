@@ -76,11 +76,7 @@ public class OidcProperties {
         /** When true, PKCE is mandatory even if a secret is configured. Always true for public clients. */
         private boolean requirePkce;
 
-        /**
-         * Whether access tokens issued to this client authenticate the bearer API. Off, they reach
-         * only {@code /userinfo}, which is all a relying party such as the authentication service
-         * needs.
-         */
+        /** Without it, this client's access tokens are valid at {@code /userinfo} only. */
         private boolean apiAccess;
 
         /**

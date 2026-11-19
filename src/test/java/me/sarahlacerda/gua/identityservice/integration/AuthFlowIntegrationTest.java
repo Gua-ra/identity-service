@@ -496,11 +496,6 @@ class AuthFlowIntegrationTest {
         }
     }
 
-    /**
-     * Through the real security chain: a token issued to the relying party is valid at /userinfo
-     * and nowhere else, while the app client's token (every other test here) reaches the bearer API.
-     * /userinfo sits outside the bearer filter and still refuses a token this service did not sign.
-     */
     @Test
     void aRelyingPartyTokenReachesUserinfoAndNoOtherBearerEndpoint() {
         String masToken = tokenService.issueTokens(new OidcAuthorization("@relying:example.com", "+16042250099",
@@ -533,7 +528,6 @@ class AuthFlowIntegrationTest {
         wireMock.verify(0, getRequestedFor(urlPathEqualTo(WHOAMI_PATH)));
     }
 
-    /** The apps' homeserver session token reaches the bearer API through whoami. */
     @Test
     void aHomeserverSessionTokenReachesTheBearerApiThroughWhoami() {
         wireMock.stubFor(get(urlPathEqualTo(WHOAMI_PATH))
