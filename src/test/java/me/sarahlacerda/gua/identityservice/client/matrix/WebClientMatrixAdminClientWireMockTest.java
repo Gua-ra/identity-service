@@ -13,24 +13,35 @@ import static com.github.tomakehurst.wiremock.client.WireMock.putRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
+import com.github.tomakehurst.wiremock.http.Fault;
 import com.github.tomakehurst.wiremock.verification.LoggedRequest;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import me.sarahlacerda.gua.identityservice.domain.MatrixLoginResponse;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 class WebClientMatrixAdminClientWireMockTest {
 
     private static final String USER_PATH_REGEX = "/_synapse/admin/v2/users/.+";
 
+    private final ListAppender<ILoggingEvent> logs = new ListAppender<>();
+    private final Logger root = (Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
     private WireMockServer wireMock;
     private WebClientMatrixAdminClient client;
 
@@ -47,10 +58,13 @@ class WebClientMatrixAdminClientWireMockTest {
         matrix.setAdminAccessToken("admin-token-abc");
 
         client = new WebClientMatrixAdminClient(WebClient.builder(), properties);
+        logs.start();
+        root.addAppender(logs);
     }
 
     @AfterEach
     void stop() {
+        root.detachAppender(logs);
         wireMock.stop();
     }
 
@@ -198,6 +212,43 @@ class WebClientMatrixAdminClientWireMockTest {
     }
 
     @Test
+    void aRefusedLinkThrowsAndLogsNeitherPhoneNumber() {
+        stubThreepids("""
+            {"threepids":[{"medium":"msisdn","address":"+15551234567"}]}
+            """);
+        wireMock.stubFor(put(urlPathMatching(USER_PATH_REGEX))
+            .willReturn(aResponse().withStatus(401).withHeader("Content-Type", "application/json")
+                .withBody("{\"errcode\":\"M_UNKNOWN_TOKEN\",\"error\":\"Invalid access token\"}")));
+
+        assertThatThrownBy(() -> client.linkPhone("@user:example.com", "+15557654321"))
+            .isInstanceOf(WebClientResponseException.class)
+            .satisfies(ex -> assertThat(ex.getMessage()).doesNotContain("15557654321", "15551234567"));
+
+        assertNoLogContains("15557654321", "15551234567");
+        assertThat(warningsFor(WebClientMatrixAdminClient.class)).singleElement()
+            .satisfies(message -> assertThat(message).startsWith("Failed to link a phone for @user:example.com: 401"));
+    }
+
+    @Test
+    void aRefusedUnlinkThrowsAndLogsNeitherPhoneNumber() {
+        stubThreepids("""
+            {"threepids":[
+              {"medium":"msisdn","address":"+15551234567"},
+              {"medium":"msisdn","address":"+15557654321"}
+            ]}
+            """);
+        wireMock.stubFor(put(urlPathMatching(USER_PATH_REGEX)).willReturn(aResponse().withStatus(500)));
+
+        assertThatThrownBy(() -> client.unlinkPhone("@user:example.com", "+15551234567"))
+            .isInstanceOf(WebClientResponseException.class)
+            .satisfies(ex -> assertThat(ex.getMessage()).doesNotContain("15557654321", "15551234567"));
+
+        assertNoLogContains("15557654321", "15551234567");
+        assertThat(warningsFor(WebClientMatrixAdminClient.class)).singleElement()
+            .satisfies(message -> assertThat(message).startsWith("Failed to unlink a phone for @user:example.com: 500"));
+    }
+
+    @Test
     void findUserIdByPhoneResolvesViaThreepidBinding() {
         wireMock.stubFor(get(urlPathMatching("/_synapse/admin/v1/threepid/msisdn/users/.+"))
             .willReturn(aResponse()
@@ -225,6 +276,27 @@ class WebClientMatrixAdminClientWireMockTest {
                     """)));
 
         assertThat(client.findUserIdByPhone("+15551234567")).isEmpty();
+    }
+
+    @Test
+    void aFailedReverseLookupLogsNeitherTheNumberNorItsUrl() {
+        wireMock.stubFor(get(urlPathMatching("/_synapse/admin/v1/threepid/msisdn/users/.+"))
+            .willReturn(aResponse().withFault(Fault.CONNECTION_RESET_BY_PEER)));
+        Logger clientLog = (Logger) LoggerFactory.getLogger(WebClientMatrixAdminClient.class);
+        Level previous = clientLog.getLevel();
+        clientLog.setLevel(Level.DEBUG);
+        try {
+            assertThat(client.findUserIdByPhone("+15551234567")).isEmpty();
+        } finally {
+            clientLog.setLevel(previous);
+        }
+
+        assertNoLogContains("15551234567");
+        assertThat(warningsFor(WebClientMatrixAdminClient.class))
+            .containsExactly("Reverse phone lookup failed: WebClientRequestException");
+        assertThat(loggedEvents()).filteredOn(event -> event.getLevel() == Level.DEBUG)
+            .extracting(ILoggingEvent::getFormattedMessage)
+            .anySatisfy(message -> assertThat(message).contains("/_synapse/admin/v1/threepid/msisdn/users/*** "));
     }
 
     @Test
@@ -259,5 +331,28 @@ class WebClientMatrixAdminClientWireMockTest {
             .withRequestBody(matchingJsonPath("$.identifier.type", equalTo("m.id.user")))
             .withRequestBody(matchingJsonPath("$.identifier.user", equalTo("@user:example.com")))
             .withRequestBody(matchingJsonPath("$.password", equalTo("secret-pw"))));
+    }
+
+    private void stubThreepids(String body) {
+        wireMock.stubFor(get(urlPathMatching(USER_PATH_REGEX))
+            .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody(body)));
+    }
+
+    private List<String> warningsFor(Class<?> source) {
+        return loggedEvents().stream()
+            .filter(event -> event.getLevel() == Level.WARN && event.getLoggerName().equals(source.getName()))
+            .map(ILoggingEvent::getFormattedMessage)
+            .toList();
+    }
+
+    private void assertNoLogContains(String... values) {
+        assertThat(loggedEvents()).allSatisfy(event -> assertThat(event.getFormattedMessage()).doesNotContain(values));
+    }
+
+    private List<ILoggingEvent> loggedEvents() {
+        // Background threads from other test classes also append; ListAppender appends under its own monitor.
+        synchronized (logs) {
+            return List.copyOf(logs.list);
+        }
     }
 }

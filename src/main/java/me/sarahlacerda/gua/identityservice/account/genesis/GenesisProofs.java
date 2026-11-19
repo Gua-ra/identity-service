@@ -3,26 +3,21 @@ package me.sarahlacerda.gua.identityservice.account.genesis;
 import java.nio.charset.StandardCharsets;
 
 /**
- * The two possession proofs ADM-008 defines, and the fixed-length preimages they cover.
+ * The two possession proofs and the fixed-length preimages they cover.
  *
- * <p><b>Registration proof</b> (decision 3). An Ed25519 signature by the authority key over the ASCII
- * domain {@code gua-account-genesis-proof.v1} followed by the canonical bytes. It proves the registrant
- * holds the key and is not part of the genesis. No identifier appears in the preimage: an MXID there
- * would put an identifier into the id.
+ * <p><b>Registration proof.</b> An Ed25519 signature by the authority key over the ASCII domain
+ * {@code gua-account-genesis-proof.v1} followed by the canonical genesis bytes. No identifier appears
+ * in the preimage.
  *
- * <p><b>Attach proof</b> (decision 6). An Ed25519 signature by the same committed authority key over the
- * domain {@code gua-account-attach-proof.v1}, then the 32 server-chosen challenge bytes, then the 34 raw
- * accountId bytes. Every element is fixed length, so no field can be shifted into another: 27 + 32 + 34.
- * A handle alone attaches nothing, because anyone can compose an authorize URL carrying someone else's
- * handle; only this signature shows that the party which registered the genesis held its key and was
- * present in this login session.
+ * <p><b>Attach proof.</b> An Ed25519 signature by the same authority key over the domain
+ * {@code gua-account-attach-proof.v1}, then the 32 server-chosen challenge bytes, then the 34 raw
+ * accountId bytes (27 + 32 + 34, all fixed length). A handle alone attaches nothing: only this
+ * signature shows the registrant held the key and was present in this login session.
  */
 public final class GenesisProofs {
 
-    /** 28 ASCII bytes. */
     public static final String GENESIS_PROOF_DOMAIN = "gua-account-genesis-proof.v1";
 
-    /** 27 ASCII bytes, as ADM-008 decision 6 states. */
     public static final String ATTACH_PROOF_DOMAIN = "gua-account-attach-proof.v1";
 
     /** Server-chosen challenge length, in bytes. */
@@ -31,14 +26,12 @@ public final class GenesisProofs {
     private static final byte[] GENESIS_DOMAIN_BYTES = GENESIS_PROOF_DOMAIN.getBytes(StandardCharsets.US_ASCII);
     private static final byte[] ATTACH_DOMAIN_BYTES = ATTACH_PROOF_DOMAIN.getBytes(StandardCharsets.US_ASCII);
 
-    /** 27 + 32 + 34. */
     public static final int ATTACH_PREIMAGE_LENGTH =
             ATTACH_DOMAIN_BYTES.length + ATTACH_CHALLENGE_LENGTH + AccountId.RAW_LENGTH;
 
     private GenesisProofs() {
     }
 
-    /** Domain bytes then the canonical bytes. */
     public static byte[] genesisProofPreimage(byte[] canonicalBytes) {
         byte[] preimage = new byte[GENESIS_DOMAIN_BYTES.length + canonicalBytes.length];
         System.arraycopy(GENESIS_DOMAIN_BYTES, 0, preimage, 0, GENESIS_DOMAIN_BYTES.length);

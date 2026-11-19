@@ -41,8 +41,8 @@ class PasskeyStablePrincipalTest {
             AccountId.CLASS_BOOTSTRAP, "stable-principal-fixture".getBytes(StandardCharsets.UTF_8));
     private static final String PRINCIPAL = ACCOUNT.value();
 
-    private static final String OLD_MXID = "@alice:dev.gua.sarahlacerda.me";
-    private static final String NEW_MXID = "@alice:dev2.gua.sarahlacerda.me";
+    private static final String OLD_MXID = "@alice:hs1.example.org";
+    private static final String NEW_MXID = "@alice:hs2.example.org";
 
     @Mock
     private PasskeyCredentialRepository repository;
@@ -164,7 +164,7 @@ class PasskeyStablePrincipalTest {
         AccountId again = AccountId.derive(AccountId.CLASS_BOOTSTRAP, genesis);
 
         assertThat(again.value()).isEqualTo(PRINCIPAL);
-        assertThat(PRINCIPAL).doesNotContain("gua.sarahlacerda.me").doesNotContain("alice");
+        assertThat(PRINCIPAL).doesNotContain("example.org").doesNotContain("alice");
     }
 
     @Test

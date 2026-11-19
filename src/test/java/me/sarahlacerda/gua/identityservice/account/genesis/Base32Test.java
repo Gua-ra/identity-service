@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** RFC 4648 base32, lowercase and unpadded, with a decoder that admits exactly one spelling per value. */
 class Base32Test {
 
     /** RFC 4648 section 10 test vectors, lowercased and stripped of padding. */

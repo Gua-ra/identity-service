@@ -1,4 +1,3 @@
-// Copyright 2026 Gua
 package me.sarahlacerda.gua.identityservice.service.placement;
 
 import java.util.Map;
@@ -12,8 +11,8 @@ import me.sarahlacerda.gua.identityservice.config.IdentityServiceProperties;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The names a scrape really exposes. The Phase 4 exit criteria are quoted in these names, so a panel or
- * an alert built on a name that does not exist would read as "no data" rather than as an error.
+ * The names a scrape really exposes. A panel or alert built on a name that does not exist reads as
+ * "no data", not as an error.
  */
 class PlacementShadowMetricsTest {
 
@@ -99,8 +98,7 @@ class PlacementShadowMetricsTest {
 
         metrics.failed("unknown_homeserver");
 
-        // This is the series that alerts when accounts cannot be compared. Before it existed, one bad
-        // row ended the run and the only symptom was a success timestamp that quietly stopped moving.
+        // This is the series that alerts when accounts cannot be compared.
         String scrape = registry.scrape();
         assertThat(scrape).contains("gua_identity_placement_shadow_failures_total{");
         for (String reason : PlacementShadowMetrics.FAILURE_REASONS) {
