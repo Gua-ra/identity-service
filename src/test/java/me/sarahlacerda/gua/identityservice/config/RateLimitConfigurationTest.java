@@ -37,6 +37,7 @@ class RateLimitConfigurationTest {
     @CsvSource({
             "/otp/verify, 10, PT1M",
             "/signin/verify-pin, 10, PT1M",
+            "/login/phone, 10, PT1M",
             "/login/otp, 10, PT1M",
             "/login/pin, 10, PT1M",
             "/login/passkey/auth/options, 20, PT1M",
