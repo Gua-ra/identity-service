@@ -278,7 +278,7 @@ public class RestExceptionHandler {
 
         /**
          * The number typed at a reauthentication step is not the one on the caller's account. One
-         * status, code and message for every mismatch, so the answer never reveals who owns the number.
+         * status, code and message for every mismatch, so the answer does not reveal who owns the number.
          */
         @ExceptionHandler(ReauthPhoneMismatchException.class)
         public ResponseEntity<ErrorResponse> handleReauthPhoneMismatch(ReauthPhoneMismatchException ex) {
@@ -339,10 +339,7 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("invalid_client", ex.getMessage()));
         }
 
-        /**
-         * A request whose body is missing or is not readable as JSON. Without this the catch-all
-         * below would answer 500 for a caller's mistake.
-         */
+
         @ExceptionHandler(HttpMessageNotReadableException.class)
         public ResponseEntity<ErrorResponse> handleUnreadableBody(HttpMessageNotReadableException ex) {
                 log.debug("Unreadable request body", ex);
@@ -366,7 +363,6 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("bad_request", "A request parameter has the wrong type."));
         }
 
-        /** Spring's own 4xx refusals keep their status, so a 500 still means a server fault. */
         @ExceptionHandler(Exception.class)
         public ResponseEntity<ErrorResponse> handleGeneric(Exception ex) {
                 if (ex instanceof org.springframework.web.ErrorResponse refusal
@@ -384,12 +380,10 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("server_error", "Unexpected error"));
         }
 
-        /** An error that carries the account recovery state it was decided on. */
         public record RecoveryErrorResponse(String code, String message, Instant timestamp,
                         AccountRecoveryState recovery) {
         }
 
-        /** {@code retryAfterSeconds} is omitted from the JSON unless a handler sets it. */
         @JsonInclude(JsonInclude.Include.NON_NULL)
         public record ErrorResponse(String code, String message, Instant timestamp, Long retryAfterSeconds) {
                 public ErrorResponse(String code, String message) {
