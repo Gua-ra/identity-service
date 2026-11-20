@@ -339,7 +339,6 @@ public class RestExceptionHandler {
                                 .body(new ErrorResponse("invalid_client", ex.getMessage()));
         }
 
-
         @ExceptionHandler(HttpMessageNotReadableException.class)
         public ResponseEntity<ErrorResponse> handleUnreadableBody(HttpMessageNotReadableException ex) {
                 log.debug("Unreadable request body", ex);
