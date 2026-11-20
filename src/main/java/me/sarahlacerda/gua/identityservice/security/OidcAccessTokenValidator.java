@@ -27,15 +27,10 @@ public class OidcAccessTokenValidator {
     public Optional<OidcAuthenticatedPrincipal> validate(String accessToken) {
         Optional<OidcAuthenticatedPrincipal> principal = oidcTokenService.parseAccessToken(accessToken);
         if (principal.isPresent()) {
-            // A relying party's token is valid at /userinfo only and must not fall through to whoami.
-            if (clientService.grantsApiAccess(principal.get().clientId())) {
-                return principal;
-            }
-            log.debug("Access token issued to a client without API access was refused");
-            return Optional.empty();
+            return principal.filter(p -> clientService.grantsApiAccess(p.clientId()));
         }
-        // Fall back to the homeserver's whoami for a Matrix-issued access token (MAS or Synapse
-        // password login), so the apps can reuse their SDK session token on the bearer API.
+        // Fall back to validating Matrix-issued access tokens (MAS or Synapse) through the homeserver's
+        // whoami endpoint, so the apps can reuse their SDK access token on authenticated endpoints.
         Optional<String> matrixUserId = matrixAdminClient.whoami(accessToken);
         if (matrixUserId.isPresent()) {
             return Optional.of(new OidcAuthenticatedPrincipal(matrixUserId.get(), null, null, Set.of()));

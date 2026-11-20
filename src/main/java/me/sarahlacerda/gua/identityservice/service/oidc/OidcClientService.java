@@ -180,7 +180,6 @@ public class OidcClientService {
     /**
      * @param homeserverIds registry ids of the homeservers whose accounts this client may report deleted;
      *                      always empty for a public client
-     * @param apiAccess     whether this client's tokens authenticate the bearer API
      */
     public record RegisteredClient(
         String clientId,

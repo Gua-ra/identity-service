@@ -337,7 +337,6 @@ oidc:
       redirect-uris: ${OIDC_CLIENT_GUA_IOS_REDIRECTS:global.gua:/oidc}
       allowed-scopes: openid,profile,phone
       require-pkce: true
-      # The mas client has no api-access, so its tokens are valid at /userinfo only.
       api-access: true
 
 idp:

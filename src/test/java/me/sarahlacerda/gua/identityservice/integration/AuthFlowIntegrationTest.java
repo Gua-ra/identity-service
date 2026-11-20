@@ -500,9 +500,7 @@ class AuthFlowIntegrationTest {
     void aRelyingPartyTokenReachesUserinfoAndNoOtherBearerEndpoint() {
         String masToken = tokenService.issueTokens(new OidcAuthorization("@relying:example.com", "+16042250099",
                 null, null, Set.of("openid", "profile", "phone"), "mas", null)).accessToken();
-        HttpHeaders headers = new HttpHeaders();
-        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
-        headers.setBearerAuth(masToken);
+        HttpHeaders headers = bearerHeaders(masToken);
 
         ResponseEntity<Map> userInfo = restTemplate.exchange(baseUrl + "/userinfo", HttpMethod.GET,
                 new HttpEntity<>(headers), Map.class);
@@ -518,11 +516,9 @@ class AuthFlowIntegrationTest {
         ResponseEntity<Map> cancel = authenticatedPost(masToken, "/security/recovery/cancel", Map.of());
         assertThat(cancel.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
 
-        HttpHeaders forged = new HttpHeaders();
-        forged.setAccept(List.of(MediaType.APPLICATION_JSON));
-        forged.setBearerAuth(masToken.substring(0, masToken.length() - 4) + "AAAA");
+        String forged = masToken.substring(0, masToken.length() - 4) + "AAAA";
         ResponseEntity<Map> refused = restTemplate.exchange(baseUrl + "/userinfo", HttpMethod.GET,
-                new HttpEntity<>(forged), Map.class);
+                new HttpEntity<>(bearerHeaders(forged)), Map.class);
         assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
 
         wireMock.verify(0, getRequestedFor(urlPathEqualTo(WHOAMI_PATH)));
