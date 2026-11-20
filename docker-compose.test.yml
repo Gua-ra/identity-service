@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: identity
       POSTGRES_DB: identity
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - identity-postgres-data:/var/lib/postgresql/data
 
@@ -15,7 +15,7 @@ services:
     image: redis:7-alpine
     container_name: identity-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - identity-redis-data:/data
@@ -49,12 +49,11 @@ services:
       SYNAPSE_POSTGRES_PASSWORD: synapse
       SYNAPSE_POSTGRES_DB: synapse
       SYNAPSE_POSTGRES_USE_SSL: "false"
-      SYNAPSE_REGISTRATION_SHARED_SECRET: dev_shared_secret
       SYNAPSE_ALLOW_PUBLIC_REGISTRATION: "false"
     volumes:
       - ./docker/synapse/data:/data
     ports:
-      - "8008:8008"
+      - "127.0.0.1:8008:8008"
 
   mas:
     image: ghcr.io/gua-ra/gua-auth-service:v1.18.0-gua.2
@@ -63,22 +62,12 @@ services:
       - mas-db
     command: [ "server", "--config", "/config/mas.conf.yaml" ]
     volumes:
+      # Gitignored. matrix.secret here must equal matrix_authentication_service.secret in docker/synapse/data/homeserver.yaml.
       - ./docker/mas/mas.conf.yaml:/config/mas.conf.yaml:ro
     environment:
       RUST_LOG: info
-      MAS_PORT: 8080
-      MAS_DOMAIN: dev.local
-      MAS_PUBLIC_BASE_URL: http://mas:8080
-      MAS_MATRIX_HOMESERVER: dev.local
-      MAS_MATRIX_ENDPOINT: http://synapse:8008
-      MAS_MATRIX_SECRET: dev_shared_secret
-      MAS_ENCRYPTION_SECRET: 4ef37f9c88c1d42ffab7cdd9c49b2c2b2c6e3cf90c7a1b2ed9338da7a1e3f6a7
-      MAS_UPSTREAM_ISSUER: http://host.docker.internal:8080
-      MAS_UPSTREAM_CLIENT_ID: test_client_id
-      MAS_UPSTREAM_CLIENT_SECRET: test_client_secret
-      MAS_UPSTREAM_JWKS_URI: http://host.docker.internal:8080/.well-known/openid-configuration/jwks
     ports:
-      - "8090:8080"
+      - "127.0.0.1:8090:8080"
 
   mas-db:
     image: postgres:16-alpine
