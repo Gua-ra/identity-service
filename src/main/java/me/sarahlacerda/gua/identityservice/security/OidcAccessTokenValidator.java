@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 
 import me.sarahlacerda.gua.identityservice.client.matrix.MatrixAdminClient;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcAuthenticatedPrincipal;
+import me.sarahlacerda.gua.identityservice.service.oidc.OidcClientService;
 import me.sarahlacerda.gua.identityservice.service.oidc.OidcTokenService;
 
 @Component
@@ -20,12 +21,13 @@ public class OidcAccessTokenValidator {
     private static final Logger log = LoggerFactory.getLogger(OidcAccessTokenValidator.class);
 
     private final OidcTokenService oidcTokenService;
+    private final OidcClientService clientService;
     private final MatrixAdminClient matrixAdminClient;
 
     public Optional<OidcAuthenticatedPrincipal> validate(String accessToken) {
         Optional<OidcAuthenticatedPrincipal> principal = oidcTokenService.parseAccessToken(accessToken);
         if (principal.isPresent()) {
-            return principal;
+            return principal.filter(p -> clientService.grantsApiAccess(p.clientId()));
         }
         // Fall back to validating Matrix-issued access tokens (MAS or Synapse) through the homeserver's
         // whoami endpoint, so the apps can reuse their SDK access token on authenticated endpoints.

@@ -49,7 +49,8 @@ public class OidcClientService {
                 List.copyOf(registration.getRedirectUris()),
                 Set.copyOf(registration.getAllowedScopes()),
                 publicClient || registration.isRequirePkce(),
-                publicClient ? Set.of() : Set.copyOf(registration.getHomeserverIds())
+                publicClient ? Set.of() : Set.copyOf(registration.getHomeserverIds()),
+                registration.isApiAccess()
             );
             map.put(client.clientId(), client);
         }
@@ -66,6 +67,11 @@ public class OidcClientService {
             throw new OidcInvalidRequestException("invalid_client", "Unknown client_id");
         }
         return client;
+    }
+
+    public boolean grantsApiAccess(String clientId) {
+        RegisteredClient client = clientId == null ? null : clientsById.get(clientId);
+        return client != null && client.apiAccess();
     }
 
     public void validateRedirectUri(RegisteredClient client, String redirectUri) {
@@ -182,6 +188,7 @@ public class OidcClientService {
         List<String> redirectUris,
         Set<String> allowedScopes,
         boolean requirePkce,
-        Set<String> homeserverIds
+        Set<String> homeserverIds,
+        boolean apiAccess
     ) {}
 }

@@ -76,6 +76,9 @@ public class OidcProperties {
         /** When true, PKCE is mandatory even if a secret is configured. Always true for public clients. */
         private boolean requirePkce;
 
+        /** Without it, this client's access tokens are valid at {@code /userinfo} only. */
+        private boolean apiAccess;
+
         /**
          * Registry ids of the homeservers whose accounts this client may report deleted: the ids under
          * {@code identity.routing.homeservers}, or {@code default} for the legacy single homeserver.
