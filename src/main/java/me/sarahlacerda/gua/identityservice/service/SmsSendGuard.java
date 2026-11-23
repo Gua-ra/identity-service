@@ -34,7 +34,14 @@ import me.sarahlacerda.gua.identityservice.exception.UnsupportedPhoneCountryExce
 /**
  * Decides whether one SMS may be sent. Every path that texts a code calls an admit method before
  * the provider. Numbers without an account have their own ceilings, so a sign-up flood cannot use up
- * the account ceilings.
+ * the account ceilings. Unauthenticated sends to numbers that have an account, such as repeated
+ * sign-in requests, still count against the account ceilings. The daily per-region limit caps spend
+ * on regions whose SMS cost much more than the rest.
+ *
+ * <p>
+ * A send the provider refuses texted nothing, so {@link #refund} gives back every counter its
+ * {@link Admission} charged. {@code gua_identity_sms_admitted_total} still counts a send the provider
+ * accepts and later reports as undelivered, so it shows where codes were requested.
  */
 @Component
 public class SmsSendGuard {
