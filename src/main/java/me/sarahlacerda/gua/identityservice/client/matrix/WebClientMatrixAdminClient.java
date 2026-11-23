@@ -28,7 +28,6 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
 
     private static final Logger log = LoggerFactory.getLogger(WebClientMatrixAdminClient.class);
 
-    /** The address segment of a threepid lookup path, which is the phone number itself. */
     private static final Pattern THREEPID_ADDRESS = Pattern.compile("(/threepid/[^/]+/users/)[^/?#]+");
 
     private final WebClient adminClient;
@@ -115,7 +114,7 @@ public class WebClientMatrixAdminClient implements MatrixAdminClient {
         if (phone == null || phone.isBlank()) {
             return Optional.empty();
         }
-        // The lookup URL ends in the phone number, so the exception message is left out as a precaution.
+        // The lookup URL ends in the phone number, so failures log only the exception type.
         try {
             ThreepidUserResponse response = adminClient.get()
                     .uri(builder -> builder.path("/_synapse/admin/v1/threepid/msisdn/users/{address}")
