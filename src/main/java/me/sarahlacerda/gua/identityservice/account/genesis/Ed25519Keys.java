@@ -13,6 +13,7 @@ import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
 import java.util.HexFormat;
+import java.util.Set;
 
 /**
  * Raw RFC 8032 Ed25519 public keys on top of the JDK provider. The genesis objects carry the bare
@@ -26,19 +27,30 @@ public final class Ed25519Keys {
 
     private static final String ALGORITHM = "Ed25519";
     private static final byte[] SPKI_PREFIX = HexFormat.of().parseHex("302a300506032b6570032100");
+    /** The y-coordinates of the eight points of order 1, 2, 4 and 8, little-endian hex, sign bit clear. */
+    private static final Set<String> SMALL_ORDER_Y = Set.of(
+            "0100000000000000000000000000000000000000000000000000000000000000",
+            "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+            "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a");
 
     private Ed25519Keys() {
     }
 
     /**
-     * Turns a raw 32-byte Ed25519 public key into a JDK {@link PublicKey} and checks it is a curve point.
+     * Turns a raw 32-byte Ed25519 public key into a JDK {@link PublicKey} and checks it is a curve point
+     * outside the small-order subgroup: anyone can forge signatures under a small-order key.
      * {@link KeyFactory} only parses the encoding, so a verifier is initialized here to force the check.
      *
-     * @throws InvalidGenesisException with the given reason when the bytes are not a curve point
+     * @throws InvalidGenesisException with the given reason when the bytes are not such a point
      */
     public static PublicKey fromRaw(byte[] rawPublicKey, String reason) {
         if (rawPublicKey == null || rawPublicKey.length != RAW_PUBLIC_KEY_LENGTH) {
             throw new InvalidGenesisException(reason, "Ed25519 public key is not " + RAW_PUBLIC_KEY_LENGTH + " bytes");
+        }
+        if (hasSmallOrder(rawPublicKey)) {
+            throw new InvalidGenesisException(reason, "Ed25519 public key has small order");
         }
         byte[] spki = new byte[SPKI_PREFIX.length + RAW_PUBLIC_KEY_LENGTH];
         System.arraycopy(SPKI_PREFIX, 0, spki, 0, SPKI_PREFIX.length);
@@ -59,16 +71,6 @@ public final class Ed25519Keys {
             throw new InvalidGenesisException(reason, "Ed25519 public key does not decode to a curve point", ex);
         }
         return key;
-    }
-
-    /** True when the raw bytes decode to an Ed25519 curve point. */
-    public static boolean isOnCurve(byte[] rawPublicKey) {
-        try {
-            fromRaw(rawPublicKey, "invalid_key");
-            return true;
-        } catch (InvalidGenesisException ex) {
-            return false;
-        }
     }
 
     /**
@@ -187,6 +189,12 @@ public final class Ed25519Keys {
         } catch (RuntimeException ex) {
             return false;
         }
+    }
+
+    private static boolean hasSmallOrder(byte[] rawPublicKey) {
+        byte[] y = rawPublicKey.clone();
+        y[RAW_PUBLIC_KEY_LENGTH - 1] &= 0x7f;
+        return SMALL_ORDER_Y.contains(HexFormat.of().formatHex(y));
     }
 
     /** True when every byte is zero. Refused separately: the all-zero encoding decodes to a valid low-order point. */

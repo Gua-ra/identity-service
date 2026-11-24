@@ -23,8 +23,8 @@ import java.util.Arrays;
  * hashed must be the bytes received, never a re-encoding.
  *
  * <p>The decoder rejects an unknown version, suite or framework, a wrong length, an all-zero key, equal
- * authority and recovery keys, and a key that fails Ed25519 point decoding. The all-zero rule is
- * separate because the all-zero encoding decodes to a valid low-order point.
+ * authority and recovery keys, and a key that is not a curve point or has small order. The all-zero key
+ * has small order too but keeps its own reason code.
  */
 public final class AccountGenesisCodec {
 
