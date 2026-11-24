@@ -11,14 +11,15 @@ import me.sarahlacerda.gua.identityservice.exception.InvalidUsernameException;
 
 /**
  * Single source of truth for Gua username (Matrix localpart) rules: 3-30 characters of lowercase
- * letters, digits, dot, underscore or dash, excluding a reserved set. Shared by the legacy signup
- * flow and the interactive OIDC login flow.
+ * letters, digits, dot, underscore or dash, excluding reserved names and their spellings with added
+ * dots, underscores or dashes. Shared by the legacy signup flow and the interactive OIDC login flow.
  */
 @Component
 public class UsernamePolicy {
 
     private static final Pattern USERNAME_PATTERN = Pattern.compile("^[a-z0-9._-]{3,30}$");
     private static final Pattern ALL_NUMERIC_PATTERN = Pattern.compile("^[0-9]+$");
+    private static final Pattern SEPARATORS = Pattern.compile("[._-]");
     private static final Set<String> RESERVED_USERNAMES = Set.of(
             "admin", "administrator", "root", "system", "gua", "guaa", "support", "help",
             "moderator", "matrix", "synapse", "server", "official", "staff");
@@ -44,7 +45,7 @@ public class UsernamePolicy {
         if (ALL_NUMERIC_PATTERN.matcher(normalized).matches()) {
             throw new InvalidUsernameException("Username must contain at least one non-numeric character");
         }
-        if (RESERVED_USERNAMES.contains(normalized)) {
+        if (RESERVED_USERNAMES.contains(SEPARATORS.matcher(normalized).replaceAll(""))) {
             throw new InvalidUsernameException("That username is reserved");
         }
         return normalized;
