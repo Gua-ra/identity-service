@@ -115,10 +115,7 @@ class AccountGenesisCodecTest {
     }
 
     @Test
-    void anAllZeroKeyIsRejectedEvenThoughItDecodesToAPoint() {
-        // The all-zero encoding is a valid low-order point, so the all-zero rule is separate from point decoding.
-        assertThat(Ed25519Keys.isOnCurve(new byte[32])).isTrue();
-
+    void anAllZeroKeyIsRejectedWithItsOwnReason() {
         byte[] zeroAuthority = valid();
         Arrays.fill(zeroAuthority, 6, 38, (byte) 0);
         refusedWith(zeroAuthority, "zero_authority_key");
@@ -144,6 +141,19 @@ class AccountGenesisCodecTest {
         byte[] badRecovery = valid();
         Arrays.fill(badRecovery, 39, 71, (byte) 0xFF);
         refusedWith(badRecovery, "invalid_recovery_key");
+    }
+
+    @Test
+    void aSmallOrderKeyIsRejected() {
+        byte[] order8Authority = valid();
+        System.arraycopy(HEX.parseHex("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"), 0,
+                order8Authority, 6, 32);
+        refusedWith(order8Authority, "invalid_authority_key");
+
+        byte[] identityRecovery = valid();
+        System.arraycopy(HEX.parseHex("0100000000000000000000000000000000000000000000000000000000000000"), 0,
+                identityRecovery, 39, 32);
+        refusedWith(identityRecovery, "invalid_recovery_key");
     }
 
     @Test
